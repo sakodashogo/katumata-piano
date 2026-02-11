@@ -2,12 +2,14 @@ import { getOpenSlots } from "@/app/lib/actions/schedule"
 import { WeeklySchedule } from "@/components/teacher/WeeklySchedule"
 import { startOfWeek, endOfWeek } from "date-fns"
 
+import { SyncButton } from "@/components/teacher/SyncButton"
+
 export default async function SchedulePage({
     searchParams,
 }: {
-    searchParams: Promise<{ [key: string]: string | string[] | undefined }> // Updated for Next.js 15+ async searchParams
+    searchParams: Promise<{ [key: string]: string | string[] | undefined }>
 }) {
-    const params = await searchParams // Await searchParams in newer Next.js versions
+    const params = await searchParams
     const room = (params.room as string) || "A"
     const dateStr = (params.date as string) || new Date().toISOString().split("T")[0]
     const date = new Date(dateStr)
@@ -19,9 +21,12 @@ export default async function SchedulePage({
 
     return (
         <div className="space-y-6">
-            <div>
-                <h1 className="text-2xl font-bold text-slate-900">Schedule Management</h1>
-                <p className="text-slate-500">Manage open slots for Room {room}</p>
+            <div className="flex justify-between items-center">
+                <div>
+                    <h1 className="text-2xl font-bold text-slate-900">Schedule Management</h1>
+                    <p className="text-slate-500">Manage open slots for Room {room}</p>
+                </div>
+                <SyncButton currentDate={date} roomId={room} />
             </div>
 
             <WeeklySchedule roomId={room} date={date} slots={slots as any[]} />

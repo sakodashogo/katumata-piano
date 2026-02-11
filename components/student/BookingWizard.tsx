@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { getMenus, getAvailableSlots, bookLesson } from "@/app/lib/actions/booking"
+import { getMenus, getAvailableSlots, bookLesson, rescheduleLesson } from "@/app/lib/actions/booking"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card"
 import { Calendar } from "@/components/ui/calendar"
@@ -22,9 +22,19 @@ type Slot = {
     endTime: Date
 }
 
-export function BookingWizard({ menus }: { menus: Menu[] }) {
-    const [step, setStep] = useState(1)
-    const [selectedMenu, setSelectedMenu] = useState<Menu | null>(null)
+export function BookingWizard({
+    menus,
+    rescheduleLessonId,
+    initialMenuId
+}: {
+    menus: Menu[],
+    rescheduleLessonId?: string,
+    initialMenuId?: string
+}) {
+    const [step, setStep] = useState(initialMenuId ? 2 : 1)
+    const [selectedMenu, setSelectedMenu] = useState<Menu | null>(
+        initialMenuId ? menus.find(m => m.id === initialMenuId) || null : null
+    )
     const [selectedDate, setSelectedDate] = useState<Date | undefined>(new Date())
     const [availableSlots, setAvailableSlots] = useState<Slot[]>([])
     const [selectedSlot, setSelectedSlot] = useState<Slot | null>(null)
@@ -48,7 +58,14 @@ export function BookingWizard({ menus }: { menus: Menu[] }) {
     const handleBooking = async () => {
         if (!selectedSlot || !selectedMenu) return
         setLoading(true)
-        const res = await bookLesson([selectedSlot.id], selectedMenu.id)
+
+        let res;
+        if (rescheduleLessonId) {
+            res = await rescheduleLesson(rescheduleLessonId, [selectedSlot.id])
+        } else {
+            res = await bookLesson([selectedSlot.id], selectedMenu.id)
+        }
+
         if (res.success) {
             setBookingSuccess(true)
         } else {
@@ -62,7 +79,7 @@ export function BookingWizard({ menus }: { menus: Menu[] }) {
             <Card className="text-center py-10">
                 <CardContent className="flex flex-col items-center gap-4">
                     <CheckCircle2 className="h-16 w-16 text-green-500" />
-                    <h3 className="text-2xl font-bold">Booking Confirmed!</h3>
+                    <h3 className="text-2xl font-bold">{rescheduleLessonId ? "Reschedule Confirmed!" : "Booking Confirmed!"}</h3>
                     <p className="text-slate-500">
                         Your {selectedMenu?.name} is scheduled for {format(selectedSlot!.startTime, "MMMM d, h:mm a")}.
                     </p>
@@ -143,7 +160,7 @@ export function BookingWizard({ menus }: { menus: Menu[] }) {
                         </div>
                     </div>
                     <div className="flex justify-between mt-4">
-                        <Button variant="ghost" onClick={() => setStep(1)}>Back</Button>
+                        <Button variant="ghost" onClick={() => setStep(1)} disabled={!!initialMenuId}>Back</Button>
                         <Button disabled={!selectedSlot} onClick={() => setStep(3)}>Next</Button>
                     </div>
                 </div>

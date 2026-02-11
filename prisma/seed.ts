@@ -20,6 +20,20 @@ async function main() {
     })
 
     console.log({ teacher })
+
+    // Seed Menus
+    const menus = [
+        { name: "自主練 (Practice)", durationMin: 30, price: 0, description: "Practice using the grand piano." },
+        { name: "追加レッスン (Solo)", durationMin: 30, price: 2000, description: "Extra solo lesson." },
+        { name: "追加レッスン (Duet)", durationMin: 30, price: 2000, description: "Extra duet lesson." },
+    ]
+
+    for (const menu of menus) {
+        await prisma.menu.create({
+            data: menu
+        })
+    }
+    console.log("Menus seeded.")
 }
 
 main()

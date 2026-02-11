@@ -18,8 +18,11 @@ export default async function StudentDashboard() {
     const session = await auth()
     if (!session?.user) return null
 
-    const lessons = await getStudentLessons(session.user.id!)
-    const nextLesson = lessons.find(l => new Date(l.startTime) > new Date())
+    const allLessons = await getStudentLessons(session.user.id!)
+    const upcomingLessons = allLessons.filter(l => new Date(l.startTime) > new Date())
+    const historyLessons = allLessons.filter(l => new Date(l.startTime) <= new Date()).reverse() // Most recent first
+
+    const nextLesson = upcomingLessons[0]
 
     return (
         <div className="space-y-8">
@@ -29,11 +32,18 @@ export default async function StudentDashboard() {
                     <h1 className="text-3xl font-bold text-slate-900">Welcome, {session.user.name}</h1>
                     <p className="text-slate-500">Track your progress and schedule lessons.</p>
                 </div>
-                <Link href="/student/book">
-                    <Button size="lg" className="shadow-xl shadow-blue-500/20">
-                        <Plus className="mr-2 h-5 w-5" /> Book Lesson
-                    </Button>
-                </Link>
+                <div className="flex gap-2">
+                    <Link href="/student/availability">
+                        <Button variant="outline" size="lg">
+                            My Availability
+                        </Button>
+                    </Link>
+                    <Link href="/student/book">
+                        <Button size="lg" className="shadow-xl shadow-blue-500/20">
+                            <Plus className="mr-2 h-5 w-5" /> Book Lesson
+                        </Button>
+                    </Link>
+                </div>
             </div>
 
             <div className="grid md:grid-cols-3 gap-6">
@@ -76,8 +86,8 @@ export default async function StudentDashboard() {
                     </CardHeader>
                     <CardContent>
                         <div className="text-center py-4">
-                            <div className="text-3xl font-bold text-slate-900">{lessons.length}</div>
-                            <div className="text-xs uppercase text-slate-500 font-medium">Total Lessons</div>
+                            <div className="text-3xl font-bold text-slate-900">{historyLessons.length}</div>
+                            <div className="text-xs uppercase text-slate-500 font-medium">Completed Lessons</div>
                         </div>
                     </CardContent>
                 </Card>
@@ -86,9 +96,9 @@ export default async function StudentDashboard() {
             {/* Upcoming Lessons List */}
             <div className="space-y-4">
                 <h2 className="text-xl font-bold text-slate-900">Upcoming Schedule</h2>
-                {lessons.length > 0 ? (
+                {upcomingLessons.length > 0 ? (
                     <div className="rounded-xl border bg-white divide-y">
-                        {lessons.map((lesson) => (
+                        {upcomingLessons.map((lesson) => (
                             <div key={lesson.id} className="p-4 flex items-center justify-between hover:bg-slate-50 transition-colors">
                                 <div className="flex items-center gap-4">
                                     <div className="bg-slate-100 p-2 rounded-lg text-center min-w-[60px]">
@@ -102,14 +112,72 @@ export default async function StudentDashboard() {
                                         </div>
                                     </div>
                                 </div>
-                                <div className="text-sm font-medium text-blue-600 bg-blue-50 px-3 py-1 rounded-full">
-                                    Confirmed
+                                <div className="flex items-center gap-2">
+                                    <div className="text-sm font-medium text-blue-600 bg-blue-50 px-3 py-1 rounded-full">
+                                        Confirmed
+                                    </div>
+                                    <Link href={`/student/book?rescheduleId=${lesson.id}`}>
+                                        <Button variant="outline" size="sm" className="h-7 text-xs">
+                                            Reschedule
+                                        </Button>
+                                    </Link>
                                 </div>
                             </div>
                         ))}
                     </div>
                 ) : (
-                    <p className="text-slate-500">You haven't booked any lessons yet.</p>
+                    <p className="text-slate-500">No upcoming lessons.</p>
+                )}
+            </div>
+
+            {/* Lesson History List */}
+            <div className="space-y-4">
+                <h2 className="text-xl font-bold text-slate-900">Lesson History</h2>
+                {historyLessons.length > 0 ? (
+                    <div className="rounded-xl border bg-white divide-y">
+                        {historyLessons.map((lesson) => (
+                            <div key={lesson.id} className="p-4 hover:bg-slate-50 transition-colors space-y-3">
+                                <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-4">
+                                        <div className="bg-slate-50 p-2 rounded-lg text-center min-w-[60px] opacity-70">
+                                            <div className="text-xs uppercase text-slate-500 font-bold">{format(new Date(lesson.startTime), "MMM")}</div>
+                                            <div className="text-xl font-bold text-slate-500">{format(new Date(lesson.startTime), "d")}</div>
+                                        </div>
+                                        <div>
+                                            <div className="font-medium text-slate-700">{lesson.type || "Regular Lesson"}</div>
+                                            <div className="text-sm text-slate-400">
+                                                {format(new Date(lesson.startTime), "h:mm a")} - {format(new Date(lesson.endTime), "h:mm a")}
+                                            </div>
+                                        </div>
+                                    </div>
+                                    {(lesson.report || lesson.homework) && (
+                                        <div className="text-xs font-medium text-green-600 bg-green-50 px-2 py-1 rounded">
+                                            Report Available
+                                        </div>
+                                    )}
+                                </div>
+
+                                {(lesson.report || lesson.homework) && (
+                                    <div className="ml-[76px] bg-slate-50 p-3 rounded text-sm space-y-2 border border-slate-100">
+                                        {lesson.report && (
+                                            <div>
+                                                <span className="font-semibold text-slate-700">Note: </span>
+                                                {lesson.report}
+                                            </div>
+                                        )}
+                                        {lesson.homework && (
+                                            <div>
+                                                <span className="font-semibold text-slate-700">Homework: </span>
+                                                {lesson.homework}
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                ) : (
+                    <p className="text-slate-500">No lesson history available.</p>
                 )}
             </div>
         </div>

@@ -16,11 +16,14 @@ export default async function DashboardNav() {
                     <div className="flex gap-4">
                         <Link href="/teacher/students" className="text-sm font-medium text-slate-600 hover:text-slate-900">Students</Link>
                         <Link href="/teacher/schedule" className="text-sm font-medium text-slate-600 hover:text-slate-900">Schedule</Link>
+                        <Link href="/teacher/availabilities" className="text-sm font-medium text-slate-600 hover:text-slate-900">Availabilities</Link>
+                        <Link href="/teacher/matching" className="text-sm font-medium text-slate-600 hover:text-slate-900">Matching</Link>
                     </div>
                 )}
                 {user?.role === "STUDENT" && ( // Assuming generic for now
                     <div className="flex gap-4">
-                        <Link href="/student/lessons" className="text-sm font-medium text-slate-600 hover:text-slate-900">My Lessons</Link>
+                        <Link href="/student" className="text-sm font-medium text-slate-600 hover:text-slate-900">Dashboard</Link>
+                        <Link href="/student/availability" className="text-sm font-medium text-slate-600 hover:text-slate-900">Availability</Link>
                         <Link href="/student/book" className="text-sm font-medium text-slate-600 hover:text-slate-900">Book Lesson</Link>
                     </div>
                 )}
@@ -30,6 +33,9 @@ export default async function DashboardNav() {
                 <span className="text-sm text-slate-500">
                     {user?.name || user?.email}
                 </span>
+                <Link href="/settings">
+                    <Button variant="ghost" size="sm">Settings</Button>
+                </Link>
                 <form
                     action={async () => {
                         "use server";

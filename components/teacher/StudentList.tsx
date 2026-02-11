@@ -11,6 +11,8 @@ type Student = {
     createdAt: Date
 }
 
+import Link from "next/link"
+
 export function StudentList({ students }: { students: Student[] }) {
     async function handleDelete(id: string) {
         if (confirm("Are you sure you want to delete this student?")) {
@@ -40,7 +42,11 @@ export function StudentList({ students }: { students: Student[] }) {
                 <tbody className="divide-y divide-slate-100">
                     {students.map((student) => (
                         <tr key={student.id} className="hover:bg-slate-50">
-                            <td className="px-6 py-4 font-medium text-slate-900">{student.name}</td>
+                            <td className="px-6 py-4 font-medium text-slate-900">
+                                <Link href={`/teacher/students/${student.id}`} className="hover:underline text-blue-600">
+                                    {student.name}
+                                </Link>
+                            </td>
                             <td className="px-6 py-4">{student.email}</td>
                             <td className="px-6 py-4">{new Date(student.createdAt).toLocaleDateString()}</td>
                             <td className="px-6 py-4 text-right">
