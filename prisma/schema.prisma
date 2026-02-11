@@ -1,0 +1,71 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  TEACHER
+  STUDENT
+}
+
+enum LessonType {
+  REGULAR
+  AD_HOC
+  PRACTICE
+}
+
+enum LessonStatus {
+  BOOKED
+  COMPLETED
+  CANCELLED
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  password      String?
+  role          Role      @default(STUDENT)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  
+  lessonsAsStudent Lesson[] @relation("StudentLessons")
+  lessonsAsTeacher Lesson[] @relation("TeacherLessons")
+}
+
+model Lesson {
+  id        String       @id @default(cuid())
+  startTime DateTime
+  endTime   DateTime
+  type      LessonType   @default(REGULAR)
+  status    LessonStatus @default(BOOKED)
+  
+  studentId String
+  student   User         @relation("StudentLessons", fields: [studentId], references: [id])
+  
+  teacherId String?
+  teacher   User?        @relation("TeacherLessons", fields: [teacherId], references: [id])
+
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+}
+
+model OpenSlot {
+  id        String   @id @default(cuid())
+  roomId    String   // 'A' or 'B'
+  startTime DateTime
+  endTime   DateTime
+  isBooked  Boolean  @default(false)
+}
+
+model Menu {
+    id          String   @id @default(cuid())
+    name        String
+    durationMin Int
+    price       Int      @default(0)
+    description String?
+}
