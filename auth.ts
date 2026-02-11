@@ -2,6 +2,7 @@ import NextAuth from "next-auth"
 import Credentials from "next-auth/providers/credentials"
 import { z } from "zod"
 import { prisma } from "@/lib/prisma"
+import bcrypt from "bcryptjs"
 
 async function getUser(email: string) {
     try {
@@ -23,20 +24,16 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
                 if (parsedCredentials.success) {
                     const { email, password } = parsedCredentials.data
+                    console.log("Authorize called for:", email)
                     const user = await getUser(email)
-                    if (!user) return null
+                    if (!user) {
+                        console.log("User not found")
+                        return null
+                    }
+                    console.log("User found:", user.id)
 
-                    // In a real app, use bcrypt.compare
-                    // const passwordsMatch = await bcrypt.compare(password, user.password)
-                    // For now, simple check (since we haven't set up hashing yet)
-                    // const passwordsMatch = password === user.password;
-
-                    // TODO: Implement proper password checking once users are seeded with hashed passwords.
-                    // For initial setup, we might skip password check or use a dummy check.
-                    // Let's assume user.password is stored as plain text for the VERY FIRST test, 
-                    // BUT best practice is bcrypt. I will add bcryptjs dependency.
-
-                    return user;
+                    const passwordsMatch = await bcrypt.compare(password, user.password || "")
+                    if (passwordsMatch) return user
                 }
 
                 console.log('Invalid credentials')
@@ -50,15 +47,17 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     callbacks: {
         async session({ session, token }) {
             if (token.sub && session.user) {
-                session.user.id = token.sub;
+                session.user.id = token.sub
             }
-            // Add role to session
-            return session;
+            if (token.role && session.user) {
+                session.user.role = token.role as string
+            }
+            return session
         },
         async jwt({ token, user }) {
             if (user) {
                 token.id = user.id
-                // Add role to token
+                token.role = user.role
             }
             return token
         }
