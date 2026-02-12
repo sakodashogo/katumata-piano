@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma"
 import { auth } from "@/auth"
 import { revalidatePath } from "next/cache"
 import { addMinutes } from "date-fns"
+import { getSupportShiftsInRangeSafe, hasSupportShiftInRange } from "@/lib/support-shifts"
 
 function revalidateTeacherViews() {
     revalidatePath("/teacher/schedule")
@@ -90,7 +91,7 @@ export async function getScheduleData(roomId: string | undefined, start: Date, e
             ...(roomId ? { roomId } : {})
         }
 
-        const [slots, lessons] = await Promise.all([
+        const [slots, lessons, supportShifts] = await Promise.all([
             prisma.openSlot.findMany({
                 where: whereClause,
             }),
@@ -102,9 +103,10 @@ export async function getScheduleData(roomId: string | undefined, start: Date, e
                 include: {
                     student: { select: { name: true } }
                 }
-            })
+            }),
+            getSupportShiftsInRangeSafe(start, end),
         ])
-        return { success: true, data: { slots, lessons } }
+        return { success: true, data: { slots, lessons, supportShifts } }
     } catch (error) {
         console.error("Failed to fetch schedule data:", error)
         return { success: false, error: "Failed to fetch schedule data" }
@@ -255,6 +257,13 @@ export async function moveLesson(lessonId: string, newStartTime: Date, newRoomId
 
         const duration = lesson.endTime.getTime() - lesson.startTime.getTime()
         const newEndTime = new Date(newStartTime.getTime() + duration)
+
+        if (newRoomId === "B" && lesson.type !== "PRACTICE") {
+            const hasSupport = await hasSupportShiftInRange(newStartTime, newEndTime)
+            if (!hasSupport) {
+                return { success: false, error: "第2レッスン室でレッスンを行うにはサポート講師の在席シフトが必要です。" }
+            }
+        }
 
         const [roomConflict, studentConflict] = await Promise.all([
             hasLessonConflict({

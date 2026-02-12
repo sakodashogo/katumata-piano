@@ -7,6 +7,7 @@ import { BOOKING_RULES } from "@/lib/constants"
 import { Prisma } from "@prisma/client"
 import { isStudentBookableMenu, toLessonTypeFromMenu } from "@/lib/menu-category"
 import { notifyEvent } from "@/lib/notifications"
+import { getSupportShiftsInRangeSafe } from "@/lib/support-shifts"
 
 export async function getMenus() {
     try {
@@ -211,6 +212,18 @@ type BookableStartTime = {
     slotIds: string[]
 }
 
+function requiresSupportForRoomB(lessonType: string) {
+    return lessonType !== "PRACTICE"
+}
+
+function hasSupportOverlap(
+    shifts: Array<{ startTime: Date; endTime: Date }>,
+    startTime: Date,
+    endTime: Date
+) {
+    return shifts.some((shift) => shift.startTime < endTime && shift.endTime > startTime)
+}
+
 function buildBookableStartTimes(
     slots: Array<{ id: string; roomId: string; startTime: Date; endTime: Date }>,
     durationMin: number
@@ -294,6 +307,8 @@ export async function getBookableStartTimes(dateStr: string, menuId: string, dat
             return { success: false, error: "日付指定が不正です。" }
         }
 
+        const lessonType = toLessonTypeFromMenu(menu as { name?: string | null; category?: unknown })
+
         const slots = await prisma.openSlot.findMany({
             where: {
                 isBooked: false,
@@ -310,7 +325,14 @@ export async function getBookableStartTimes(dateStr: string, menuId: string, dat
             orderBy: { startTime: "asc" },
         })
 
-        const candidates = buildBookableStartTimes(slots, menu.durationMin)
+        const supportShifts = await getSupportShiftsInRangeSafe(start, end)
+        const filtered = slots.filter((slot) => {
+            if (slot.roomId !== "B") return true
+            if (!requiresSupportForRoomB(lessonType)) return true
+            return hasSupportOverlap(supportShifts, slot.startTime, slot.endTime)
+        })
+
+        const candidates = buildBookableStartTimes(filtered, menu.durationMin)
         return { success: true, data: candidates }
     } catch (error) {
         console.error(error)
@@ -334,6 +356,8 @@ export async function getBookableDaysInRange(startStr: string, endStr: string, m
 
         const start = new Date(startStr)
         const end = new Date(endStr)
+        const lessonType = toLessonTypeFromMenu(menu as { name?: string | null; category?: unknown })
+
         const slots = await prisma.openSlot.findMany({
             where: {
                 isBooked: false,
@@ -350,8 +374,15 @@ export async function getBookableDaysInRange(startStr: string, endStr: string, m
             orderBy: { startTime: "asc" },
         })
 
+        const supportShifts = await getSupportShiftsInRangeSafe(start, end)
+        const filtered = slots.filter((slot) => {
+            if (slot.roomId !== "B") return true
+            if (!requiresSupportForRoomB(lessonType)) return true
+            return hasSupportOverlap(supportShifts, slot.startTime, slot.endTime)
+        })
+
         const dates = new Set(
-            buildBookableStartTimes(slots, menu.durationMin).map((slot) =>
+            buildBookableStartTimes(filtered, menu.durationMin).map((slot) =>
                 slot.startTime.toISOString().slice(0, 10)
             )
         )
@@ -382,6 +413,8 @@ export async function getBookableSlotsInRange(startStr: string, endStr: string, 
             return { success: false, error: "日付指定が不正です。" }
         }
 
+        const lessonType = toLessonTypeFromMenu(menu as { name?: string | null; category?: unknown })
+
         const slots = await prisma.openSlot.findMany({
             where: {
                 isBooked: false,
@@ -398,7 +431,14 @@ export async function getBookableSlotsInRange(startStr: string, endStr: string, 
             orderBy: { startTime: "asc" },
         })
 
-        const candidates = buildBookableStartTimes(slots, menu.durationMin)
+        const supportShifts = await getSupportShiftsInRangeSafe(start, end)
+        const filtered = slots.filter((slot) => {
+            if (slot.roomId !== "B") return true
+            if (!requiresSupportForRoomB(lessonType)) return true
+            return hasSupportOverlap(supportShifts, slot.startTime, slot.endTime)
+        })
+
+        const candidates = buildBookableStartTimes(filtered, menu.durationMin)
         return { success: true, data: candidates }
     } catch (error) {
         console.error(error)
@@ -585,6 +625,8 @@ export async function bookLesson(slotIds: string[], menuId: string, useCredit: b
             revalidatePath("/student")
             revalidatePath("/student/book")
             revalidatePath("/teacher/schedule")
+            revalidatePath("/teacher/resources")
+            revalidatePath("/teacher/resources")
 
             // Send Notification (Fire and forget)
             void notifyEvent("BOOKING_COMPLETED", {
@@ -732,6 +774,7 @@ export async function rescheduleLesson(lessonId: string, slotIds: string[]) {
             revalidatePath("/student")
             revalidatePath("/student/book")
             revalidatePath("/teacher/schedule")
+            revalidatePath("/teacher/resources")
 
             void notifyEvent("RESCHEDULE_COMPLETED", {
                 studentId: session.user.id,

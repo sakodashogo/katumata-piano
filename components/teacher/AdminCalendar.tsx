@@ -542,11 +542,22 @@ export function AdminCalendar({ initialDate = new Date(), slots: initialSlots, l
         if (type === "lesson") {
             const l = item as Lesson
             const isDraft = l.status === "DRAFT"
-            bgClass = isDraft ? "bg-amber-100" : "bg-green-100"
-            borderClass = isDraft ? "border-amber-300" : "border-green-300"
+            const lessonTheme: Record<string, { bg: string; border: string; short: string }> = {
+                REGULAR: { bg: "bg-green-100", border: "border-green-300", short: "通常" },
+                PRACTICE: { bg: "bg-slate-200", border: "border-slate-300", short: "自主練" },
+                SOLO_ADDITIONAL: { bg: "bg-indigo-100", border: "border-indigo-300", short: "ソロ" },
+                DUET_ADDITIONAL: { bg: "bg-rose-100", border: "border-rose-300", short: "連弾" },
+                AD_HOC: { bg: "bg-amber-100", border: "border-amber-300", short: "追加" },
+            }
+            const theme = lessonTheme[l.type] || lessonTheme.REGULAR
+            bgClass = theme.bg
+            borderClass = theme.border
             content = (
                 <div className="w-full h-full p-1 leading-tight overflow-hidden">
-                    <div className="font-bold truncate text-green-900">{l.student.name}</div>
+                    <div className="font-bold truncate text-slate-800">{l.student.name}</div>
+                    <span className="mt-0.5 inline-block rounded bg-white/70 px-1 text-[8px] font-semibold text-slate-700">
+                        {theme.short}
+                    </span>
                     {isDraft && <span className="text-[8px] bg-amber-200 text-amber-800 px-1 rounded inline-block mt-0.5">未公開</span>}
                 </div>
             )

@@ -1,13 +1,12 @@
 "use client"
 
 import { useState, useMemo, useEffect } from "react"
-import { format, startOfWeek, endOfWeek, addDays, getDay, setHours, setMinutes, isSameDay } from "date-fns"
+import { format, addDays, getDay, setHours, setMinutes } from "date-fns"
 import { ja } from "date-fns/locale"
-import { motion } from "framer-motion"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { Check, X, Users, Wand2, RefreshCw } from "lucide-react"
+import { Check, Users, Wand2 } from "lucide-react"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { ScheduleSuggestion } from "@/app/lib/actions/schedule-maker"
@@ -61,6 +60,7 @@ export function HeatmapScheduler({ suggestions, students, year, month, onConfirm
     // Initialize selection when suggestions change
     useEffect(() => {
         const recommended = suggestions.filter(s => s.isRecommended).map(s => s.id)
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setSelectedSlotIds(new Set(recommended))
     }, [suggestions])
 
@@ -121,6 +121,9 @@ export function HeatmapScheduler({ suggestions, students, year, month, onConfirm
                     </div>
                     <span className="font-medium">
                         {studentName}
+                    </span>
+                    <span className="rounded bg-white/70 px-1 text-[10px] font-semibold text-slate-700">
+                        Room {s.slot.roomId}
                     </span>
                 </div>
                 {s.isRecommended && <Badge variant="outline" className="text-[10px] px-1 h-4 bg-white/50 border-current opacity-70">推奨</Badge>}

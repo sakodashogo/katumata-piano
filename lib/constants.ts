@@ -2,8 +2,8 @@ export const LESSON_TYPE_LABELS: Record<string, string> = {
     REGULAR: "通常レッスン",
     AD_HOC: "追加レッスン",
     PRACTICE: "自主練",
-    SOLO_ADDITIONAL: "ソロ追加",
-    DUET_ADDITIONAL: "連弾追加",
+    SOLO_ADDITIONAL: "ソロレッスン",
+    DUET_ADDITIONAL: "連弾レッスン",
 }
 
 export const LESSON_STATUS_LABELS: Record<string, string> = {
@@ -37,8 +37,8 @@ export const ROOMS = {
 
 export const SLOT_MENU_LABELS: Record<string, string> = {
     PRACTICE: '自主練習',
-    SOLO_ADDITIONAL: 'ソロ追加',
-    DUET_ADDITIONAL: '連弾追加',
+    SOLO_ADDITIONAL: 'ソロレッスン',
+    DUET_ADDITIONAL: '連弾レッスン',
 }
 
 export const MENU_DURATION_OPTIONS: Record<string, number[]> = {

@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma"
 import { auth } from "@/auth"
 import { revalidatePath } from "next/cache"
 import { addMinutes } from "date-fns"
+import { getSupportShiftsInRangeSafe } from "@/lib/support-shifts"
 
 async function hasRoomTimeConflict(args: {
     roomId: string
@@ -43,7 +44,7 @@ export async function getOpenSlots(year: number, month: number) {
     const end = new Date(year, month, 0, 23, 59, 59, 999)
 
     try {
-        const [slots, lessons] = await Promise.all([
+        const [slots, lessons, supportShifts] = await Promise.all([
             prisma.openSlot.findMany({
                 where: {
                     startTime: {
@@ -79,8 +80,9 @@ export async function getOpenSlots(year: number, month: number) {
                 },
                 orderBy: { startTime: "asc" },
             }),
+            getSupportShiftsInRangeSafe(start, end),
         ])
-        return { success: true, data: { slots, lessons } }
+        return { success: true, data: { slots, lessons, supportShifts } }
     } catch {
         return { success: false, error: "Failed to fetch slots" }
     }

@@ -82,22 +82,18 @@ export function MonthlyScheduler({
         router.push(`/teacher/schedule/monthly?${params.toString()}`)
     }
 
-    const handleSaveStudentLessons = async (newLessons: Array<{ startTime: Date; endTime: Date }>) => {
+    const handleSaveStudentLessons = async (newLessons: Array<{ startTime: Date; endTime: Date; roomId: string }>) => {
         if (!selectedStudentId) return false
 
         const result = await replaceStudentMonthlyLessons({
             studentId: selectedStudentId,
             year,
             month,
-            lessons: newLessons.map((lesson) => ({
-                startTime: lesson.startTime,
-                endTime: lesson.endTime,
-                roomId: "A",
-            })),
+            lessons: newLessons,
         })
 
         if (result.success) {
-            toast.success(`${selectedStudent?.name || "生徒"}の月間予定を下書き保存しました。`)
+            toast.success(`${selectedStudent?.name || "生徒"}の月間予定を保存しました。`)
             router.refresh()
             return true
         }
@@ -129,7 +125,7 @@ export function MonthlyScheduler({
             studentId: suggestion.studentId,
             startTime: suggestion.slot.startTime,
             endTime: suggestion.slot.endTime,
-            roomId: "A",
+            roomId: suggestion.slot.roomId,
             type: "REGULAR" as const,
             status: "DRAFT" as const,
         }))
@@ -294,11 +290,7 @@ export function MonthlyScheduler({
                     availableSlots={Array.isArray(selectedStudent.availability?.availableSlots) ? selectedStudent.availability!.availableSlots.map(String) : []}
                     unavailableSlots={Array.isArray(selectedStudent.availability?.unavailableSlots) ? selectedStudent.availability!.unavailableSlots.map(String) : []}
                     existingLessons={lessons
-                        .filter((lesson) => {
-                            if (lesson.studentId === selectedStudentId) return true
-                            const room = lesson.roomId || "A"
-                            return room === "A"
-                        })
+                        .filter((lesson) => !!lesson)
                         .map((lesson) => ({
                             ...lesson,
                             isEditable: lesson.studentId === selectedStudentId,

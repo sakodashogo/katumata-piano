@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { ROOMS } from "@/lib/constants"
+import { SupportShiftManager } from "@/components/teacher/SupportShiftManager"
 import {
     ArrowRight,
     Calendar as CalendarIcon,
@@ -31,7 +32,15 @@ type Lesson = {
     startTime: Date
     endTime: Date
     status: string
+    type?: string
     student?: { name: string | null } | null
+}
+
+type SupportShift = {
+    id: string
+    startTime: Date | string
+    endTime: Date | string
+    staff?: { id: string; name: string; active: boolean } | null
 }
 
 type Props = {
@@ -49,13 +58,16 @@ type Props = {
         startTime: Date | string
         endTime: Date | string
         status: string
+        type?: string
         student?: { name: string | null } | null
     }>
+    supportShifts: SupportShift[]
+    supportStaff: Array<{ id: string; name: string; active: boolean }>
     year: number
     month: number
 }
 
-export function ResourceManager({ initialSlots, initialLessons, year, month }: Props) {
+export function ResourceManager({ initialSlots, initialLessons, supportShifts, supportStaff, year, month }: Props) {
     const slots = useMemo<OpenSlot[]>(
         () =>
             initialSlots.map((slot) => ({
@@ -74,6 +86,15 @@ export function ResourceManager({ initialSlots, initialLessons, year, month }: P
                 endTime: new Date(lesson.endTime),
             })),
         [initialLessons]
+    )
+
+    const shifts = useMemo(
+        () => supportShifts.map((shift) => ({
+            ...shift,
+            startTime: new Date(shift.startTime),
+            endTime: new Date(shift.endTime),
+        })),
+        [supportShifts]
     )
 
     const firstDateWithData = useMemo(() => {
@@ -118,7 +139,19 @@ export function ResourceManager({ initialSlots, initialLessons, year, month }: P
     const roomIds = [ROOMS.A.id, ROOMS.B.id] as const
 
     return (
-        <div className="grid grid-cols-1 gap-8 lg:grid-cols-[320px_1fr]">
+        <div className="space-y-6">
+            <SupportShiftManager
+                staff={supportStaff}
+                shifts={shifts.map((shift) => ({
+                    id: shift.id,
+                    staffId: shift.staff?.id || "",
+                    startTime: new Date(shift.startTime).toISOString(),
+                    endTime: new Date(shift.endTime).toISOString(),
+                    staff: shift.staff || null,
+                }))}
+            />
+
+            <div className="grid grid-cols-1 gap-8 lg:grid-cols-[320px_1fr]">
             <div className="space-y-6">
                 <div className="rounded-xl border bg-white p-4 shadow-sm">
                     <div className="mb-4 flex items-center justify-between">
@@ -158,6 +191,9 @@ export function ResourceManager({ initialSlots, initialLessons, year, month }: P
                         <div className="flex items-center justify-between rounded-lg border bg-emerald-50 px-3 py-2 text-emerald-800">
                             <span>レッスン予定</span>
                             <span className="font-bold">{lessonCount}</span>
+                        </div>
+                        <div className="rounded-lg border border-slate-300 bg-slate-100/60 px-3 py-2 text-slate-700">
+                            第2レッスン室のグレー帯: サポート不在（通常レッスン不可）
                         </div>
                     </div>
                 </div>
@@ -225,6 +261,24 @@ export function ResourceManager({ initialSlots, initialLessons, year, month }: P
                                         <div key={hour} className="h-24 border-b" />
                                     ))}
 
+                                    {roomId === "B" && HOURS.map((hour) => {
+                                        const hourStart = new Date(selectedDate)
+                                        hourStart.setHours(hour, 0, 0, 0)
+                                        const hourEnd = new Date(selectedDate)
+                                        hourEnd.setHours(hour + 1, 0, 0, 0)
+                                        const hasSupport = shifts.some((shift) =>
+                                            shift.startTime < hourEnd && shift.endTime > hourStart
+                                        )
+                                        if (hasSupport) return null
+                                        return (
+                                            <div
+                                                key={`no-support-${hour}`}
+                                                className="pointer-events-none absolute left-1 right-1 border border-dashed border-slate-300/70 bg-slate-100/40"
+                                                style={{ top: `${(hour - hourRange.minHour) * 96}px`, height: "96px" }}
+                                            />
+                                        )
+                                    })}
+
                                     {roomSlots.map((slot) => {
                                         const startMin = slot.startTime.getHours() * 60 + slot.startTime.getMinutes()
                                         const offsetTop = ((startMin - hourRange.minHour * 60) / 60) * 96
@@ -271,20 +325,36 @@ export function ResourceManager({ initialSlots, initialLessons, year, month }: P
                                         const offsetTop = ((startMin - hourRange.minHour * 60) / 60) * 96
                                         const durationMin = (lesson.endTime.getTime() - lesson.startTime.getTime()) / 60000
                                         const height = (durationMin / 60) * 96
+                                        const lessonTypeLabel =
+                                            lesson.type === "PRACTICE"
+                                                ? "自主練"
+                                                : lesson.type === "SOLO_ADDITIONAL"
+                                                    ? "ソロ"
+                                                    : lesson.type === "DUET_ADDITIONAL"
+                                                        ? "連弾"
+                                                        : "通常"
+                                        const lessonClass =
+                                            lesson.type === "PRACTICE"
+                                                ? "border-slate-300 bg-slate-100 text-slate-800"
+                                                : lesson.type === "SOLO_ADDITIONAL"
+                                                    ? "border-indigo-300 bg-indigo-50 text-indigo-800"
+                                                    : lesson.type === "DUET_ADDITIONAL"
+                                                        ? "border-rose-300 bg-rose-50 text-rose-800"
+                                                        : "border-emerald-300 bg-emerald-50 text-emerald-800"
                                         return (
                                             <div
                                                 key={lesson.id}
                                                 style={{ top: `${offsetTop}px`, height: `${height}px` }}
-                                                className="absolute left-1 right-1 rounded-lg border border-emerald-300 bg-emerald-50 px-2 py-1 shadow-sm"
+                                                className={cn("absolute left-1 right-1 rounded-lg border px-2 py-1 shadow-sm", lessonClass)}
                                             >
-                                                <div className="text-[10px] font-bold text-emerald-800">
+                                                <div className="text-[10px] font-bold">
                                                     {format(lesson.startTime, "HH:mm")} - {format(lesson.endTime, "HH:mm")}
                                                 </div>
-                                                <div className="mt-1 text-[10px] text-emerald-700 font-medium truncate">
+                                                <div className="mt-1 text-[10px] font-medium truncate">
                                                     {lesson.student?.name || "生徒未設定"}
                                                 </div>
-                                                <Badge variant="outline" className="mt-1 border-emerald-200 bg-emerald-100 text-[10px] text-emerald-800">
-                                                    レッスン
+                                                <Badge variant="outline" className="mt-1 border-white/60 bg-white/60 text-[10px]">
+                                                    {lessonTypeLabel}
                                                 </Badge>
                                             </div>
                                         )
@@ -294,6 +364,7 @@ export function ResourceManager({ initialSlots, initialLessons, year, month }: P
                         })}
                     </div>
                 </div>
+            </div>
             </div>
         </div>
     )

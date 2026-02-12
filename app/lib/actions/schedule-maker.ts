@@ -5,6 +5,7 @@
 import { prisma } from "@/lib/prisma"
 import { auth } from "@/auth"
 import { addDays, format, getDay, setHours, setMinutes } from "date-fns"
+import { getSupportShiftsInRangeSafe } from "@/lib/support-shifts"
 
 // Types
 export type ScheduleSuggestion = {
@@ -13,6 +14,7 @@ export type ScheduleSuggestion = {
         startTime: Date
         endTime: Date
         dayOfWeek: string // "monday"
+        roomId: string
     }
     studentId: string
     matchReason: string // "Preferred Day"
@@ -43,7 +45,8 @@ function generateTeacherSlots(year: number, month: number) {
                     slots.push({
                         startTime: slotStart,
                         endTime: slotEnd,
-                        dayOfWeek: format(current, "EEEE").toLowerCase()
+                        dayOfWeek: format(current, "EEEE").toLowerCase(),
+                        roomId: "A",
                     })
                 }
             }
@@ -63,7 +66,7 @@ export async function generateSuggestedSchedule(year: number, month: number) {
     const end = new Date(year, month, 0, 23, 59, 59)
 
     // 1. Fetch Data
-    const [students, existingLessons] = await Promise.all([
+    const [students, existingLessons, supportShifts] = await Promise.all([
         prisma.user.findMany({
             where: { role: "STUDENT" },
             include: {
@@ -83,19 +86,24 @@ export async function generateSuggestedSchedule(year: number, month: number) {
                 startTime: { gte: start, lte: end },
                 status: { not: "CANCELLED" }
             }
-        })
+        }),
+        getSupportShiftsInRangeSafe(start, end),
     ])
 
     // 2. Generate All Possible Teacher Slots
-    const teacherSlots = generateTeacherSlots(year, month)
+    const teacherSlotsA = generateTeacherSlots(year, month)
+    const teacherSlotsB = teacherSlotsA.filter((slot) =>
+        supportShifts.some((shift) => shift.startTime < slot.endTime && shift.endTime > slot.startTime)
+    ).map((slot) => ({ ...slot, roomId: "B" }))
+    const teacherSlots = [...teacherSlotsA, ...teacherSlotsB]
 
     // 3. Matching Logic
     const allSuggestions: ScheduleSuggestion[] = []
 
     // Helper to check if a slot is already taken by an existing lesson
-    const isSlotTaken = (slotStart: Date) => {
+    const isSlotTaken = (slotStart: Date, roomId: string) => {
         return existingLessons.some(l =>
-            l.startTime.getTime() === slotStart.getTime()
+            l.startTime.getTime() === slotStart.getTime() && (l.roomId || "A") === roomId
         )
     }
 
@@ -138,7 +146,7 @@ export async function generateSuggestedSchedule(year: number, month: number) {
 
         // Check every slot
         for (const slot of teacherSlots) {
-            if (isSlotTaken(slot.startTime)) continue
+            if (isSlotTaken(slot.startTime, slot.roomId)) continue
 
             if (checkAvailability(student, slot.dayOfWeek, slot.startTime, slot.endTime)) {
                 allSuggestions.push({
@@ -161,7 +169,7 @@ export async function generateSuggestedSchedule(year: number, month: number) {
         studentScarcity.set(suggestion.studentId, (studentScarcity.get(suggestion.studentId) || 0) + 1)
     }
 
-    const occupiedSlots = new Set<number>()
+    const occupiedSlots = new Set<string>()
     const studentDailyCounts = new Map<string, Set<number>>()
     const studentMonthCounts = new Map<string, number>()
     const studentWeeklyCounts = new Map<string, Map<number, number>>()
@@ -173,7 +181,7 @@ export async function generateSuggestedSchedule(year: number, month: number) {
     }
 
     for (const lesson of existingLessons) {
-        occupiedSlots.add(lesson.startTime.getTime())
+        occupiedSlots.add(`${lesson.startTime.getTime()}__${lesson.roomId || "A"}`)
         const day = lesson.startTime.getDate()
         if (!studentDailyCounts.has(lesson.studentId)) studentDailyCounts.set(lesson.studentId, new Set())
         studentDailyCounts.get(lesson.studentId)?.add(day)
@@ -212,12 +220,12 @@ export async function generateSuggestedSchedule(year: number, month: number) {
         if (candidateMode !== undefined) preferredWeekdayByStudent.set(student.id, candidateMode)
     }
 
-    const initialOccupied = new Set<number>()
+    const initialOccupied = new Set<string>()
     for (const lesson of existingLessons) {
-        initialOccupied.add(lesson.startTime.getTime())
+        initialOccupied.add(`${lesson.startTime.getTime()}__${lesson.roomId || "A"}`)
     }
-    const isAdjacentToInitial = (time: number) =>
-        initialOccupied.has(time - 30 * 60000) || initialOccupied.has(time + 30 * 60000)
+    const isAdjacentToInitial = (time: number, roomId: string) =>
+        initialOccupied.has(`${time - 30 * 60000}__${roomId}`) || initialOccupied.has(`${time + 30 * 60000}__${roomId}`)
 
     const sortedCandidates = [...allSuggestions].sort((a, b) => {
         const scarcityA = studentScarcity.get(a.studentId) || 999
@@ -230,8 +238,8 @@ export async function generateSuggestedSchedule(year: number, month: number) {
         const fixedB = preferredB !== undefined && preferredB === getDay(b.slot.startTime) ? 1 : 0
         if (fixedA !== fixedB) return fixedB - fixedA
 
-        const adjA = isAdjacentToInitial(a.slot.startTime.getTime()) ? 1 : 0
-        const adjB = isAdjacentToInitial(b.slot.startTime.getTime()) ? 1 : 0
+        const adjA = isAdjacentToInitial(a.slot.startTime.getTime(), a.slot.roomId) ? 1 : 0
+        const adjB = isAdjacentToInitial(b.slot.startTime.getTime(), b.slot.roomId) ? 1 : 0
         if (adjA !== adjB) return adjB - adjA
 
         return a.slot.startTime.getTime() - b.slot.startTime.getTime()
@@ -241,6 +249,7 @@ export async function generateSuggestedSchedule(year: number, month: number) {
 
     const canAssign = (candidate: ScheduleSuggestion, strictDistribution: boolean) => {
         const slotTime = candidate.slot.startTime.getTime()
+        const occupiedKey = `${slotTime}__${candidate.slot.roomId}`
         const day = candidate.slot.startTime.getDate()
         const week = getWeekNumber(candidate.slot.startTime)
         const student = studentById.get(candidate.studentId)
@@ -249,7 +258,7 @@ export async function generateSuggestedSchedule(year: number, month: number) {
         const maxLessons = student.defaultLessonCount || 4
         const currentMonthCount = studentMonthCounts.get(candidate.studentId) || 0
         if (currentMonthCount >= maxLessons) return false
-        if (occupiedSlots.has(slotTime)) return false
+        if (occupiedSlots.has(occupiedKey)) return false
         if (studentDailyCounts.get(candidate.studentId)?.has(day)) return false
 
         if (strictDistribution) {
@@ -262,12 +271,13 @@ export async function generateSuggestedSchedule(year: number, month: number) {
 
     const scoreCandidate = (candidate: ScheduleSuggestion, strictDistribution: boolean) => {
         const slotTime = candidate.slot.startTime.getTime()
+        const roomId = candidate.slot.roomId
         const week = getWeekNumber(candidate.slot.startTime)
         const preferredDay = preferredWeekdayByStudent.get(candidate.studentId)
         const dayOfWeek = getDay(candidate.slot.startTime)
         const weekCount = studentWeeklyCounts.get(candidate.studentId)?.get(week) || 0
-        const adjacentBefore = occupiedSlots.has(slotTime - 30 * 60000) ? 1 : 0
-        const adjacentAfter = occupiedSlots.has(slotTime + 30 * 60000) ? 1 : 0
+        const adjacentBefore = occupiedSlots.has(`${slotTime - 30 * 60000}__${roomId}`) ? 1 : 0
+        const adjacentAfter = occupiedSlots.has(`${slotTime + 30 * 60000}__${roomId}`) ? 1 : 0
         const adjacentCount = adjacentBefore + adjacentAfter
         const closesGap = adjacentCount === 2 ? 1 : 0
         const fixedWeekday = preferredDay !== undefined && preferredDay === dayOfWeek ? 1 : 0
@@ -283,12 +293,13 @@ export async function generateSuggestedSchedule(year: number, month: number) {
 
     const acceptCandidate = (candidate: ScheduleSuggestion) => {
         const slotTime = candidate.slot.startTime.getTime()
+        const occupiedKey = `${slotTime}__${candidate.slot.roomId}`
         const day = candidate.slot.startTime.getDate()
         const week = getWeekNumber(candidate.slot.startTime)
         const currentMonthCount = studentMonthCounts.get(candidate.studentId) || 0
 
         finalRecommendations.add(candidate.id)
-        occupiedSlots.add(slotTime)
+        occupiedSlots.add(occupiedKey)
         if (!studentDailyCounts.has(candidate.studentId)) studentDailyCounts.set(candidate.studentId, new Set())
         studentDailyCounts.get(candidate.studentId)?.add(day)
         studentMonthCounts.set(candidate.studentId, currentMonthCount + 1)
@@ -366,7 +377,8 @@ export async function createBulkLessons(suggestions: ScheduleSuggestion[]) {
                     endTime: s.slot.endTime,
                     studentId: s.studentId,
                     type: "REGULAR",
-                    status: "BOOKED"
+                    status: "BOOKED",
+                    roomId: s.slot.roomId,
                 }
             }))
         )

@@ -51,6 +51,7 @@ model User {
   cancellationCredits CancellationCredit[]
   publishedMonthlySchedules MonthlySchedulePublication[] @relation("MonthlySchedulePublishedBy")
   defaultLessonCount Int      @default(4) // Monthly contract lesson count
+  assignedLessons    Lesson[] @relation("AssignedSupportStaff")
 }
 
 model MonthlyAvailability {
@@ -95,6 +96,8 @@ model Lesson {
   menuId    String?
   menu      Menu?        @relation(fields: [menuId], references: [id])
   roomId    String?      // 'A' or 'B', useful for fixed lessons too
+  assignedStaffId String?
+  assignedStaff   User?  @relation("AssignedSupportStaff", fields: [assignedStaffId], references: [id])
 }
 
 model OpenSlot {
@@ -107,6 +110,27 @@ model OpenSlot {
   menuId      String?
   menu        Menu?    @relation(fields: [menuId], references: [id])
   durationMin Int      @default(30)
+}
+
+model SupportStaff {
+  id        String   @id @default(cuid())
+  name      String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  shifts    SupportShift[]
+}
+
+model SupportShift {
+  id        String       @id @default(cuid())
+  staffId   String
+  staff     SupportStaff @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  startTime DateTime
+  endTime   DateTime
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  @@index([startTime, endTime])
 }
 
 model Menu {

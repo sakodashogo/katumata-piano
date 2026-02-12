@@ -19,6 +19,7 @@ type Lesson = {
     id: string
     startTime: Date | string
     endTime: Date | string
+    roomId?: string | null
     isEditable?: boolean
 }
 
@@ -29,7 +30,7 @@ type Props = {
     existingLessons: Lesson[]
     year: number
     month: number
-    onSave: (lessons: { startTime: Date, endTime: Date }[]) => Promise<boolean>
+    onSave: (lessons: { startTime: Date, endTime: Date, roomId: string }[]) => Promise<boolean>
     isOpen: boolean
     onClose: () => void
 }
@@ -101,11 +102,21 @@ export function SchedulingCalendar({
     }, [existingLessons])
 
     const [draftSlots, setDraftSlots] = React.useState<Set<string>>(new Set(editableTimeIsos))
+    const [selectedRoomId, setSelectedRoomId] = React.useState<"A" | "B">("A")
     const [isSaving, setIsSaving] = React.useState(false)
 
     React.useEffect(() => {
         setDraftSlots(new Set(editableTimeIsos))
     }, [editableTimeIsos, isOpen])
+
+    React.useEffect(() => {
+        const firstEditable = existingLessons.find((lesson) => lesson.isEditable && (lesson.roomId === "A" || lesson.roomId === "B"))
+        if (firstEditable?.roomId === "B") {
+            setSelectedRoomId("B")
+            return
+        }
+        setSelectedRoomId("A")
+    }, [existingLessons, isOpen])
 
     // --- Rectangle-based drag state ---
     const isPaintingRef = React.useRef(false)
@@ -284,7 +295,7 @@ export function SchedulingCalendar({
             const lessons = Array.from(draftSlots).map(iso => {
                 const start = new Date(iso)
                 const end = new Date(start.getTime() + 30 * 60 * 1000)
-                return { startTime: start, endTime: end }
+                return { startTime: start, endTime: end, roomId: selectedRoomId }
             })
             const success = await onSave(lessons)
             if (success) {
@@ -333,6 +344,17 @@ export function SchedulingCalendar({
                         </Button>
                     </div>
                     <div className="flex items-center text-[11px] gap-2 flex-wrap">
+                        <div className="flex items-center gap-2 rounded border bg-white px-2 py-1">
+                            <span className="text-slate-500">保存先教室</span>
+                            <select
+                                value={selectedRoomId}
+                                onChange={(e) => setSelectedRoomId(e.target.value === "B" ? "B" : "A")}
+                                className="h-6 rounded border px-1 text-[11px]"
+                            >
+                                <option value="A">第1レッスン室</option>
+                                <option value="B">第2レッスン室</option>
+                            </select>
+                        </div>
                         <div className="flex items-center gap-1"><div className="w-2.5 h-2.5 rounded bg-green-200 border border-green-400" />希望</div>
                         <div className="flex items-center gap-1"><div className="w-2.5 h-2.5 rounded bg-red-200 border border-red-400" />不可</div>
                         <div className="flex items-center gap-1"><div className="w-2.5 h-2.5 rounded bg-blue-500" />追加</div>

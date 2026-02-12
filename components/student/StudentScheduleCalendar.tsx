@@ -18,7 +18,7 @@ type LessonItem = {
 }
 
 function isAdditional(type: string) {
-    return type === "AD_HOC" || type === "SOLO_ADDITIONAL" || type === "DUET_ADDITIONAL"
+    return type === "AD_HOC" || type === "PRACTICE" || type === "SOLO_ADDITIONAL" || type === "DUET_ADDITIONAL"
 }
 
 export function StudentScheduleCalendar({ lessons }: { lessons: LessonItem[] }) {
@@ -47,7 +47,7 @@ export function StudentScheduleCalendar({ lessons }: { lessons: LessonItem[] }) 
                     </span>
                     <span className="inline-flex items-center gap-1">
                         <span className="h-2 w-2 rounded-full bg-amber-500" />
-                        追加予約
+                        自主練・ソロ・連弾
                     </span>
                     <span className="inline-flex items-center gap-1">
                         <span className="h-2 w-2 rounded-full bg-amber-400" />

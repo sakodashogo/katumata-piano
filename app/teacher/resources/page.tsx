@@ -1,4 +1,5 @@
 import { getOpenSlots } from "@/app/lib/actions/resource"
+import { getSupportStaff } from "@/app/lib/actions/support"
 import { ResourceManager } from "@/components/teacher/ResourceManager"
 import { getYear, getMonth } from "date-fns"
 
@@ -12,9 +13,14 @@ export default async function ResourcesPage({
     const year = params.year ? parseInt(params.year) : getYear(now)
     const month = params.month ? parseInt(params.month) : getMonth(now) + 1
 
-    const result = await getOpenSlots(year, month)
+    const [result, staffResult] = await Promise.all([
+        getOpenSlots(year, month),
+        getSupportStaff(),
+    ])
     const slots = result.success ? (result.data?.slots ?? []) : []
     const lessons = result.success ? (result.data?.lessons ?? []) : []
+    const supportShifts = result.success ? (result.data?.supportShifts ?? []) : []
+    const supportStaff = staffResult.success ? (staffResult.data ?? []) : []
 
     return (
         <div className="p-6 max-w-7xl mx-auto space-y-6">
@@ -28,6 +34,8 @@ export default async function ResourcesPage({
             <ResourceManager
                 initialSlots={slots}
                 initialLessons={lessons}
+                supportShifts={supportShifts}
+                supportStaff={supportStaff}
                 year={year}
                 month={month}
             />

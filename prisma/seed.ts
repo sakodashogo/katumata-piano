@@ -1,4 +1,4 @@
-import { PrismaClient } from '@prisma/client'
+import { PrismaClient, Role } from '@prisma/client'
 import bcrypt from 'bcryptjs'
 
 const prisma = new PrismaClient()
@@ -6,7 +6,6 @@ const prisma = new PrismaClient()
 async function main() {
     const hashedPassword = await bcrypt.hash('password123', 10)
 
-    // @ts-ignore
     const teacher = await prisma.user.upsert({
         where: { email: 'teacher@example.com' },
         update: {},
@@ -14,8 +13,7 @@ async function main() {
             email: 'teacher@example.com',
             name: 'Teacher Admin',
             password: hashedPassword,
-            // @ts-ignore
-            role: 'TEACHER',
+            role: Role.TEACHER,
         },
     })
 
@@ -42,6 +40,18 @@ async function main() {
         })
     }
     console.log("Menus seeded.")
+
+    await prisma.supportStaff.upsert({
+        where: { id: "support_a_seed" },
+        update: { name: "バイトA", active: true },
+        create: { id: "support_a_seed", name: "バイトA", active: true },
+    })
+    await prisma.supportStaff.upsert({
+        where: { id: "support_b_seed" },
+        update: { name: "バイトB", active: true },
+        create: { id: "support_b_seed", name: "バイトB", active: true },
+    })
+    console.log("Support staff seeded.")
 }
 
 main()

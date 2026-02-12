@@ -5,6 +5,7 @@ import { auth } from "@/auth"
 import { revalidatePath } from "next/cache"
 import { addDays, startOfMonth, endOfMonth, getDay, setHours, setMinutes } from "date-fns"
 import { notifyEvent } from "@/lib/notifications"
+import { hasSupportShiftInRange } from "@/lib/support-shifts"
 
 function getMonthBounds(year: number, month: number) {
     const start = new Date(year, month - 1, 1, 0, 0, 0, 0)
@@ -259,6 +260,14 @@ export async function bulkCreateLessons(lessons: LessonDraft[]) {
                     throw new Error("同じ生徒のレッスン時間が重複しています。")
                 }
 
+                const nextType = lesson.type ?? "REGULAR"
+                if (roomId === "B" && nextType !== "PRACTICE") {
+                    const hasSupport = await hasSupportShiftInRange(startTime, endTime)
+                    if (!hasSupport) {
+                        throw new Error("第2レッスン室でレッスンを作成するにはサポート講師の在席シフトが必要です。")
+                    }
+                }
+
                 await tx.lesson.create({
                     data: {
                         studentId: lesson.studentId,
@@ -267,7 +276,7 @@ export async function bulkCreateLessons(lessons: LessonDraft[]) {
                         endTime,
                         roomId,
                         menuId: lesson.menuId,
-                        type: lesson.type ?? "REGULAR",
+                        type: nextType,
                         status: lesson.status ?? "DRAFT",
                     }
                 })
@@ -326,8 +335,23 @@ export async function replaceStudentMonthlyLessons(input: ReplaceMonthlyLessonsI
             return { success: false as const, error: "対象月以外の日時は保存できません。" }
         }
     }
+    for (let i = 1; i < normalizedLessons.length; i++) {
+        const prev = normalizedLessons[i - 1]
+        const current = normalizedLessons[i]
+        if (prev.startTime < current.endTime && prev.endTime > current.startTime) {
+            return { success: false as const, error: "同じ生徒の予定が重複しています。" }
+        }
+    }
 
     try {
+        const publicationRows = await prisma.$queryRaw<Array<{ id: string }>>`
+            SELECT "id"
+            FROM "MonthlySchedulePublication"
+            WHERE "year" = ${input.year} AND "month" = ${input.month}
+            LIMIT 1
+        `.catch(() => [])
+        const isMonthPublished = publicationRows.length > 0
+
         const savedCount = await prisma.$transaction(async (tx) => {
             const existing = await tx.lesson.findMany({
                 where: {
@@ -336,10 +360,28 @@ export async function replaceStudentMonthlyLessons(input: ReplaceMonthlyLessonsI
                     status: { in: ["DRAFT", "BOOKED"] },
                     startTime: { gte: monthStart, lt: monthEnd },
                 },
-                select: { id: true },
+                select: {
+                    id: true,
+                    status: true,
+                    startTime: true,
+                    endTime: true,
+                    roomId: true,
+                },
             })
 
             const existingIds = existing.map((lesson) => lesson.id)
+            const existingByKey = new Map(
+                existing.map((lesson) => [
+                    `${lesson.startTime.toISOString()}__${lesson.endTime.toISOString()}__${lesson.roomId || "A"}`,
+                    lesson,
+                ])
+            )
+            const normalizedByKey = new Map(
+                normalizedLessons.map((lesson) => [
+                    `${lesson.startTime.toISOString()}__${lesson.endTime.toISOString()}__${lesson.roomId || "A"}`,
+                    lesson,
+                ])
+            )
 
             for (const lesson of normalizedLessons) {
                 const [roomConflict, studentConflict] = await Promise.all([
@@ -373,24 +415,42 @@ export async function replaceStudentMonthlyLessons(input: ReplaceMonthlyLessonsI
                 if (studentConflict) {
                     throw new Error("同じ生徒の予定が重複しています。")
                 }
+
+                if (lesson.roomId === "B") {
+                    const hasSupport = await hasSupportShiftInRange(lesson.startTime, lesson.endTime)
+                    if (!hasSupport) {
+                        throw new Error("第2レッスン室でレッスンを保存するにはサポート講師の在席シフトが必要です。")
+                    }
+                }
             }
 
-            if (existingIds.length > 0) {
+            const idsToDelete = existing
+                .filter((lesson) =>
+                    !normalizedByKey.has(`${lesson.startTime.toISOString()}__${lesson.endTime.toISOString()}__${lesson.roomId || "A"}`)
+                )
+                .map((lesson) => lesson.id)
+
+            if (idsToDelete.length > 0) {
                 await tx.lesson.deleteMany({
-                    where: { id: { in: existingIds } },
+                    where: { id: { in: idsToDelete } },
                 })
             }
 
-            if (normalizedLessons.length > 0) {
+            const toCreate = normalizedLessons.filter(
+                (lesson) =>
+                    !existingByKey.has(`${lesson.startTime.toISOString()}__${lesson.endTime.toISOString()}__${lesson.roomId || "A"}`)
+            )
+
+            if (toCreate.length > 0) {
                 await tx.lesson.createMany({
-                    data: normalizedLessons.map((lesson) => ({
+                    data: toCreate.map((lesson) => ({
                         studentId: input.studentId,
                         teacherId: session.user.id!,
                         startTime: lesson.startTime,
                         endTime: lesson.endTime,
                         roomId: lesson.roomId,
                         type: "REGULAR",
-                        status: "DRAFT",
+                        status: isMonthPublished ? "BOOKED" : "DRAFT",
                     })),
                 })
             }
