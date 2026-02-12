@@ -5,7 +5,7 @@ import { format, isSameDay } from "date-fns"
 import { ja } from "date-fns/locale"
 import { Calendar } from "@/components/ui/calendar"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { LESSON_TYPE_LABELS } from "@/lib/constants"
+import { LESSON_STATUS_LABELS, LESSON_STATUS_STYLES, LESSON_TYPE_LABELS } from "@/lib/constants"
 import { LessonActions } from "@/components/student/LessonActions"
 
 type LessonItem = {
@@ -47,6 +47,10 @@ export function StudentScheduleCalendar({ lessons }: { lessons: LessonItem[] }) 
                     <span className="inline-flex items-center gap-1">
                         <span className="h-2 w-2 rounded-full bg-amber-500" />
                         追加予約
+                    </span>
+                    <span className="inline-flex items-center gap-1">
+                        <span className="h-2 w-2 rounded-full bg-amber-400" />
+                        振替待ち
                     </span>
                 </div>
             </CardHeader>
@@ -92,9 +96,14 @@ export function StudentScheduleCalendar({ lessons }: { lessons: LessonItem[] }) 
                                         <div className="font-medium text-slate-800">
                                             {format(new Date(lesson.startTime), "HH:mm")} - {format(new Date(lesson.endTime), "HH:mm")}
                                         </div>
-                                        <span className="rounded-full bg-blue-50 px-2 py-0.5 text-xs font-semibold text-blue-700">
-                                            {LESSON_TYPE_LABELS[lesson.type] || lesson.type}
-                                        </span>
+                                        <div className="flex items-center gap-2">
+                                            <span className="rounded-full bg-blue-50 px-2 py-0.5 text-xs font-semibold text-blue-700">
+                                                {LESSON_TYPE_LABELS[lesson.type] || lesson.type}
+                                            </span>
+                                            <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${LESSON_STATUS_STYLES[lesson.status] || "bg-slate-100 text-slate-600"}`}>
+                                                {LESSON_STATUS_LABELS[lesson.status] || lesson.status}
+                                            </span>
+                                        </div>
                                     </div>
                                     <LessonActions lessonId={lesson.id} menuId={lesson.menuId || undefined} startTime={lesson.startTime} />
                                 </div>
@@ -113,9 +122,14 @@ export function StudentScheduleCalendar({ lessons }: { lessons: LessonItem[] }) 
                                         <div className="font-medium text-slate-800">
                                             {format(new Date(lesson.startTime), "HH:mm")} - {format(new Date(lesson.endTime), "HH:mm")}
                                         </div>
-                                        <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-700">
-                                            {LESSON_TYPE_LABELS[lesson.type] || lesson.type}
-                                        </span>
+                                        <div className="flex items-center gap-2">
+                                            <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-700">
+                                                {LESSON_TYPE_LABELS[lesson.type] || lesson.type}
+                                            </span>
+                                            <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${LESSON_STATUS_STYLES[lesson.status] || "bg-slate-100 text-slate-600"}`}>
+                                                {LESSON_STATUS_LABELS[lesson.status] || lesson.status}
+                                            </span>
+                                        </div>
                                     </div>
                                     <LessonActions lessonId={lesson.id} menuId={lesson.menuId || undefined} startTime={lesson.startTime} />
                                 </div>

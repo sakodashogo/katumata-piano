@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useMemo } from "react"
 import { bookLesson, getBookableDaysInRange, getBookableStartTimes, rescheduleLesson } from "@/app/lib/actions/booking"
 import { Button } from "@/components/ui/button"
 import {
@@ -47,16 +47,39 @@ type Slot = {
     roomId: string
 }
 
+type ReschedulePolicy = {
+    lessonId: string
+    lessonStart: string
+    menuId: string | null
+    deadline: string
+    windowStart: string
+    windowEnd: string
+    monthStart: string
+    monthEnd: string
+    monthlyUsed: number
+    monthlyRemaining: number
+    canReschedule: boolean
+    reason: string | null
+}
+
+function intersectDateRange(start: Date, end: Date, min: Date, max: Date) {
+    const effectiveStart = start > min ? start : min
+    const effectiveEnd = end < max ? end : max
+    return effectiveStart <= effectiveEnd ? { start: effectiveStart, end: effectiveEnd } : null
+}
+
 export function BookingWizard({
     menus,
     rescheduleLessonId,
     initialMenuId,
-    credits
+    credits,
+    reschedulePolicy,
 }: {
     menus: Menu[],
     rescheduleLessonId?: string,
     initialMenuId?: string,
-    credits?: { count: number, used: number, remaining: number } | null
+    credits?: { count: number, used: number, remaining: number } | null,
+    reschedulePolicy?: ReschedulePolicy | null
 }) {
     const router = useRouter()
     const { toast } = useToast()
@@ -72,23 +95,55 @@ export function BookingWizard({
     const [useTicket, setUseTicket] = useState(false)
     const [monthlyAvailability, setMonthlyAvailability] = useState<Set<string>>(new Set())
     const [currentMonth, setCurrentMonth] = useState<Date>(new Date())
+    const rescheduleWindowStart = useMemo(
+        () => (reschedulePolicy ? new Date(reschedulePolicy.windowStart) : null),
+        [reschedulePolicy]
+    )
+    const rescheduleWindowEnd = useMemo(
+        () => (reschedulePolicy ? new Date(reschedulePolicy.windowEnd) : null),
+        [reschedulePolicy]
+    )
+    const isRescheduleBlocked = !!rescheduleLessonId && (!reschedulePolicy || !reschedulePolicy.canReschedule)
 
     // Fetch monthly availability
     useEffect(() => {
         if (!selectedMenu) return
         const fetchMonthlyAvailability = async () => {
-            const start = startOfMonth(currentMonth)
-            const end = endOfMonth(currentMonth)
-            const res = await getBookableDaysInRange(start.toISOString(), end.toISOString(), selectedMenu.id)
+            const monthStart = startOfMonth(currentMonth)
+            const monthEnd = endOfMonth(currentMonth)
+            const effectiveRange = rescheduleWindowStart && rescheduleWindowEnd
+                ? intersectDateRange(monthStart, monthEnd, rescheduleWindowStart, rescheduleWindowEnd)
+                : { start: monthStart, end: monthEnd }
+
+            if (!effectiveRange) {
+                setMonthlyAvailability(new Set())
+                return
+            }
+
+            const res = await getBookableDaysInRange(
+                effectiveRange.start.toISOString(),
+                effectiveRange.end.toISOString(),
+                selectedMenu.id
+            )
             if (res.success && res.data) {
                 const dates = new Set(res.data as string[])
                 setMonthlyAvailability(dates)
+            } else {
+                setMonthlyAvailability(new Set())
             }
         }
         void fetchMonthlyAvailability()
-    }, [currentMonth, selectedMenu])
+    }, [currentMonth, selectedMenu, rescheduleWindowStart, rescheduleWindowEnd])
 
     const fetchSlotsForDate = useCallback(async (date: Date, menuId: string) => {
+            if (
+                rescheduleWindowStart &&
+                rescheduleWindowEnd &&
+                (date < rescheduleWindowStart || date > rescheduleWindowEnd)
+            ) {
+                setAvailableSlots([])
+                return
+            }
             setLoading(true)
             const res = await getBookableStartTimes(date.toISOString(), menuId)
             if (res.success && res.data) {
@@ -97,7 +152,7 @@ export function BookingWizard({
                 setAvailableSlots([])
             }
             setLoading(false)
-    }, [])
+    }, [rescheduleWindowStart, rescheduleWindowEnd])
 
     const handleDateSelect = useCallback(async (date: Date | undefined) => {
         setSelectedDate(date)
@@ -122,6 +177,10 @@ export function BookingWizard({
 
     const handleBooking = async () => {
         if (!selectedSlot || !selectedMenu) return
+        if (isRescheduleBlocked) {
+            toast.error(reschedulePolicy?.reason || "このレッスンは振替できません。")
+            return
+        }
         setLoading(true)
 
         let res: { success: boolean; error?: string };
@@ -134,7 +193,7 @@ export function BookingWizard({
         if (res.success) {
             setBookingSuccess(true)
         } else {
-            toast.error("予約に失敗しました: " + (res.error || ""))
+            toast.error(res.error || "予約に失敗しました。")
         }
         setLoading(false)
     }
@@ -175,6 +234,14 @@ export function BookingWizard({
                                     {format(new Date(selectedSlot!.startTime), "HH:mm")} - {format(new Date(selectedSlot!.endTime), "HH:mm")}
                                 </span>
                             </div>
+                        </div>
+                        <div className="w-full rounded-3xl border border-dashed border-slate-300 bg-slate-50/60 p-5 text-left">
+                            <div className="text-[11px] font-black uppercase tracking-widest text-slate-500">
+                                決済ステータス
+                            </div>
+                            <p className="mt-2 text-sm font-semibold text-slate-600">
+                                未決済（オンライン決済導入時にここへステータスを表示します）
+                            </p>
                         </div>
 
                         <Button
@@ -232,6 +299,27 @@ export function BookingWizard({
                     ))}
                 </div>
             </div>
+
+            {rescheduleLessonId && reschedulePolicy && (
+                <div
+                    className={cn(
+                        "mb-6 rounded-2xl border px-4 py-3 text-sm font-semibold",
+                        reschedulePolicy.canReschedule
+                            ? "border-indigo-200 bg-indigo-50 text-indigo-700"
+                            : "border-red-200 bg-red-50 text-red-700"
+                    )}
+                >
+                    {reschedulePolicy.canReschedule
+                        ? `振替可能期間: ${format(new Date(reschedulePolicy.windowStart), "yyyy/MM/dd")} 〜 ${format(new Date(reschedulePolicy.windowEnd), "yyyy/MM/dd")} / 今月残り ${reschedulePolicy.monthlyRemaining}回`
+                        : reschedulePolicy.reason}
+                </div>
+            )}
+
+            {rescheduleLessonId && !reschedulePolicy && (
+                <div className="mb-6 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
+                    振替条件を確認できないため、予約操作を停止しています。
+                </div>
+            )}
 
             <AnimatePresence mode="wait">
                 {step === 1 && (
@@ -313,7 +401,7 @@ export function BookingWizard({
 
                         <div className="flex justify-center pt-4">
                             <Button
-                                disabled={!selectedMenu}
+                                disabled={!selectedMenu || isRescheduleBlocked}
                                 onClick={() => setStep(2)}
                                 className="w-full md:w-80 h-16 rounded-[1.5rem] bg-blue-600 hover:bg-blue-700 text-white font-black text-xl shadow-2xl shadow-blue-500/20 group"
                             >
@@ -348,7 +436,27 @@ export function BookingWizard({
                                         onMonthChange={setCurrentMonth}
                                         locale={ja}
                                         className="rounded-3xl border-none shadow-none p-0 student-booking-calendar w-full"
-                                        disabled={(date) => date < new Date() || date > addMonths(new Date(), 2)}
+                                        disabled={(date) => {
+                                            const now = new Date()
+                                            const lowerBound = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0)
+                                            const upperBound = new Date(addMonths(now, 2))
+                                            const current = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0)
+
+                                            if (current < lowerBound || current > upperBound) return true
+                                            if (rescheduleWindowStart && current < new Date(
+                                                rescheduleWindowStart.getFullYear(),
+                                                rescheduleWindowStart.getMonth(),
+                                                rescheduleWindowStart.getDate(),
+                                                0, 0, 0, 0
+                                            )) return true
+                                            if (rescheduleWindowEnd && current > new Date(
+                                                rescheduleWindowEnd.getFullYear(),
+                                                rescheduleWindowEnd.getMonth(),
+                                                rescheduleWindowEnd.getDate(),
+                                                0, 0, 0, 0
+                                            )) return true
+                                            return false
+                                        }}
                                         modifiers={{
                                             hasSlots: (date) => monthlyAvailability.has(format(date, "yyyy-MM-dd"))
                                         }}
@@ -461,7 +569,7 @@ export function BookingWizard({
 
                         <div className="flex justify-center pt-4">
                             <Button
-                                disabled={!selectedSlot}
+                                disabled={!selectedSlot || isRescheduleBlocked}
                                 onClick={() => setStep(3)}
                                 className="w-full md:w-80 h-16 rounded-[1.5rem] bg-slate-900 hover:bg-slate-800 text-white font-black text-xl shadow-2xl group"
                             >
@@ -557,8 +665,18 @@ export function BookingWizard({
                                             </div>
                                             <h4 className="font-black flex items-center gap-2">日程変更（振替）について</h4>
                                             <p className="text-sm font-bold opacity-80 leading-relaxed">
-                                                完了すると、振替権利を1回分消費して新しい日時に変更します。
+                                                完了すると、今月の振替回数を1回消費します（上限2回）。
                                             </p>
+                                            {reschedulePolicy && (
+                                                <p className="text-xs font-bold opacity-80 leading-relaxed">
+                                                    振替可能期間: {format(new Date(reschedulePolicy.windowStart), "yyyy/MM/dd")} 〜 {format(new Date(reschedulePolicy.windowEnd), "yyyy/MM/dd")}
+                                                </p>
+                                            )}
+                                            {isRescheduleBlocked && (
+                                                <p className="text-xs font-bold text-red-600 bg-red-50 rounded-lg px-3 py-2">
+                                                    {reschedulePolicy?.reason || "このレッスンは振替できません。"}
+                                                </p>
+                                            )}
                                         </div>
                                     )}
                                 </div>
@@ -587,7 +705,7 @@ export function BookingWizard({
                             <CardFooter className="px-10 pb-10 gap-4">
                                 <Button
                                     onClick={handleBooking}
-                                    disabled={loading}
+                                    disabled={loading || isRescheduleBlocked}
                                     className="w-full h-20 rounded-[1.5rem] bg-blue-600 hover:bg-blue-700 text-white font-black text-2xl shadow-2xl shadow-blue-500/30 transition-all hover:scale-[1.02] active:scale-95"
                                 >
                                     {loading ? <Loader2 className="mr-3 h-8 w-8 animate-spin" /> : null}

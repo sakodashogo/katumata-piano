@@ -1,4 +1,9 @@
-import { getBookableMenusForStudent, getMenus, getStudentCredits } from "@/app/lib/actions/booking"
+import {
+    getBookableMenusForStudent,
+    getMenus,
+    getReschedulePolicy,
+    getStudentCredits,
+} from "@/app/lib/actions/booking"
 import { BookingWizard } from "@/components/student/BookingWizard"
 import { auth } from "@/auth"
 
@@ -23,23 +28,31 @@ export default async function BookingPage({
     const shouldUseAllMenus = !!rescheduleId
 
     // Parallel fetch
-    const [menusData, credits] = await Promise.all([
+    const [menusData, credits, reschedulePolicy] = await Promise.all([
         shouldUseAllMenus ? getMenus() : getBookableMenusForStudent(),
-        session?.user?.id ? getStudentCredits(session.user.id) : null
+        session?.user?.id ? getStudentCredits(session.user.id) : null,
+        rescheduleId ? getReschedulePolicy(rescheduleId) : null,
     ])
 
     const menus = menusData.data || []
+    const policy = reschedulePolicy?.success ? reschedulePolicy.data : null
 
     return (
         <div className="container max-w-4xl mx-auto py-8">
             <h1 className="text-3xl font-bold mb-8 text-center">
                 {rescheduleId ? "日時変更" : "レッスン予約"}
             </h1>
+            {rescheduleId && !policy && (
+                <p className="mb-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
+                    {reschedulePolicy?.error || "振替条件を取得できませんでした。"}
+                </p>
+            )}
             <BookingWizard
                 menus={menus as BookingMenu[]}
                 rescheduleLessonId={rescheduleId}
                 initialMenuId={menuId}
                 credits={credits}
+                reschedulePolicy={policy}
             />
         </div>
     )

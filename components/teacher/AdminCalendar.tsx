@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo } from "react"
 import { DndContext, DragEndEvent, DragOverlay, useSensor, useSensors, MouseSensor, TouchSensor, DragStartEvent, useDraggable, useDroppable } from "@dnd-kit/core"
 import { format, startOfWeek, endOfWeek, eachDayOfInterval, addDays, isSameDay, setHours, setMinutes, addMinutes } from "date-fns"
 import { ja } from "date-fns/locale"
@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { ChevronLeft, ChevronRight, Save, RotateCcw } from "lucide-react"
 import { useToast } from "@/components/ui/toast"
-import { ROOMS } from "@/lib/constants"
+import { LESSON_TYPE_LABELS, ROOMS } from "@/lib/constants"
 import { moveLesson, moveOpenSlot } from "@/app/lib/actions/schedule"
 import { useRouter } from "next/navigation"
 
@@ -28,6 +28,7 @@ type Lesson = {
     roomId: string | null
     startTime: Date | string
     endTime: Date | string
+    type: string
     status: "BOOKED" | "CANCELLED" | "COMPLETED" | "DRAFT" | string
     student: { name: string | null }
 }
@@ -38,8 +39,21 @@ type Props = {
     lessons: Lesson[]
 }
 
+type ScheduleListItem = {
+    id: string
+    kind: "lesson" | "slot"
+    startTime: Date
+    endTime: Date
+    roomId: string
+    studentName: string | null
+    lessonType: string
+    statusLabel: string
+    statusClass: string
+}
+
 const HOURS = Array.from({ length: 13 }, (_, i) => i + 9) // 09:00 - 21:00
 const MINUTES = [0, 30]
+type RoomFilter = "all" | "A" | "B"
 
 export function AdminCalendar({ initialDate = new Date(), slots: initialSlots, lessons: initialLessons }: Props) {
     const router = useRouter()
@@ -53,6 +67,9 @@ export function AdminCalendar({ initialDate = new Date(), slots: initialSlots, l
     const [localLessons, setLocalLessons] = useState<Lesson[]>(initialLessons)
     const [pendingChanges, setPendingChanges] = useState<Map<string, { type: 'move', to: { start: Date, room: string } }>>(new Map())
     const [isSubmitting, setIsSubmitting] = useState(false)
+    const [studentFilter, setStudentFilter] = useState("")
+    const [roomFilter, setRoomFilter] = useState<RoomFilter>("all")
+    const [lessonTypeFilter, setLessonTypeFilter] = useState("all")
 
     // Sync props to state when not editing (or initial load)
     useEffect(() => {
@@ -72,6 +89,90 @@ export function AdminCalendar({ initialDate = new Date(), slots: initialSlots, l
     const weekStart = startOfWeek(currentDate, { weekStartsOn: 1 })
     const weekEnd = endOfWeek(currentDate, { weekStartsOn: 1 })
     const days = eachDayOfInterval({ start: weekStart, end: weekEnd })
+
+    const lessonTypeOptions = useMemo(() => {
+        return Array.from(new Set(localLessons.map((lesson) => lesson.type))).sort()
+    }, [localLessons])
+
+    const weeklyListItems = useMemo<ScheduleListItem[]>(() => {
+        const weekStartMs = weekStart.getTime()
+        const weekEndMs = weekEnd.getTime()
+        const inWeek = (date: Date) => date.getTime() >= weekStartMs && date.getTime() <= weekEndMs
+        const items: ScheduleListItem[] = []
+
+        for (const lesson of localLessons) {
+            const start = new Date(lesson.startTime)
+            if (!inWeek(start)) continue
+
+            items.push({
+                id: `lesson-${lesson.id}`,
+                kind: "lesson",
+                startTime: start,
+                endTime: new Date(lesson.endTime),
+                roomId: lesson.roomId || ROOMS.A.id,
+                studentName: lesson.student?.name || "名前未設定",
+                lessonType: lesson.type,
+                statusLabel: lesson.status === "DRAFT" ? "振替待ち" : "予約済み",
+                statusClass: lesson.status === "DRAFT"
+                    ? "text-amber-700 bg-amber-50 border-amber-200"
+                    : "text-green-700 bg-green-50 border-green-200",
+            })
+        }
+
+        for (const slot of localSlots) {
+            const start = new Date(slot.startTime)
+            if (!inWeek(start)) continue
+
+            const status = slot.isBooked
+                ? {
+                    label: "予約済み",
+                    className: "text-slate-700 bg-slate-100 border-slate-200",
+                }
+                : slot.isPublic
+                    ? {
+                        label: "空き枠（公開）",
+                        className: "text-blue-700 bg-blue-50 border-blue-200",
+                    }
+                    : {
+                        label: "空き枠（下書き）",
+                        className: "text-amber-700 bg-amber-50 border-amber-200",
+                    }
+
+            items.push({
+                id: `slot-${slot.id}`,
+                kind: "slot",
+                startTime: start,
+                endTime: new Date(slot.endTime),
+                roomId: slot.roomId,
+                studentName: null,
+                lessonType: "OPEN_SLOT",
+                statusLabel: status.label,
+                statusClass: status.className,
+            })
+        }
+
+        return items.sort((a, b) => {
+            const timeDiff = a.startTime.getTime() - b.startTime.getTime()
+            if (timeDiff !== 0) return timeDiff
+            return a.roomId.localeCompare(b.roomId)
+        })
+    }, [localLessons, localSlots, weekStart, weekEnd])
+
+    const filteredListItems = useMemo(() => {
+        const search = studentFilter.trim().toLowerCase()
+        return weeklyListItems.filter((item) => {
+            if (roomFilter !== "all" && item.roomId !== roomFilter) return false
+            if (lessonTypeFilter !== "all" && item.lessonType !== lessonTypeFilter) return false
+
+            if (search.length > 0) {
+                if (item.kind !== "lesson") return false
+                const studentName = (item.studentName || "").toLowerCase()
+                if (!studentName.includes(search)) return false
+            }
+
+            return true
+        })
+    }, [weeklyListItems, roomFilter, lessonTypeFilter, studentFilter])
 
     // Helper: Get data for a cell
     const getCellItems = (day: Date, hour: number, minute: number, roomId: string) => {
@@ -158,6 +259,8 @@ export function AdminCalendar({ initialDate = new Date(), slots: initialSlots, l
 
         setIsSubmitting(true)
         let successCount = 0
+        let failureCount = 0
+        let firstError = ""
 
         try {
             for (const [key, change] of Array.from(pendingChanges.entries())) {
@@ -168,13 +271,24 @@ export function AdminCalendar({ initialDate = new Date(), slots: initialSlots, l
                 } else {
                     res = await moveOpenSlot(id, change.to.start, change.to.room)
                 }
-                if (res.success) successCount++
+                if (res.success) {
+                    successCount++
+                } else {
+                    failureCount++
+                    if (!firstError && res.error) firstError = res.error
+                }
             }
 
-            toast.success(`${successCount}件の変更を保存しました。`)
-            setPendingChanges(new Map())
-            setIsEditMode(false)
-            router.refresh()
+            if (failureCount > 0) {
+                toast.error(firstError || `${failureCount}件の変更を保存できませんでした。`)
+            } else {
+                toast.success(`${successCount}件の変更を保存しました。`)
+            }
+            if (successCount > 0) {
+                setPendingChanges(new Map())
+                setIsEditMode(false)
+                router.refresh()
+            }
         } catch (e) {
             console.error(e)
             toast.error("保存中にエラーが発生しました")
@@ -358,6 +472,13 @@ export function AdminCalendar({ initialDate = new Date(), slots: initialSlots, l
                     </div>
                 </div>
 
+                <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-white p-3 text-xs font-medium text-slate-600">
+                    <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-1 text-blue-700">空き枠（公開）</span>
+                    <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-1 text-amber-700">空き枠（下書き）</span>
+                    <span className="inline-flex items-center gap-1 rounded-full bg-green-50 px-2 py-1 text-green-700">予約済み</span>
+                    <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-1 text-amber-800">振替待ち</span>
+                </div>
+
                 {/* Calendar */}
                 <ScrollArea className="h-[calc(100vh-200px)] border rounded-md bg-white">
                     <div className="min-w-[1000px] p-4">
@@ -399,6 +520,104 @@ export function AdminCalendar({ initialDate = new Date(), slots: initialSlots, l
                         </div>
                     </div>
                 </ScrollArea>
+
+                <div className="rounded-lg border bg-white">
+                    <div className="flex flex-col gap-3 border-b p-4 md:flex-row md:items-end md:justify-between">
+                        <div>
+                            <h2 className="text-base font-bold text-slate-900">統合リスト</h2>
+                            <p className="text-xs text-slate-500">生徒名・部屋・レッスン種別で絞り込みできます</p>
+                        </div>
+                        <div className="text-xs font-semibold text-slate-500">
+                            {filteredListItems.length}件表示 / 全{weeklyListItems.length}件
+                        </div>
+                    </div>
+
+                    <div className="grid gap-3 border-b p-4 md:grid-cols-3">
+                        <div className="space-y-1">
+                            <label className="text-xs font-semibold text-slate-500">生徒名</label>
+                            <input
+                                value={studentFilter}
+                                onChange={(e) => setStudentFilter(e.target.value)}
+                                placeholder="例: 田中"
+                                className="h-9 w-full rounded-md border px-3 text-sm"
+                            />
+                        </div>
+                        <div className="space-y-1">
+                            <label className="text-xs font-semibold text-slate-500">部屋</label>
+                            <select
+                                value={roomFilter}
+                                onChange={(e) => setRoomFilter(e.target.value as RoomFilter)}
+                                className="h-9 w-full rounded-md border px-3 text-sm"
+                            >
+                                <option value="all">すべて</option>
+                                <option value="A">Room A</option>
+                                <option value="B">Room B</option>
+                            </select>
+                        </div>
+                        <div className="space-y-1">
+                            <label className="text-xs font-semibold text-slate-500">種別</label>
+                            <select
+                                value={lessonTypeFilter}
+                                onChange={(e) => setLessonTypeFilter(e.target.value)}
+                                className="h-9 w-full rounded-md border px-3 text-sm"
+                            >
+                                <option value="all">すべて</option>
+                                <option value="OPEN_SLOT">空き枠</option>
+                                {lessonTypeOptions.map((type) => (
+                                    <option key={type} value={type}>
+                                        {LESSON_TYPE_LABELS[type] || type}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+                    </div>
+
+                    <div className="max-h-[360px] overflow-auto">
+                        <table className="w-full min-w-[760px] text-sm">
+                            <thead className="sticky top-0 bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                                <tr>
+                                    <th className="px-3 py-2 text-left">日付</th>
+                                    <th className="px-3 py-2 text-left">時間</th>
+                                    <th className="px-3 py-2 text-left">部屋</th>
+                                    <th className="px-3 py-2 text-left">種別</th>
+                                    <th className="px-3 py-2 text-left">生徒</th>
+                                    <th className="px-3 py-2 text-left">ステータス</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {filteredListItems.length === 0 && (
+                                    <tr>
+                                        <td colSpan={6} className="px-3 py-8 text-center text-sm text-slate-500">
+                                            条件に一致する予定がありません。
+                                        </td>
+                                    </tr>
+                                )}
+                                {filteredListItems.map((item) => (
+                                    <tr key={item.id} className="border-t">
+                                        <td className="px-3 py-2 text-slate-700">
+                                            {format(item.startTime, "M/d (E)", { locale: ja })}
+                                        </td>
+                                        <td className="px-3 py-2 font-medium text-slate-800">
+                                            {format(item.startTime, "HH:mm")} - {format(item.endTime, "HH:mm")}
+                                        </td>
+                                        <td className="px-3 py-2 text-slate-700">Room {item.roomId}</td>
+                                        <td className="px-3 py-2 text-slate-700">
+                                            {item.lessonType === "OPEN_SLOT"
+                                                ? "空き枠"
+                                                : (LESSON_TYPE_LABELS[item.lessonType] || item.lessonType)}
+                                        </td>
+                                        <td className="px-3 py-2 text-slate-700">{item.studentName || "-"}</td>
+                                        <td className="px-3 py-2">
+                                            <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold ${item.statusClass}`}>
+                                                {item.statusLabel}
+                                            </span>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
 
                 <DragOverlay>
                     {activeId ? (

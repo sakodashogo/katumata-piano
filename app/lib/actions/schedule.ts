@@ -4,6 +4,38 @@ import { prisma } from "@/lib/prisma"
 import { revalidatePath } from "next/cache"
 import { addMinutes } from "date-fns"
 
+async function hasRoomScheduleConflict(options: {
+    roomId: string
+    startTime: Date
+    endTime: Date
+    excludeSlotId?: string
+    excludeLessonId?: string
+}) {
+    const [slotConflict, lessonConflict] = await Promise.all([
+        prisma.openSlot.findFirst({
+            where: {
+                id: options.excludeSlotId ? { not: options.excludeSlotId } : undefined,
+                roomId: options.roomId,
+                startTime: { lt: options.endTime },
+                endTime: { gt: options.startTime },
+            },
+            select: { id: true },
+        }),
+        prisma.lesson.findFirst({
+            where: {
+                id: options.excludeLessonId ? { not: options.excludeLessonId } : undefined,
+                status: { not: "CANCELLED" },
+                roomId: options.roomId,
+                startTime: { lt: options.endTime },
+                endTime: { gt: options.startTime },
+            },
+            select: { id: true },
+        }),
+    ])
+
+    return !!slotConflict || !!lessonConflict
+}
+
 export async function getScheduleData(roomId: string | undefined, start: Date, end: Date) {
     try {
         const whereClause = {
@@ -55,6 +87,15 @@ export async function toggleOpenSlot(roomId: string, startTimeIso: string) {
                 where: { id: existingSlot.id },
             })
         } else {
+            const hasConflict = await hasRoomScheduleConflict({
+                roomId,
+                startTime,
+                endTime,
+            })
+            if (hasConflict) {
+                return { success: false, error: "同じ教室・時間帯に既存の予定があるため追加できません。" }
+            }
+
             // Create
             await prisma.openSlot.create({
                 data: {
@@ -76,30 +117,49 @@ export async function toggleOpenSlot(roomId: string, startTimeIso: string) {
 export async function bulkUpdateOpenSlots(roomId: string, slots: string[], action: 'add' | 'remove') {
     try {
         if (action === 'add') {
-            // Filter out existing slots to avoid duplicates if any
-            // Actually createMany with skipDuplicates is not supported in SQLite (if used) or depending on DB.
-            // But prisma.openSlot might allow duplicates if no unique constraint?
-            // "OpenSlot" usually has no unique constraint on (roomId, startTime) in default generated schemas unless specified.
-            // Let's assume we want to avoid duplicates.
+            const candidateStarts = Array.from(
+                new Set(slots.map((value) => new Date(value).toISOString()))
+            )
+                .map((value) => new Date(value))
+                .sort((a, b) => a.getTime() - b.getTime())
+            if (candidateStarts.length === 0) {
+                revalidatePath("/teacher/schedule")
+                return { success: true }
+            }
 
-            // 1. Find existing slots
-            const existing = await prisma.openSlot.findMany({
-                where: {
+            const rangeStart = candidateStarts[0]
+            const rangeEnd = addMinutes(candidateStarts[candidateStarts.length - 1], 30)
+
+            const [existing, existingLessons] = await Promise.all([
+                prisma.openSlot.findMany({
+                    where: {
+                        roomId,
+                        startTime: { lt: rangeEnd },
+                        endTime: { gt: rangeStart },
+                    },
+                    select: { startTime: true, endTime: true },
+                }),
+                prisma.lesson.findMany({
+                    where: {
+                        status: { not: "CANCELLED" },
+                        roomId,
+                        startTime: { lt: rangeEnd },
+                        endTime: { gt: rangeStart },
+                    },
+                    select: { startTime: true, endTime: true },
+                }),
+            ])
+
+            const hasOverlap = (start: Date, end: Date) =>
+                existing.some((slot) => slot.startTime < end && slot.endTime > start) ||
+                existingLessons.some((lesson) => lesson.startTime < end && lesson.endTime > start)
+
+            const newSlots = candidateStarts
+                .filter((start) => !hasOverlap(start, addMinutes(start, 30)))
+                .map((start) => ({
                     roomId,
-                    startTime: { in: slots.map(d => new Date(d)) }
-                },
-                select: { startTime: true }
-            })
-
-            const existingTimes = new Set(existing.map(e => e.startTime.getTime()))
-
-            const newSlots = slots
-                .map(s => new Date(s))
-                .filter(d => !existingTimes.has(d.getTime()))
-                .map(d => ({
-                    roomId,
-                    startTime: d,
-                    endTime: addMinutes(d, 30),
+                    startTime: start,
+                    endTime: addMinutes(start, 30),
                     isBooked: false
                 }))
 
@@ -109,14 +169,12 @@ export async function bulkUpdateOpenSlots(roomId: string, slots: string[], actio
                 })
             }
         } else {
-            // Remove
-            // Only remove if NOT booked
             await prisma.openSlot.deleteMany({
                 where: {
                     roomId,
                     startTime: { in: slots.map(d => new Date(d)) },
-                    isBooked: false // Safety check
-                }
+                    isBooked: false,
+                },
             })
         }
 
@@ -129,10 +187,6 @@ export async function bulkUpdateOpenSlots(roomId: string, slots: string[], actio
 }
 
 export async function moveLesson(lessonId: string, newStartTime: Date, newRoomId: string) {
-    const newEndTime = addMinutes(new Date(newStartTime), 30) // Assuming 30 min default or keep duration?
-    // Better to keep duration if possible, but let's assume 30m for now or fetch existing.
-    // Fetching existing is safer.
-
     try {
         const lesson = await prisma.lesson.findUnique({ where: { id: lessonId } })
         if (!lesson) return { success: false, error: "Lesson not found" }
@@ -140,24 +194,39 @@ export async function moveLesson(lessonId: string, newStartTime: Date, newRoomId
         const duration = lesson.endTime.getTime() - lesson.startTime.getTime()
         const newEndTime = new Date(newStartTime.getTime() + duration)
 
+        const [roomConflict, studentConflict] = await Promise.all([
+            hasRoomScheduleConflict({
+                roomId: newRoomId,
+                startTime: newStartTime,
+                endTime: newEndTime,
+                excludeLessonId: lesson.id,
+            }),
+            prisma.lesson.findFirst({
+                where: {
+                    id: { not: lesson.id },
+                    status: { not: "CANCELLED" },
+                    studentId: lesson.studentId,
+                    startTime: { lt: newEndTime },
+                    endTime: { gt: newStartTime },
+                },
+                select: { id: true },
+            }),
+        ])
+
+        if (roomConflict) {
+            return { success: false, error: "同じ教室・時間帯に別の予定があるため移動できません。" }
+        }
+        if (studentConflict) {
+            return { success: false, error: "生徒の別レッスンと時間が重複するため移動できません。" }
+        }
+
         await prisma.lesson.update({
             where: { id: lessonId },
             data: {
                 startTime: newStartTime,
                 endTime: newEndTime,
                 roomId: newRoomId,
-                status: "DRAFT" as any // Moving auto-converts to DRAFT for safety? Or keeps status?
-                // User requirement: "Editing... is Draft state... then Publish".
-                // So if I move a Public lesson, it ideally becomes Draft? 
-                // Or maybe the "Edit Mode" in UI simply doesn't save to DB until "Save"?
-                // "Drag & Drop... immediately doesn't reflect... 'Save changes?' or Undo".
-                // Design interpretation: 
-                // 1. UI State: Drag changes local state.
-                // 2. Save: Calls this action.
-                // 3. Status: If it was BOOKED, does it stay BOOKED?
-                // The requirement says "Draft... Publish".
-                // Let's allow updating without changing status if just moving, OR allow status change.
-                // For now, let's just update the fields.
+                status: "DRAFT"
             }
         })
         revalidatePath("/teacher/schedule")
@@ -186,9 +255,20 @@ export async function moveOpenSlot(slotId: string, newStartTime: Date, newRoomId
     try {
         const slot = await prisma.openSlot.findUnique({ where: { id: slotId } })
         if (!slot) return { success: false, error: "Slot not found" }
+        if (slot.isBooked) return { success: false, error: "予約済みの枠は移動できません。" }
 
         const duration = slot.endTime.getTime() - slot.startTime.getTime()
         const newEndTime = new Date(newStartTime.getTime() + duration)
+
+        const hasConflict = await hasRoomScheduleConflict({
+            roomId: newRoomId,
+            startTime: newStartTime,
+            endTime: newEndTime,
+            excludeSlotId: slot.id,
+        })
+        if (hasConflict) {
+            return { success: false, error: "同じ教室・時間帯に別の予定があるため移動できません。" }
+        }
 
         await prisma.openSlot.update({
             where: { id: slotId },
@@ -196,9 +276,6 @@ export async function moveOpenSlot(slotId: string, newStartTime: Date, newRoomId
                 startTime: newStartTime,
                 endTime: newEndTime,
                 roomId: newRoomId
-                // Keep keeping isPublic/isBooked as is?
-                // If moving a Public slot, maybe it should revert to Draft?
-                // Left as is for flexibility.
             }
         })
         revalidatePath("/teacher/schedule")

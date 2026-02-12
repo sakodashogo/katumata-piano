@@ -13,17 +13,45 @@ import {
     addMinutes,
 } from "date-fns"
 
+type RoomTimeRange = {
+    roomId: string
+    startTime: Date
+    endTime: Date
+}
+
+function normalizeMenuName(name: string) {
+    return name.trim().toLowerCase()
+}
+
+function isBookableSlotMenu(name: string) {
+    const normalized = normalizeMenuName(name)
+    if (normalized.includes("自主練") || normalized.includes("practice")) return true
+    if (normalized.includes("solo")) return true
+    if (normalized.includes("duet")) return true
+    return normalized.includes("追加") && (normalized.includes("ソロ") || normalized.includes("連弾"))
+}
+
+function hasTimeOverlap(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date) {
+    return aStart < bEnd && aEnd > bStart
+}
+
+function hasRoomOverlap(ranges: RoomTimeRange[], target: RoomTimeRange) {
+    return ranges.some((range) =>
+        range.roomId === target.roomId &&
+        hasTimeOverlap(range.startTime, range.endTime, target.startTime, target.endTime)
+    )
+}
+
 export async function getMenusForSlots() {
     const session = await auth()
     if (session?.user?.role !== "TEACHER") return { success: false as const, error: "Unauthorized" }
 
     try {
         const menus = await prisma.menu.findMany({
-            where: {
-                name: { in: ['自主練習', 'ソロ追加', '連弾追加'] }
-            }
+            orderBy: [{ price: "asc" }, { durationMin: "asc" }],
         })
-        return { success: true as const, data: menus }
+        const filteredMenus = menus.filter((menu) => isBookableSlotMenu(menu.name))
+        return { success: true as const, data: filteredMenus }
     } catch {
         return { success: false as const, error: "Failed to fetch menus" }
     }
@@ -44,23 +72,52 @@ export async function batchCreateOpenSlots(input: BatchCreateInput) {
     if (session?.user?.role !== "TEACHER") return { success: false as const, error: "Unauthorized" }
 
     try {
+        for (const range of input.timeRanges) {
+            if (range.start >= range.end) {
+                return { success: false as const, error: "時間帯の開始は終了より前に設定してください。" }
+            }
+        }
+
         const monthStart = startOfMonth(new Date(input.year, input.month - 1))
         const monthEnd = endOfMonth(monthStart)
         const allDays = eachDayOfInterval({ start: monthStart, end: monthEnd })
         const matchingDays = allDays.filter(day => input.weekdays.includes(getDay(day)))
 
-        // Get existing slots for overlap check
-        const existingSlots = await prisma.openSlot.findMany({
-            where: {
-                startTime: { gte: monthStart, lte: monthEnd },
-                roomId: { in: input.roomIds },
-            },
-            select: { startTime: true, endTime: true, roomId: true },
-        })
+        const [existingSlots, existingLessons] = await Promise.all([
+            prisma.openSlot.findMany({
+                where: {
+                    startTime: { gte: monthStart, lte: monthEnd },
+                    roomId: { in: input.roomIds },
+                },
+                select: { startTime: true, endTime: true, roomId: true },
+            }),
+            prisma.lesson.findMany({
+                where: {
+                    status: { not: "CANCELLED" },
+                    roomId: { in: input.roomIds },
+                    startTime: { lt: monthEnd },
+                    endTime: { gt: monthStart },
+                },
+                select: { startTime: true, endTime: true, roomId: true },
+            }),
+        ])
 
-        const existingSet = new Set(
-            existingSlots.map(s => `${s.roomId}_${s.startTime.getTime()}`)
-        )
+        const occupiedRanges: RoomTimeRange[] = [
+            ...existingSlots.map((slot) => ({
+                roomId: slot.roomId,
+                startTime: slot.startTime,
+                endTime: slot.endTime,
+            })),
+            ...existingLessons
+                .flatMap((lesson) => {
+                    if (!lesson.roomId) return []
+                    return [{
+                        roomId: lesson.roomId,
+                        startTime: lesson.startTime,
+                        endTime: lesson.endTime,
+                    }]
+                }),
+        ]
 
         const slotsToCreate: {
             roomId: string
@@ -83,17 +140,22 @@ export async function batchCreateOpenSlots(input: BatchCreateInput) {
                     const slotEnd = addMinutes(current, input.durationMin)
 
                     for (const roomId of input.roomIds) {
-                        const key = `${roomId}_${current.getTime()}`
-                        if (!existingSet.has(key)) {
-                            slotsToCreate.push({
-                                roomId,
-                                startTime: current,
-                                endTime: slotEnd,
-                                menuId: input.menuId || undefined,
-                                durationMin: input.durationMin,
-                                isPublic: false,
-                            })
+                        const candidate: RoomTimeRange = {
+                            roomId,
+                            startTime: current,
+                            endTime: slotEnd,
                         }
+                        if (hasRoomOverlap(occupiedRanges, candidate)) continue
+
+                        slotsToCreate.push({
+                            roomId,
+                            startTime: current,
+                            endTime: slotEnd,
+                            menuId: input.menuId || undefined,
+                            durationMin: input.durationMin,
+                            isPublic: false,
+                        })
+                        occupiedRanges.push(candidate)
                     }
 
                     current = addMinutes(current, input.durationMin)
@@ -171,14 +233,43 @@ export async function updateSlotDetails(
         if (existing.isBooked) return { success: false as const, error: "Cannot edit booked slot" }
 
         const updateData: Record<string, unknown> = {}
+        const nextEndTime =
+            data.durationMin !== undefined ? addMinutes(existing.startTime, data.durationMin) : existing.endTime
 
         if (data.durationMin !== undefined) {
             updateData.durationMin = data.durationMin
-            updateData.endTime = addMinutes(existing.startTime, data.durationMin)
+            updateData.endTime = nextEndTime
         }
 
         if (data.menuId !== undefined) {
             updateData.menuId = data.menuId
+        }
+
+        if (data.durationMin !== undefined) {
+            const [slotConflict, lessonConflict] = await Promise.all([
+                prisma.openSlot.findFirst({
+                    where: {
+                        id: { not: slotId },
+                        roomId: existing.roomId,
+                        startTime: { lt: nextEndTime },
+                        endTime: { gt: existing.startTime },
+                    },
+                    select: { id: true },
+                }),
+                prisma.lesson.findFirst({
+                    where: {
+                        status: { not: "CANCELLED" },
+                        roomId: existing.roomId,
+                        startTime: { lt: nextEndTime },
+                        endTime: { gt: existing.startTime },
+                    },
+                    select: { id: true },
+                }),
+            ])
+
+            if (slotConflict || lessonConflict) {
+                return { success: false as const, error: "同じ教室・時間帯に既存の予定があるため変更できません。" }
+            }
         }
 
         const slot = await prisma.openSlot.update({

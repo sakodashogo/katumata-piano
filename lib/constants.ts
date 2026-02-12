@@ -10,12 +10,14 @@ export const LESSON_STATUS_LABELS: Record<string, string> = {
     BOOKED: "予約済み",
     COMPLETED: "完了",
     CANCELLED: "キャンセル済み",
+    DRAFT: "振替待ち",
 }
 
 export const LESSON_STATUS_STYLES: Record<string, string> = {
     BOOKED: "text-blue-600 bg-blue-50",
     COMPLETED: "text-green-600 bg-green-50",
     CANCELLED: "text-red-600 bg-red-50",
+    DRAFT: "text-amber-700 bg-amber-50",
 }
 
 export const DAY_LABELS: Record<string, string> = {
