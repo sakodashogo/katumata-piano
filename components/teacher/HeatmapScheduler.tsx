@@ -1,14 +1,13 @@
-
 "use client"
 
-import { useState, useMemo } from "react"
+import { useState, useMemo, useEffect } from "react"
 import { format, startOfWeek, endOfWeek, addDays, getDay, setHours, setMinutes, isSameDay } from "date-fns"
 import { ja } from "date-fns/locale"
 import { motion } from "framer-motion"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { Check, X, Users, Wand2 } from "lucide-react"
+import { Check, X, Users, Wand2, RefreshCw } from "lucide-react"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { ScheduleSuggestion } from "@/app/lib/actions/schedule-maker"
@@ -25,9 +24,45 @@ type Props = {
 const HOURS = [14, 15, 16, 17, 18, 19]
 const MINUTES = [0, 30]
 
+// Color palette for students
+const STUDENT_COLORS = [
+    "bg-red-100 text-red-900 border-red-200 hover:bg-red-200",
+    "bg-orange-100 text-orange-900 border-orange-200 hover:bg-orange-200",
+    "bg-amber-100 text-amber-900 border-amber-200 hover:bg-amber-200",
+    "bg-yellow-100 text-yellow-900 border-yellow-200 hover:bg-yellow-200",
+    "bg-lime-100 text-lime-900 border-lime-200 hover:bg-lime-200",
+    "bg-green-100 text-green-900 border-green-200 hover:bg-green-200",
+    "bg-emerald-100 text-emerald-900 border-emerald-200 hover:bg-emerald-200",
+    "bg-teal-100 text-teal-900 border-teal-200 hover:bg-teal-200",
+    "bg-cyan-100 text-cyan-900 border-cyan-200 hover:bg-cyan-200",
+    "bg-sky-100 text-sky-900 border-sky-200 hover:bg-sky-200",
+    "bg-blue-100 text-blue-900 border-blue-200 hover:bg-blue-200",
+    "bg-indigo-100 text-indigo-900 border-indigo-200 hover:bg-indigo-200",
+    "bg-violet-100 text-violet-900 border-violet-200 hover:bg-violet-200",
+    "bg-purple-100 text-purple-900 border-purple-200 hover:bg-purple-200",
+    "bg-fuchsia-100 text-fuchsia-900 border-fuchsia-200 hover:bg-fuchsia-200",
+    "bg-pink-100 text-pink-900 border-pink-200 hover:bg-pink-200",
+    "bg-rose-100 text-rose-900 border-rose-200 hover:bg-rose-200",
+]
+
 export function HeatmapScheduler({ suggestions, students, year, month, onConfirm, onCancel }: Props) {
-    // State to track rejected slots (user can uncheck suggestions)
-    const [rejectedSlots, setRejectedSlots] = useState<Set<string>>(new Set())
+    // State to track SELECTED slots (initialized with Recommended ones)
+    const [selectedSlotIds, setSelectedSlotIds] = useState<Set<string>>(new Set())
+
+    // Map student IDs to colors
+    const studentColorMap = useMemo(() => {
+        const map = new Map<string, string>()
+        students.forEach((s, i) => {
+            map.set(s.id, STUDENT_COLORS[i % STUDENT_COLORS.length])
+        })
+        return map
+    }, [students])
+
+    // Initialize selection when suggestions change
+    useEffect(() => {
+        const recommended = suggestions.filter(s => s.isRecommended).map(s => s.id)
+        setSelectedSlotIds(new Set(recommended))
+    }, [suggestions])
 
     // Generate calendar grid for the month
     const calendarDays = useMemo(() => {
@@ -50,36 +85,57 @@ export function HeatmapScheduler({ suggestions, students, year, month, onConfirm
         return suggestions.filter(s => new Date(s.slot.startTime).getTime() === slotTime)
     }
 
-    // Identify conflicts (slots with multiple students)
-    const getConflictStatus = (slotSuggestions: ScheduleSuggestion[]) => {
-        if (slotSuggestions.length === 0) return "empty"
-        if (slotSuggestions.length === 1) return "single"
-        return "conflict"
-    }
-
-    const toggleRejection = (suggestion: ScheduleSuggestion) => {
-        const key = `${suggestion.studentId}-${new Date(suggestion.slot.startTime).toISOString()}`
-        const newRejected = new Set(rejectedSlots)
-        if (newRejected.has(key)) {
-            newRejected.delete(key)
+    const toggleSelection = (suggestionId: string) => {
+        const newSelected = new Set(selectedSlotIds)
+        if (newSelected.has(suggestionId)) {
+            newSelected.delete(suggestionId)
         } else {
-            newRejected.add(key)
+            newSelected.add(suggestionId)
         }
-        setRejectedSlots(newRejected)
+        setSelectedSlotIds(newSelected)
     }
 
-    const finalSuggestions = suggestions.filter(s => {
-        const key = `${s.studentId}-${new Date(s.slot.startTime).toISOString()}`
-        return !rejectedSlots.has(key)
-    })
+    // Helper for rendering suggestion item
+    const SuggestionItem = ({ s }: { s: ScheduleSuggestion }) => {
+        const isSelected = selectedSlotIds.has(s.id)
+        const studentName = students.find(stu => stu.id === s.studentId)?.name || "不明"
+        const colorClass = studentColorMap.get(s.studentId) || "bg-slate-100"
+
+        return (
+            <div
+                className={cn(
+                    "flex items-center justify-between gap-2 text-sm p-2 rounded cursor-pointer border mb-1",
+                    isSelected ? colorClass : "bg-white border-slate-200 hover:bg-slate-50"
+                )}
+                onClick={(e) => {
+                    e.stopPropagation()
+                    toggleSelection(s.id)
+                }}
+            >
+                <div className="flex items-center gap-2">
+                    <div className={cn(
+                        "w-4 h-4 rounded-full border flex items-center justify-center bg-white",
+                        isSelected ? "border-current" : "border-slate-300"
+                    )}>
+                        {isSelected && <Check className="h-3 w-3" />}
+                    </div>
+                    <span className="font-medium">
+                        {studentName}
+                    </span>
+                </div>
+                {s.isRecommended && <Badge variant="outline" className="text-[10px] px-1 h-4 bg-white/50 border-current opacity-70">推奨</Badge>}
+            </div>
+        )
+    }
+
+    const finalSuggestions = suggestions.filter(s => selectedSlotIds.has(s.id))
 
     const handleConfirm = () => {
-        // We only confirm non-conflicting ones? Or allow all?
-        // Ideally, user should resolve conflicts before confirming.
-        // For MVP, we pass all "Active" suggestions. 
-        // Backend handles actual creation (might fail if duplicate key, but loose mostly).
         onConfirm(finalSuggestions)
     }
+
+    // Metrics
+    const totalSelected = finalSuggestions.length
 
     return (
         <div className="space-y-6">
@@ -90,15 +146,15 @@ export function HeatmapScheduler({ suggestions, students, year, month, onConfirm
                         自動提案・ヒートマップ調整
                     </h3>
                     <p className="text-sm text-slate-500">
-                        色の濃い箇所は希望が重複しています。クリックして調整してください。
+                        推奨パターンが自動選択されています。生徒ごとに色分け表示されています。
                     </p>
                 </div>
-                <div className="flex gap-2">
-                    <div className="text-right mr-4">
-                        <div className="text-sm font-medium">選択中: {finalSuggestions.length}件</div>
+                <div className="flex gap-2 items-center">
+                    <div className="text-right mr-4 text-sm">
+                        <span className="font-bold text-lg">{totalSelected}</span> コマ選択中
                     </div>
                     <Button variant="outline" onClick={onCancel}>キャンセル</Button>
-                    <Button onClick={handleConfirm} disabled={finalSuggestions.length === 0}>
+                    <Button onClick={handleConfirm} disabled={totalSelected === 0}>
                         確定して作成
                     </Button>
                 </div>
@@ -107,100 +163,108 @@ export function HeatmapScheduler({ suggestions, students, year, month, onConfirm
             <ScrollArea className="h-[600px] border rounded-md">
                 <div className="p-4 min-w-[800px]">
                     <div className="grid grid-cols-[100px_1fr] gap-4">
-                        {/* Header */}
                         <div className="sticky top-0 bg-white z-10 pt-2"></div>
-                        <div className="sticky top-0 bg-white z-10 grid grid-cols-6 gap-2 text-center pb-2 border-b">
+                        <div className="sticky top-0 bg-white z-10 grid grid-cols-[100px_repeat(6,_1fr)] gap-2 text-center pb-2 border-b shadow-sm">
+                            {/* Empty top-left cell */}
+                            <div></div>
+                            {/* Weekdays */}
                             {["月", "火", "水", "木", "金", "土"].map(d => (
                                 <div key={d} className="font-bold text-slate-700">{d}</div>
                             ))}
                         </div>
-
-                        {/* Time Rows? No, Date Rows might be better for Month view? 
-                            Actually, simpler to show Day Columns (Mon-Sat) and Date Rows?
-                            Or standard calendar grid?
-                            Let's do List of Days grouped by Week?
-                            
-                            Let's try: Rows = Dates, Cols = Times (14:00 - 19:30).
-                        */}
                     </div>
 
                     <div className="space-y-1">
                         {calendarDays.map(day => (
                             <div key={day.toISOString()} className="grid grid-cols-[100px_1fr] border-b py-2">
-                                <div className="text-sm font-medium text-slate-600 py-2">
+                                <div className="text-sm font-medium text-slate-600 py-2 pl-2 flex items-center">
                                     {format(day, "M/d (E)", { locale: ja })}
                                 </div>
-                                <div className="grid grid-cols-12 gap-1">
+                                <div className="grid grid-cols-12 gap-1 place-items-start w-full pr-2">
                                     {HOURS.map(h => (
                                         MINUTES.map(m => {
                                             const slotSuggs = getSlotSuggestions(day, h, m)
-                                            const status = getConflictStatus(slotSuggs)
-                                            const isConflict = status === "conflict"
                                             const count = slotSuggs.length
 
-                                            // Determine active suggestions for this slot
-                                            const activeSuggs = slotSuggs.filter(s => {
-                                                const key = `${s.studentId}-${new Date(s.slot.startTime).toISOString()}`
-                                                return !rejectedSlots.has(key)
-                                            })
-                                            const activeCount = activeSuggs.length
+                                            // Empty Slot (No suggestions)
+                                            if (count === 0) {
+                                                return (
+                                                    <div key={`${h}-${m}`} className="w-full h-10 rounded border border-slate-100 bg-slate-50 flex items-center justify-center text-xs text-slate-300">
+                                                        {format(setMinutes(setHours(day, h), m), "HH:mm")}
+                                                    </div>
+                                                )
+                                            }
 
-                                            let colorClass = "bg-slate-50 border-slate-100"
-                                            if (activeCount === 1) colorClass = "bg-blue-100 border-blue-200 text-blue-700"
-                                            if (activeCount > 1) colorClass = "bg-red-100 border-red-200 text-red-700 font-bold"
-                                            if (count > 0 && activeCount === 0) colorClass = "bg-gray-100 text-gray-400 border-dashed" // All rejected
+                                            // Determine visualization based on SELECTION and CONFLICT
+                                            const selectedInSlot = slotSuggs.filter(s => selectedSlotIds.has(s.id))
+                                            const selectedCount = selectedInSlot.length
+
+                                            // Status Logic
+                                            let bgClass = "bg-white"
+                                            let borderClass = "border-slate-200"
+                                            let textClass = "text-slate-500"
+                                            let content = <span className="z-10">{format(setMinutes(setHours(day, h), m), "HH:mm")}</span>
+
+                                            if (selectedCount === 1) {
+                                                const s = selectedInSlot[0]
+                                                const student = students.find(stu => stu.id === s.studentId)
+                                                // Get color for this student
+                                                const colorClass = studentColorMap.get(s.studentId) || ""
+
+                                                bgClass = colorClass
+                                                borderClass = "border-transparent"
+                                                textClass = ""
+
+                                                // Show Student Name instead of Time
+                                                content = (
+                                                    <span className="z-10 font-bold truncate w-full text-center px-1 text-[11px]">
+                                                        {student?.name || "不明"}
+                                                    </span>
+                                                )
+                                            } else if (selectedCount > 1) {
+                                                // Conflict created by user selection
+                                                bgClass = "bg-red-500"
+                                                borderClass = "border-red-600"
+                                                textClass = "text-white font-bold"
+                                                content = <span className="z-10 flex items-center gap-1"><Users className="h-3 w-3" /> 重複</span>
+                                            } else {
+                                                // None selected, but options exist
+                                                bgClass = "bg-slate-100"
+                                                borderClass = "border-dashed border-slate-300"
+                                                textClass = "text-slate-400"
+                                            }
 
                                             return (
                                                 <TooltipProvider key={`${h}-${m}`}>
                                                     <Tooltip>
                                                         <TooltipTrigger asChild>
-                                                            <div
-                                                                className={cn(
-                                                                    "h-10 rounded border text-xs flex items-center justify-center cursor-pointer transition-colors relative",
-                                                                    colorClass
+                                                            <div className={cn(
+                                                                "w-full h-10 rounded border text-xs flex items-center justify-center cursor-pointer transition-all relative hover:ring-2 hover:ring-slate-400 overflow-hidden",
+                                                                bgClass, borderClass, textClass
+                                                            )}>
+                                                                {content}
+
+                                                                {/* Indicators */}
+                                                                {count > 0 && selectedCount === 0 && (
+                                                                    <div className="absolute top-0 right-0 w-2 h-2 rounded-full bg-slate-400" />
                                                                 )}
-                                                                onClick={() => {
-                                                                    // If collision, maybe open detailed view or cycle?
-                                                                    // For now, toggle all?
-                                                                    // Better: Dropdown to pick winner?
-                                                                }}
-                                                            >
-                                                                <span className="z-10">{format(setMinutes(setHours(day, h), m), "HH:mm")}</span>
-                                                                {activeCount > 0 && (
-                                                                    <Badge variant="secondary" className="absolute -top-2 -right-2 h-4 w-4 p-0 flex items-center justify-center text-[10px]">
-                                                                        {activeCount}
+                                                                {selectedCount > 0 && (
+                                                                    <Badge variant="secondary" className="absolute -top-2 -right-2 h-4 w-4 p-0 flex items-center justify-center text-[10px] bg-white shadow-sm ring-1 ring-slate-200 text-slate-700">
+                                                                        {selectedCount}
                                                                     </Badge>
                                                                 )}
                                                             </div>
                                                         </TooltipTrigger>
-                                                        <TooltipContent>
-                                                            <div className="space-y-2">
-                                                                <p className="font-bold border-b pb-1">希望者 ({count}名)</p>
-                                                                {slotSuggs.map(s => {
-                                                                    const key = `${s.studentId}-${new Date(s.slot.startTime).toISOString()}`
-                                                                    const isRejected = rejectedSlots.has(key)
-                                                                    return (
-                                                                        <div key={s.studentId} className="flex items-center justify-between gap-2 text-sm">
-                                                                            <span className={isRejected ? "text-slate-400 line-through" : ""}>
-                                                                                {
-                                                                                    // Lookup student name
-                                                                                    students.find(stu => stu.id === s.studentId)?.name || "不明な生徒"
-                                                                                }
-                                                                            </span>
-                                                                            <Button
-                                                                                size="sm"
-                                                                                variant="ghost"
-                                                                                className="h-4 w-4 p-0"
-                                                                                onClick={(e) => {
-                                                                                    e.stopPropagation()
-                                                                                    toggleRejection(s)
-                                                                                }}
-                                                                            >
-                                                                                {isRejected ? <Check className="h-3 w-3" /> : <X className="h-3 w-3" />}
-                                                                            </Button>
-                                                                        </div>
-                                                                    )
-                                                                })}
+                                                        <TooltipContent className="p-0 border-0 shadow-lg" sideOffset={5}>
+                                                            <div className="bg-white p-3 rounded-md border min-w-[200px]">
+                                                                <div className="font-bold text-xs text-slate-500 mb-2 border-b pb-1">
+                                                                    時間: {format(setMinutes(setHours(day, h), m), "HH:mm")} (候補: {count}名)
+                                                                </div>
+                                                                <div className="space-y-1">
+                                                                    {slotSuggs.map(s => (
+                                                                        <SuggestionItem key={s.id} s={s} />
+                                                                    ))}
+                                                                </div>
                                                             </div>
                                                         </TooltipContent>
                                                     </Tooltip>

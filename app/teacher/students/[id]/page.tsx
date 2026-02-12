@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge"
 import { format } from "date-fns"
 import { ja } from "date-fns/locale"
 import { LESSON_STATUS_LABELS } from "@/lib/constants"
+import { StudentEditDialog } from "@/components/teacher/StudentEditDialog"
 
 export default async function StudentDetailPage({
     params,
@@ -99,13 +100,18 @@ export default async function StudentDetailPage({
 
                 <div className="space-y-6">
                     <Card>
-                        <CardHeader>
+                        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                             <CardTitle>プロフィール</CardTitle>
+                            <StudentEditDialog student={student} />
                         </CardHeader>
-                        <CardContent className="space-y-4">
+                        <CardContent className="space-y-4 pt-4">
                             <div>
                                 <div className="text-sm font-medium text-slate-500">メール</div>
                                 <div>{student.email}</div>
+                            </div>
+                            <div>
+                                <div className="text-sm font-medium text-slate-500">月間レッスン回数</div>
+                                <div>{student.defaultLessonCount}回</div>
                             </div>
                             <div>
                                 <div className="text-sm font-medium text-slate-500">登録日</div>

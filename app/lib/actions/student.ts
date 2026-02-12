@@ -58,6 +58,7 @@ export async function createStudent(formData: FormData) {
     }
 }
 
+
 export async function deleteStudent(id: string) {
     try {
         await prisma.user.delete({
@@ -70,3 +71,35 @@ export async function deleteStudent(id: string) {
         return { success: false, error: "Failed to delete student" }
     }
 }
+
+export async function updateStudent(id: string, formData: FormData) {
+    const rawData = {
+        name: formData.get("name"),
+        email: formData.get("email"),
+        defaultLessonCount: formData.get("defaultLessonCount"),
+    }
+
+    const validatedFields = StudentSchema.safeParse(rawData)
+
+    if (!validatedFields.success) {
+        return { success: false, error: "Invalid fields" }
+    }
+
+    try {
+        await prisma.user.update({
+            where: { id },
+            data: {
+                name: validatedFields.data.name,
+                email: validatedFields.data.email,
+                defaultLessonCount: validatedFields.data.defaultLessonCount,
+            },
+        })
+        revalidatePath(`/teacher/students/${id}`)
+        revalidatePath("/teacher/students")
+        return { success: true }
+    } catch (error) {
+        console.error("Failed to update student:", error)
+        return { success: false, error: "Failed to update student" }
+    }
+}
+

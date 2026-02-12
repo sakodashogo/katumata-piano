@@ -16,7 +16,7 @@ export async function getCalendarClient() {
         const keys = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
         auth = new google.auth.JWT({
             email: keys.client_email,
-            key: keys.private_key,
+            key: keys.private_key.replace(/\\n/g, '\n'),
             scopes: SCOPES,
         });
     } else if (process.env.GOOGLE_CLIENT_EMAIL && process.env.GOOGLE_PRIVATE_KEY) {
