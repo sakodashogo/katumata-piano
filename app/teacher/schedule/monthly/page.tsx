@@ -19,8 +19,12 @@ export default async function MonthlyPlanningPage({
     const now = new Date()
     // Default to NEXT month for planning? Or current?
     // Usually planning is for next month. Let's default to next month.
-    const year = params.year ? parseInt(params.year) : now.getFullYear()
-    const month = params.month ? parseInt(params.month) : now.getMonth() + 1
+    const parsedYear = params.year ? Number.parseInt(params.year, 10) : NaN
+    const parsedMonth = params.month ? Number.parseInt(params.month, 10) : NaN
+    const year = Number.isFinite(parsedYear) ? parsedYear : now.getFullYear()
+    const month = Number.isFinite(parsedMonth) && parsedMonth >= 1 && parsedMonth <= 12
+        ? parsedMonth
+        : now.getMonth() + 1
 
     // If no params, maybe redirect to next month? 
     // If today is late in the month (e.g. > 20th), suggest next month?

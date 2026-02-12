@@ -1,8 +1,15 @@
 import { getStudents } from "@/app/lib/actions/student"
 import { AddStudentForm } from "@/components/teacher/AddStudentForm"
-import { StudentList } from "@/components/teacher/StudentList"
+import { StudentList, type StudentListItem } from "@/components/teacher/StudentList"
+import { auth } from "@/auth"
+import { redirect } from "next/navigation"
 
 export default async function StudentManagementPage() {
+    const session = await auth()
+    if (!session?.user || session.user.role !== "TEACHER") {
+        redirect("/login")
+    }
+
     const { data: students = [] } = await getStudents()
 
     return (
@@ -15,7 +22,7 @@ export default async function StudentManagementPage() {
                 <AddStudentForm />
             </div>
 
-            <StudentList students={students as any} />
+            <StudentList students={students as StudentListItem[]} />
         </div>
     )
 }

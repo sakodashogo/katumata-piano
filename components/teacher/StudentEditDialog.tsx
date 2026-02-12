@@ -1,8 +1,6 @@
 "use client"
 
-import { useState } from "react"
-import { useForm } from "react-hook-form"
-import { zodResolver } from "@hookform/resolvers/zod"
+import { useState, type FormEvent } from "react"
 import * as z from "zod"
 import { Button } from "@/components/ui/button"
 import {
@@ -14,23 +12,17 @@ import {
     DialogTitle,
     DialogTrigger,
 } from "@/components/ui/dialog"
-import {
-    Form,
-    FormControl,
-    FormField,
-    FormItem,
-    FormLabel,
-    FormMessage,
-} from "@/components/ui/form"
 import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import { useToast } from "@/components/ui/toast"
 import { updateStudent } from "@/app/lib/actions/student"
-import { Pencil } from "lucide-react"
+import { Loader2, Pencil } from "lucide-react"
+import { useRouter } from "next/navigation"
 
 const formSchema = z.object({
-    name: z.string().min(1, "名前は必須です"),
-    email: z.string().email("有効なメールアドレスを入力してください"),
-    defaultLessonCount: z.coerce.number().min(1, "1回以上を指定してください"),
+    name: z.string().trim().min(1, "名前は必須です"),
+    email: z.string().trim().email("有効なメールアドレスを入力してください"),
+    defaultLessonCount: z.number().int().min(1, "1回以上を指定してください"),
 })
 
 type Props = {
@@ -42,37 +34,82 @@ type Props = {
     }
 }
 
+type FormState = {
+    name: string
+    email: string
+    defaultLessonCount: string
+}
+
+type FormErrors = Partial<Record<keyof FormState, string>>
+
 export function StudentEditDialog({ student }: Props) {
+    const router = useRouter()
     const [open, setOpen] = useState(false)
+    const [isSubmitting, setIsSubmitting] = useState(false)
+    const [errors, setErrors] = useState<FormErrors>({})
+    const [formState, setFormState] = useState<FormState>({
+        name: student.name || "",
+        email: student.email,
+        defaultLessonCount: String(student.defaultLessonCount),
+    })
     const { toast } = useToast()
 
-    const form = useForm<z.infer<typeof formSchema>>({
-        resolver: zodResolver(formSchema),
-        defaultValues: {
+    const resetForm = () => {
+        setFormState({
             name: student.name || "",
             email: student.email,
-            defaultLessonCount: student.defaultLessonCount,
-        },
-    })
+            defaultLessonCount: String(student.defaultLessonCount),
+        })
+        setErrors({})
+    }
 
-    async function onSubmit(values: z.infer<typeof formSchema>) {
+    const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
+        event.preventDefault()
+        setErrors({})
+
+        const parsed = formSchema.safeParse({
+            name: formState.name,
+            email: formState.email,
+            defaultLessonCount: Number(formState.defaultLessonCount),
+        })
+
+        if (!parsed.success) {
+            const fieldErrors = parsed.error.flatten().fieldErrors
+            setErrors({
+                name: fieldErrors.name?.[0],
+                email: fieldErrors.email?.[0],
+                defaultLessonCount: fieldErrors.defaultLessonCount?.[0],
+            })
+            return
+        }
+
         const formData = new FormData()
-        formData.append("name", values.name)
-        formData.append("email", values.email)
-        formData.append("defaultLessonCount", values.defaultLessonCount.toString())
+        formData.append("name", parsed.data.name)
+        formData.append("email", parsed.data.email)
+        formData.append("defaultLessonCount", parsed.data.defaultLessonCount.toString())
 
+        setIsSubmitting(true)
         const result = await updateStudent(student.id, formData)
-
         if (result.success) {
             toast.success("生徒情報を更新しました")
             setOpen(false)
+            router.refresh()
         } else {
             toast.error(result.error || "更新に失敗しました")
         }
+        setIsSubmitting(false)
     }
 
     return (
-        <Dialog open={open} onOpenChange={setOpen}>
+        <Dialog
+            open={open}
+            onOpenChange={(nextOpen) => {
+                setOpen(nextOpen)
+                if (nextOpen) {
+                    resetForm()
+                }
+            }}
+        >
             <DialogTrigger asChild>
                 <Button variant="outline" size="sm">
                     <Pencil className="mr-2 h-4 w-4" />
@@ -86,52 +123,46 @@ export function StudentEditDialog({ student }: Props) {
                         生徒の基本情報を変更します。
                     </DialogDescription>
                 </DialogHeader>
-                <Form {...form}>
-                    <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-                        <FormField
-                            control={form.control}
-                            name="name"
-                            render={({ field }) => (
-                                <FormItem>
-                                    <FormLabel>名前</FormLabel>
-                                    <FormControl>
-                                        <Input {...field} />
-                                    </FormControl>
-                                    <FormMessage />
-                                </FormItem>
-                            )}
+                <form onSubmit={onSubmit} className="space-y-4">
+                    <div className="space-y-1.5">
+                        <Label htmlFor="student-name">名前</Label>
+                        <Input
+                            id="student-name"
+                            value={formState.name}
+                            onChange={(event) => setFormState((prev) => ({ ...prev, name: event.target.value }))}
                         />
-                        <FormField
-                            control={form.control}
-                            name="email"
-                            render={({ field }) => (
-                                <FormItem>
-                                    <FormLabel>メールアドレス</FormLabel>
-                                    <FormControl>
-                                        <Input {...field} />
-                                    </FormControl>
-                                    <FormMessage />
-                                </FormItem>
-                            )}
+                        {errors.name && <p className="text-sm text-red-600">{errors.name}</p>}
+                    </div>
+
+                    <div className="space-y-1.5">
+                        <Label htmlFor="student-email">メールアドレス</Label>
+                        <Input
+                            id="student-email"
+                            value={formState.email}
+                            onChange={(event) => setFormState((prev) => ({ ...prev, email: event.target.value }))}
                         />
-                        <FormField
-                            control={form.control}
-                            name="defaultLessonCount"
-                            render={({ field }) => (
-                                <FormItem>
-                                    <FormLabel>月間レッスン契約回数</FormLabel>
-                                    <FormControl>
-                                        <Input type="number" {...field} />
-                                    </FormControl>
-                                    <FormMessage />
-                                </FormItem>
-                            )}
+                        {errors.email && <p className="text-sm text-red-600">{errors.email}</p>}
+                    </div>
+
+                    <div className="space-y-1.5">
+                        <Label htmlFor="student-lesson-count">月間レッスン契約回数</Label>
+                        <Input
+                            id="student-lesson-count"
+                            type="number"
+                            min={1}
+                            value={formState.defaultLessonCount}
+                            onChange={(event) => setFormState((prev) => ({ ...prev, defaultLessonCount: event.target.value }))}
                         />
-                        <DialogFooter>
-                            <Button type="submit">保存</Button>
-                        </DialogFooter>
-                    </form>
-                </Form>
+                        {errors.defaultLessonCount && <p className="text-sm text-red-600">{errors.defaultLessonCount}</p>}
+                    </div>
+
+                    <DialogFooter>
+                        <Button type="submit" disabled={isSubmitting}>
+                            {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                            保存
+                        </Button>
+                    </DialogFooter>
+                </form>
             </DialogContent>
         </Dialog>
     )

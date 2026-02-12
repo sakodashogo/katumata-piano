@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { updateProfile, changePassword } from "@/app/lib/actions/settings"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -11,43 +11,50 @@ import { Loader2 } from "lucide-react"
 import { useRouter } from "next/navigation"
 
 export default function SettingsPage() {
-    const { data: session } = useSession()
+    const { data: session, status } = useSession()
     const router = useRouter()
 
     const [profileLoading, setProfileLoading] = useState(false)
-    const [profileMessage, setProfileMessage] = useState("")
+    const [profileMessage, setProfileMessage] = useState<{ type: "success" | "error", text: string } | null>(null)
 
     const [passwordLoading, setPasswordLoading] = useState(false)
-    const [passwordMessage, setPasswordMessage] = useState("")
+    const [passwordMessage, setPasswordMessage] = useState<{ type: "success" | "error", text: string } | null>(null)
+
+    useEffect(() => {
+        if (status === "unauthenticated") {
+            router.replace("/login")
+        }
+    }, [status, router])
 
     async function handleProfileUpdate(formData: FormData) {
         setProfileLoading(true)
-        setProfileMessage("")
+        setProfileMessage(null)
         const res = await updateProfile(formData)
         if (res?.success) {
-            setProfileMessage("プロフィールを更新しました。")
+            setProfileMessage({ type: "success", text: "プロフィールを更新しました。" })
             router.refresh()
         } else {
-            setProfileMessage(res?.error || "更新に失敗しました。")
+            setProfileMessage({ type: "error", text: res?.error || "更新に失敗しました。" })
         }
         setProfileLoading(false)
     }
 
     async function handlePasswordChange(formData: FormData) {
         setPasswordLoading(true)
-        setPasswordMessage("")
+        setPasswordMessage(null)
         const res = await changePassword(formData)
         if (res?.success) {
-            setPasswordMessage("パスワードを変更しました。")
+            setPasswordMessage({ type: "success", text: "パスワードを変更しました。" })
             const form = document.getElementById("passwordForm") as HTMLFormElement
             form.reset()
         } else {
-            setPasswordMessage(res?.error || "パスワードの変更に失敗しました。")
+            setPasswordMessage({ type: "error", text: res?.error || "パスワードの変更に失敗しました。" })
         }
         setPasswordLoading(false)
     }
 
-    if (!session) return <div className="p-8 text-center">読み込み中...</div>
+    if (status === "loading") return <div className="p-8 text-center">読み込み中...</div>
+    if (!session) return <div className="p-8 text-center">ログイン画面へ移動しています...</div>
 
     return (
         <div className="container max-w-4xl mx-auto py-8 space-y-8">
@@ -82,8 +89,8 @@ export default function SettingsPage() {
                                 />
                             </div>
                             {profileMessage && (
-                                <p className={`text-sm ${profileMessage.includes("更新しました") ? "text-green-600" : "text-red-600"}`}>
-                                    {profileMessage}
+                                <p className={`text-sm ${profileMessage.type === "success" ? "text-green-600" : "text-red-600"}`}>
+                                    {profileMessage.text}
                                 </p>
                             )}
                         </CardContent>
@@ -117,8 +124,8 @@ export default function SettingsPage() {
                                 <Input id="confirmPassword" name="confirmPassword" type="password" minLength={6} required />
                             </div>
                             {passwordMessage && (
-                                <p className={`text-sm ${passwordMessage.includes("変更しました") ? "text-green-600" : "text-red-600"}`}>
-                                    {passwordMessage}
+                                <p className={`text-sm ${passwordMessage.type === "success" ? "text-green-600" : "text-red-600"}`}>
+                                    {passwordMessage.text}
                                 </p>
                             )}
                         </CardContent>

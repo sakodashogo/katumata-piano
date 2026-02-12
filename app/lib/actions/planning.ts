@@ -3,7 +3,7 @@
 import { prisma } from "@/lib/prisma"
 import { auth } from "@/auth"
 import { revalidatePath } from "next/cache"
-import { addDays, format, startOfMonth, endOfMonth, getDay, setHours, setMinutes } from "date-fns"
+import { addDays, startOfMonth, endOfMonth, getDay, setHours, setMinutes } from "date-fns"
 
 export async function getPlanningData() {
     const session = await auth()
@@ -142,16 +142,59 @@ export async function bulkCreateLessons(lessons: LessonDraft[]) {
         return { success: false, error: "Unauthorized" }
     }
 
+    if (lessons.length === 0) {
+        return { success: true }
+    }
+
     try {
         await prisma.$transaction(async (tx) => {
             for (const lesson of lessons) {
+                const startTime = new Date(lesson.startTime)
+                const endTime = new Date(lesson.endTime)
+                const roomId = lesson.roomId || "A"
+
+                if (Number.isNaN(startTime.getTime()) || Number.isNaN(endTime.getTime()) || endTime <= startTime) {
+                    throw new Error("レッスン日時が不正です。")
+                }
+
+                const [roomConflict, studentConflict] = await Promise.all([
+                    tx.lesson.findFirst({
+                        where: {
+                            status: { not: "CANCELLED" },
+                            startTime: { lt: endTime },
+                            endTime: { gt: startTime },
+                            ...(roomId === "A"
+                                ? { OR: [{ roomId: "A" }, { roomId: null }] }
+                                : { roomId }),
+                        },
+                        select: { id: true },
+                    }),
+                    tx.lesson.findFirst({
+                        where: {
+                            status: { not: "CANCELLED" },
+                            studentId: lesson.studentId,
+                            startTime: { lt: endTime },
+                            endTime: { gt: startTime },
+                        },
+                        select: { id: true },
+                    }),
+                ])
+
+                if (roomConflict) {
+                    throw new Error(`同時間帯にRoom ${roomId} のレッスンが存在します。`)
+                }
+
+                if (studentConflict) {
+                    throw new Error("同じ生徒のレッスン時間が重複しています。")
+                }
+
                 await tx.lesson.create({
                     data: {
                         studentId: lesson.studentId,
                         teacherId: session.user.id!,
-                        startTime: new Date(lesson.startTime),
-                        endTime: new Date(lesson.endTime),
-                        roomId: lesson.roomId,
+                        startTime,
+                        endTime,
+                        roomId,
                         menuId: lesson.menuId,
                         type: lesson.type ?? "REGULAR",
                         status: "BOOKED", // or confirmed?
@@ -165,6 +208,9 @@ export async function bulkCreateLessons(lessons: LessonDraft[]) {
         return { success: true }
     } catch (error) {
         console.error("Failed to bulk create lessons:", error)
+        if (error instanceof Error) {
+            return { success: false, error: error.message }
+        }
         return { success: false, error: "Failed to create lessons" }
     }
 }

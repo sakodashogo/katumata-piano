@@ -3,7 +3,8 @@
 "use server"
 
 import { prisma } from "@/lib/prisma"
-import { addDays, startOfWeek, endOfWeek, format, parse, isSameDay, getDay, setHours, setMinutes, isWithinInterval, parseISO } from "date-fns"
+import { auth } from "@/auth"
+import { addDays, format, getDay, setHours, setMinutes } from "date-fns"
 
 // Types
 export type ScheduleSuggestion = {
@@ -53,6 +54,11 @@ function generateTeacherSlots(year: number, month: number) {
 }
 
 export async function generateSuggestedSchedule(year: number, month: number) {
+    const session = await auth()
+    if (!session?.user || session.user.role !== "TEACHER") {
+        return { success: false, error: "Unauthorized" }
+    }
+
     const start = new Date(year, month - 1, 1)
     const end = new Date(year, month, 0, 23, 59, 59)
 
@@ -306,6 +312,11 @@ export async function generateSuggestedSchedule(year: number, month: number) {
 }
 
 export async function createBulkLessons(suggestions: ScheduleSuggestion[]) {
+    const session = await auth()
+    if (!session?.user || session.user.role !== "TEACHER") {
+        return { success: false, error: "Unauthorized" }
+    }
+
     // Transactional creation
     try {
         await prisma.$transaction(

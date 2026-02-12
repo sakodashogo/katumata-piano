@@ -1,8 +1,10 @@
 "use server"
 
 import { prisma } from "@/lib/prisma"
+import { auth } from "@/auth"
 import { revalidatePath } from "next/cache"
 import bcrypt from "bcryptjs"
+import { Prisma } from "@prisma/client"
 import { z } from "zod"
 
 const StudentSchema = z.object({
@@ -11,7 +13,20 @@ const StudentSchema = z.object({
     defaultLessonCount: z.coerce.number().min(1).default(4),
 })
 
+async function requireTeacher() {
+    const session = await auth()
+    if (!session?.user || session.user.role !== "TEACHER") {
+        return null
+    }
+    return session
+}
+
 export async function getStudents() {
+    const session = await requireTeacher()
+    if (!session) {
+        return { success: false, error: "Unauthorized" }
+    }
+
     try {
         const students = await prisma.user.findMany({
             where: { role: "STUDENT" },
@@ -25,6 +40,11 @@ export async function getStudents() {
 }
 
 export async function createStudent(formData: FormData) {
+    const session = await requireTeacher()
+    if (!session) {
+        return { success: false, error: "Unauthorized" }
+    }
+
     const rawData = {
         name: formData.get("name"),
         email: formData.get("email"),
@@ -54,13 +74,35 @@ export async function createStudent(formData: FormData) {
         return { success: true }
     } catch (error) {
         console.error("Failed to create student:", error)
-        return { success: false, error: "Failed to create student. Email might already exist." }
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+            return { success: false, error: "このメールアドレスはすでに使用されています。" }
+        }
+        return { success: false, error: "生徒の作成に失敗しました。" }
     }
 }
 
 
 export async function deleteStudent(id: string) {
+    const session = await requireTeacher()
+    if (!session) {
+        return { success: false, error: "Unauthorized" }
+    }
+
     try {
+        const [lessonCount, availabilityCount, monthlyAvailabilityCount, creditCount] = await Promise.all([
+            prisma.lesson.count({ where: { studentId: id } }),
+            prisma.availability.count({ where: { studentId: id } }),
+            prisma.monthlyAvailability.count({ where: { studentId: id } }),
+            prisma.cancellationCredit.count({ where: { studentId: id } }),
+        ])
+
+        if (lessonCount + availabilityCount + monthlyAvailabilityCount + creditCount > 0) {
+            return {
+                success: false,
+                error: "レッスン履歴または希望データがある生徒は削除できません。",
+            }
+        }
+
         await prisma.user.delete({
             where: { id },
         })
@@ -68,11 +110,16 @@ export async function deleteStudent(id: string) {
         return { success: true }
     } catch (error) {
         console.error("Failed to delete student:", error)
-        return { success: false, error: "Failed to delete student" }
+        return { success: false, error: "生徒の削除に失敗しました。" }
     }
 }
 
 export async function updateStudent(id: string, formData: FormData) {
+    const session = await requireTeacher()
+    if (!session) {
+        return { success: false, error: "Unauthorized" }
+    }
+
     const rawData = {
         name: formData.get("name"),
         email: formData.get("email"),
@@ -99,7 +146,10 @@ export async function updateStudent(id: string, formData: FormData) {
         return { success: true }
     } catch (error) {
         console.error("Failed to update student:", error)
-        return { success: false, error: "Failed to update student" }
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+            return { success: false, error: "このメールアドレスはすでに使用されています。" }
+        }
+        return { success: false, error: "生徒情報の更新に失敗しました。" }
     }
 }
 

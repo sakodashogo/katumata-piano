@@ -9,6 +9,8 @@ import { format } from "date-fns"
 import { ja } from "date-fns/locale"
 import { LESSON_STATUS_LABELS } from "@/lib/constants"
 import { StudentEditDialog } from "@/components/teacher/StudentEditDialog"
+import { auth } from "@/auth"
+import { redirect } from "next/navigation"
 
 export default async function StudentDetailPage({
     params,
@@ -17,6 +19,11 @@ export default async function StudentDetailPage({
     params: { id: string },
     searchParams: { year?: string, month?: string }
 }) {
+    const session = await auth()
+    if (!session?.user || session.user.role !== "TEACHER") {
+        redirect("/login")
+    }
+
     // Await params and searchParams before using
     const { id } = await Promise.resolve(params);
     const resolvedSearchParams = await Promise.resolve(searchParams);
@@ -28,8 +35,12 @@ export default async function StudentDetailPage({
     if (!student) return <div>生徒が見つかりません</div>
 
     const now = new Date()
-    const year = resolvedSearchParams.year ? parseInt(resolvedSearchParams.year) : now.getFullYear()
-    const month = resolvedSearchParams.month ? parseInt(resolvedSearchParams.month) : now.getMonth() + 1
+    const parsedYear = resolvedSearchParams.year ? Number.parseInt(resolvedSearchParams.year, 10) : NaN
+    const parsedMonth = resolvedSearchParams.month ? Number.parseInt(resolvedSearchParams.month, 10) : NaN
+    const year = Number.isFinite(parsedYear) ? parsedYear : now.getFullYear()
+    const month = Number.isFinite(parsedMonth) && parsedMonth >= 1 && parsedMonth <= 12
+        ? parsedMonth
+        : now.getMonth() + 1
 
     const [{ data: lessons }, { data: availability }] = await Promise.all([
         getStudentHistory(id),

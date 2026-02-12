@@ -1,32 +1,67 @@
 import { getScheduleData } from "@/app/lib/actions/schedule"
 import { AdminCalendar } from "@/components/teacher/AdminCalendar"
 import { startOfWeek, endOfWeek } from "date-fns"
-import { getStudents } from "@/app/lib/actions/student"
 import { SyncButton } from "@/components/teacher/SyncButton"
+import { auth } from "@/auth"
+import { redirect } from "next/navigation"
+
+type ScheduleSlot = {
+    id: string
+    roomId: string
+    startTime: Date | string
+    endTime: Date | string
+    isBooked: boolean
+    isPublic: boolean
+}
+
+type ScheduleLesson = {
+    id: string
+    roomId: string | null
+    startTime: Date | string
+    endTime: Date | string
+    type: string
+    status: string
+    student: { name: string | null }
+}
 
 export default async function SchedulePage({
     searchParams,
 }: {
     searchParams: Promise<{ [key: string]: string | string[] | undefined }>
 }) {
+    const session = await auth()
+    if (!session?.user || session.user.role !== "TEACHER") {
+        redirect("/login")
+    }
+
     const params = await searchParams
-    const room = (params.room as string) || "A"
     const dateStr = (params.date as string) || new Date().toISOString().split("T")[0]
-    const date = new Date(dateStr)
+    const parsedDate = new Date(dateStr)
+    const date = Number.isNaN(parsedDate.getTime()) ? new Date() : parsedDate
 
     const start = startOfWeek(date, { weekStartsOn: 1 }) // Monday start
     const end = endOfWeek(date, { weekStartsOn: 1 })
 
-    const { data } = await getScheduleData(undefined, start, end)
+    const scheduleResult = await getScheduleData(undefined, start, end)
 
-    // Explicitly cast or validate to match AdminCalendar props
-    const slots = (data?.slots || []).map((s: any) => ({
+    if (!scheduleResult.success || !scheduleResult.data) {
+        return (
+            <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-red-700">
+                スケジュールデータの取得に失敗しました。時間をおいて再度お試しください。
+            </div>
+        )
+    }
+
+    const rawSlots = scheduleResult.data.slots as ScheduleSlot[]
+    const rawLessons = scheduleResult.data.lessons as ScheduleLesson[]
+
+    const slots = rawSlots.map((s) => ({
         ...s,
         startTime: new Date(s.startTime),
         endTime: new Date(s.endTime)
     }))
 
-    const lessons = (data?.lessons || []).map(l => ({
+    const lessons = rawLessons.map((l) => ({
         ...l,
         startTime: new Date(l.startTime),
         endTime: new Date(l.endTime)

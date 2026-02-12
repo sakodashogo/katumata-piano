@@ -1,8 +1,24 @@
 "use server"
 
 import { prisma } from "@/lib/prisma"
+import { auth } from "@/auth"
 import { revalidatePath } from "next/cache"
 import { addMinutes } from "date-fns"
+
+async function requireTeacher() {
+    const session = await auth()
+    if (!session?.user || session.user.role !== "TEACHER") {
+        return null
+    }
+    return session
+}
+
+function lessonRoomWhereClause(roomId: string) {
+    if (roomId === "A") {
+        return { OR: [{ roomId: "A" as const }, { roomId: null }] }
+    }
+    return { roomId }
+}
 
 async function hasRoomScheduleConflict(options: {
     roomId: string
@@ -25,7 +41,7 @@ async function hasRoomScheduleConflict(options: {
             where: {
                 id: options.excludeLessonId ? { not: options.excludeLessonId } : undefined,
                 status: { not: "CANCELLED" },
-                roomId: options.roomId,
+                ...lessonRoomWhereClause(options.roomId),
                 startTime: { lt: options.endTime },
                 endTime: { gt: options.startTime },
             },
@@ -36,7 +52,32 @@ async function hasRoomScheduleConflict(options: {
     return !!slotConflict || !!lessonConflict
 }
 
+async function hasLessonConflict(options: {
+    roomId: string
+    startTime: Date
+    endTime: Date
+    excludeLessonId?: string
+}) {
+    const lessonConflict = await prisma.lesson.findFirst({
+        where: {
+            id: options.excludeLessonId ? { not: options.excludeLessonId } : undefined,
+            status: { not: "CANCELLED" },
+            ...lessonRoomWhereClause(options.roomId),
+            startTime: { lt: options.endTime },
+            endTime: { gt: options.startTime },
+        },
+        select: { id: true },
+    })
+
+    return !!lessonConflict
+}
+
 export async function getScheduleData(roomId: string | undefined, start: Date, end: Date) {
+    const session = await requireTeacher()
+    if (!session) {
+        return { success: false, error: "Unauthorized" }
+    }
+
     try {
         const whereClause = {
             startTime: { gte: start, lt: end },
@@ -65,6 +106,11 @@ export async function getScheduleData(roomId: string | undefined, start: Date, e
 }
 
 export async function toggleOpenSlot(roomId: string, startTimeIso: string) {
+    const session = await requireTeacher()
+    if (!session) {
+        return { success: false, error: "Unauthorized" }
+    }
+
     const startTime = new Date(startTimeIso)
     const endTime = addMinutes(startTime, 30)
 
@@ -115,6 +161,11 @@ export async function toggleOpenSlot(roomId: string, startTimeIso: string) {
 }
 
 export async function bulkUpdateOpenSlots(roomId: string, slots: string[], action: 'add' | 'remove') {
+    const session = await requireTeacher()
+    if (!session) {
+        return { success: false, error: "Unauthorized" }
+    }
+
     try {
         if (action === 'add') {
             const candidateStarts = Array.from(
@@ -187,6 +238,11 @@ export async function bulkUpdateOpenSlots(roomId: string, slots: string[], actio
 }
 
 export async function moveLesson(lessonId: string, newStartTime: Date, newRoomId: string) {
+    const session = await requireTeacher()
+    if (!session) {
+        return { success: false, error: "Unauthorized" }
+    }
+
     try {
         const lesson = await prisma.lesson.findUnique({ where: { id: lessonId } })
         if (!lesson) return { success: false, error: "Lesson not found" }
@@ -195,7 +251,7 @@ export async function moveLesson(lessonId: string, newStartTime: Date, newRoomId
         const newEndTime = new Date(newStartTime.getTime() + duration)
 
         const [roomConflict, studentConflict] = await Promise.all([
-            hasRoomScheduleConflict({
+            hasLessonConflict({
                 roomId: newRoomId,
                 startTime: newStartTime,
                 endTime: newEndTime,
@@ -220,15 +276,40 @@ export async function moveLesson(lessonId: string, newStartTime: Date, newRoomId
             return { success: false, error: "生徒の別レッスンと時間が重複するため移動できません。" }
         }
 
-        await prisma.lesson.update({
-            where: { id: lessonId },
-            data: {
-                startTime: newStartTime,
-                endTime: newEndTime,
-                roomId: newRoomId,
-                status: "DRAFT"
+        await prisma.$transaction(async (tx) => {
+            await tx.lesson.update({
+                where: { id: lessonId },
+                data: {
+                    startTime: newStartTime,
+                    endTime: newEndTime,
+                    roomId: newRoomId,
+                    status: "DRAFT"
+                }
+            })
+
+            if (lesson.roomId) {
+                await tx.openSlot.updateMany({
+                    where: {
+                        roomId: lesson.roomId,
+                        startTime: { lt: lesson.endTime },
+                        endTime: { gt: lesson.startTime },
+                        isBooked: true,
+                    },
+                    data: { isBooked: false },
+                })
             }
+
+            await tx.openSlot.updateMany({
+                where: {
+                    roomId: newRoomId,
+                    startTime: { lt: newEndTime },
+                    endTime: { gt: newStartTime },
+                    isBooked: false,
+                },
+                data: { isBooked: true },
+            })
         })
+
         revalidatePath("/teacher/schedule")
         return { success: true }
     } catch (error) {
@@ -238,6 +319,11 @@ export async function moveLesson(lessonId: string, newStartTime: Date, newRoomId
 }
 
 export async function publishLessons(lessonIds: string[]) {
+    const session = await requireTeacher()
+    if (!session) {
+        return { success: false, error: "Unauthorized" }
+    }
+
     try {
         await prisma.lesson.updateMany({
             where: { id: { in: lessonIds } },
@@ -252,6 +338,11 @@ export async function publishLessons(lessonIds: string[]) {
 }
 
 export async function moveOpenSlot(slotId: string, newStartTime: Date, newRoomId: string) {
+    const session = await requireTeacher()
+    if (!session) {
+        return { success: false, error: "Unauthorized" }
+    }
+
     try {
         const slot = await prisma.openSlot.findUnique({ where: { id: slotId } })
         if (!slot) return { success: false, error: "Slot not found" }

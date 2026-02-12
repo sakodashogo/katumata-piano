@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useMemo } from "react"
+import { useState, useEffect, useMemo, useRef } from "react"
 import { DndContext, DragEndEvent, DragOverlay, useSensor, useSensors, MouseSensor, TouchSensor, DragStartEvent, useDraggable, useDroppable } from "@dnd-kit/core"
 import { format, startOfWeek, endOfWeek, eachDayOfInterval, addDays, isSameDay, setHours, setMinutes, addMinutes } from "date-fns"
 import { ja } from "date-fns/locale"
@@ -10,7 +10,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { ChevronLeft, ChevronRight, Save, RotateCcw } from "lucide-react"
 import { useToast } from "@/components/ui/toast"
 import { LESSON_TYPE_LABELS, ROOMS } from "@/lib/constants"
-import { moveLesson, moveOpenSlot } from "@/app/lib/actions/schedule"
+import { bulkUpdateOpenSlots, moveLesson, moveOpenSlot } from "@/app/lib/actions/schedule"
 import { useRouter } from "next/navigation"
 
 // Types
@@ -54,10 +54,22 @@ type ScheduleListItem = {
 const HOURS = Array.from({ length: 13 }, (_, i) => i + 9) // 09:00 - 21:00
 const MINUTES = [0, 30]
 type RoomFilter = "all" | "A" | "B"
+type PaintMode = "add" | "remove"
+type SelectionMode = "path" | "rect"
+type SlotDraftAction = "add" | "remove"
+
+type PaintCell = {
+    row: number
+    col: number
+    roomId: string
+    gridCol: number
+    key: string
+}
 
 export function AdminCalendar({ initialDate = new Date(), slots: initialSlots, lessons: initialLessons }: Props) {
     const router = useRouter()
     const { toast } = useToast()
+    const gridRef = useRef<HTMLDivElement>(null)
 
     // State
     const [currentDate, setCurrentDate] = useState(initialDate)
@@ -65,19 +77,25 @@ export function AdminCalendar({ initialDate = new Date(), slots: initialSlots, l
     const [activeId, setActiveId] = useState<string | null>(null)
     const [localSlots, setLocalSlots] = useState<OpenSlot[]>(initialSlots)
     const [localLessons, setLocalLessons] = useState<Lesson[]>(initialLessons)
-    const [pendingChanges, setPendingChanges] = useState<Map<string, { type: 'move', to: { start: Date, room: string } }>>(new Map())
+    const [pendingMoveChanges, setPendingMoveChanges] = useState<Map<string, { type: 'move', to: { start: Date, room: string } }>>(new Map())
+    const [slotDraftMap, setSlotDraftMap] = useState<Map<string, SlotDraftAction>>(new Map())
     const [isSubmitting, setIsSubmitting] = useState(false)
     const [studentFilter, setStudentFilter] = useState("")
     const [roomFilter, setRoomFilter] = useState<RoomFilter>("all")
     const [lessonTypeFilter, setLessonTypeFilter] = useState("all")
+    const [isPainting, setIsPainting] = useState(false)
+    const [paintMode, setPaintMode] = useState<PaintMode>("add")
+    const [selectionMode, setSelectionMode] = useState<SelectionMode>("path")
+    const [paintedCellKeys, setPaintedCellKeys] = useState<Set<string>>(new Set())
+    const [paintStartCell, setPaintStartCell] = useState<PaintCell | null>(null)
 
-    // Sync props to state when not editing (or initial load)
+    // Sync props to state unless drag changes are pending
     useEffect(() => {
-        if (!isEditMode && pendingChanges.size === 0) {
+        if (pendingMoveChanges.size === 0) {
             setLocalSlots(initialSlots)
             setLocalLessons(initialLessons)
         }
-    }, [initialSlots, initialLessons, isEditMode, pendingChanges.size])
+    }, [initialSlots, initialLessons, pendingMoveChanges.size])
 
     // Sensors
     const sensors = useSensors(
@@ -174,27 +192,181 @@ export function AdminCalendar({ initialDate = new Date(), slots: initialSlots, l
         })
     }, [weeklyListItems, roomFilter, lessonTypeFilter, studentFilter])
 
-    // Helper: Get data for a cell
-    const getCellItems = (day: Date, hour: number, minute: number, roomId: string) => {
-        const time = setMinutes(setHours(day, hour), minute).getTime()
+    const getCellKey = (roomId: string, time: number) => `${roomId}:${time}`
+    const parseCellKey = (cellKey: string) => {
+        const [roomId, timeStr] = cellKey.split(":")
+        return { roomId, time: Number(timeStr) }
+    }
+    const getRowIndex = (hour: number, minute: number) => (hour - HOURS[0]) * MINUTES.length + (minute === 30 ? 1 : 0)
+    const getHourMinuteFromRow = (row: number) => ({
+        hour: HOURS[0] + Math.floor(row / MINUTES.length),
+        minute: row % MINUTES.length === 0 ? 0 : 30
+    })
 
-        // Find items that START at this time
+    const getBaseItemsByCellKey = (cellKey: string) => {
+        const { roomId, time } = parseCellKey(cellKey)
         const slot = localSlots.find(s =>
             s.roomId === roomId &&
             new Date(s.startTime).getTime() === time
         )
-
         const lesson = localLessons.find(l =>
-            (l.roomId === roomId || (!l.roomId && roomId === ROOMS.A.id)) && // Default to A if no room
+            (l.roomId === roomId || (!l.roomId && roomId === ROOMS.A.id)) &&
             new Date(l.startTime).getTime() === time
         )
-
         return { slot, lesson }
+    }
+
+    const getEffectiveItemsByCellKey = (cellKey: string, draftMap: Map<string, SlotDraftAction>) => {
+        const base = getBaseItemsByCellKey(cellKey)
+        const draftAction = draftMap.get(cellKey)
+        if (base.lesson || base.slot?.isBooked) {
+            return { slot: base.slot, lesson: base.lesson, draftAction: undefined as SlotDraftAction | undefined, isDraftAdded: false, isDraftRemoved: false }
+        }
+
+        if (draftAction === "remove" && base.slot) {
+            return { slot: undefined, lesson: base.lesson, draftAction, isDraftAdded: false, isDraftRemoved: true }
+        }
+
+        if (draftAction === "add" && !base.slot) {
+            const { roomId, time } = parseCellKey(cellKey)
+            const start = new Date(time)
+            const virtualSlot: OpenSlot = {
+                id: `draft:${cellKey}`,
+                roomId,
+                startTime: start,
+                endTime: addMinutes(start, 30),
+                isBooked: false,
+                isPublic: false
+            }
+            return { slot: virtualSlot, lesson: base.lesson, draftAction, isDraftAdded: true, isDraftRemoved: false }
+        }
+
+        return { slot: base.slot, lesson: base.lesson, draftAction, isDraftAdded: false, isDraftRemoved: false }
+    }
+
+    const getCellItems = (day: Date, hour: number, minute: number, roomId: string) => {
+        const time = setMinutes(setHours(day, hour), minute).getTime()
+        return getEffectiveItemsByCellKey(getCellKey(roomId, time), slotDraftMap)
+    }
+
+    const isEditableCellKey = (cellKey: string, draftMap: Map<string, SlotDraftAction>) => {
+        const effective = getEffectiveItemsByCellKey(cellKey, draftMap)
+        return !effective.lesson && !effective.slot?.isBooked
+    }
+
+    const commitDraftActionForCell = (next: Map<string, SlotDraftAction>, cellKey: string, mode: PaintMode) => {
+        const base = getBaseItemsByCellKey(cellKey)
+        if (base.lesson || base.slot?.isBooked) return false
+
+        const effective = getEffectiveItemsByCellKey(cellKey, next)
+        const hasEffectiveSlot = !!effective.slot
+        const currentDraft = next.get(cellKey)
+
+        if (mode === "add") {
+            if (!hasEffectiveSlot) {
+                if (base.slot) {
+                    next.delete(cellKey)
+                } else {
+                    next.set(cellKey, "add")
+                }
+                return true
+            }
+            if (base.slot && currentDraft === "remove") {
+                next.delete(cellKey)
+                return true
+            }
+            return false
+        }
+
+        if (hasEffectiveSlot) {
+            if (!base.slot && currentDraft === "add") {
+                next.delete(cellKey)
+            } else if (base.slot) {
+                next.set(cellKey, "remove")
+            }
+            return true
+        }
+
+        return false
+    }
+
+    const clearPaintingState = () => {
+        setIsPainting(false)
+        setPaintedCellKeys(new Set())
+        setPaintStartCell(null)
+    }
+
+    const getRectCellKeys = (start: PaintCell, current: PaintCell) => {
+        const minRow = Math.min(start.row, current.row)
+        const maxRow = Math.max(start.row, current.row)
+        const minCol = Math.min(start.gridCol, current.gridCol)
+        const maxCol = Math.max(start.gridCol, current.gridCol)
+        const keys = new Set<string>()
+
+        for (let row = minRow; row <= maxRow; row++) {
+            const { hour, minute } = getHourMinuteFromRow(row)
+            for (let gridCol = minCol; gridCol <= maxCol; gridCol++) {
+                const dayIndex = Math.floor(gridCol / 2)
+                const day = days[dayIndex]
+                if (!day) continue
+                const roomId = gridCol % 2 === 0 ? ROOMS.A.id : ROOMS.B.id
+                const time = setMinutes(setHours(day, hour), minute).getTime()
+                const cellKey = getCellKey(roomId, time)
+                if (isEditableCellKey(cellKey, slotDraftMap)) {
+                    keys.add(cellKey)
+                }
+            }
+        }
+        return keys
+    }
+
+    const startPaint = (cell: PaintCell, useRectSelection: boolean) => {
+        if (!isEditMode || isSubmitting) return
+
+        const effective = getEffectiveItemsByCellKey(cell.key, slotDraftMap)
+        if (effective.lesson || effective.slot?.isBooked) return
+
+        setIsPainting(true)
+        setPaintMode(effective.slot ? "remove" : "add")
+        setSelectionMode(useRectSelection ? "rect" : "path")
+        setPaintStartCell(cell)
+        setPaintedCellKeys(new Set([cell.key]))
+    }
+
+    const updatePaint = (cell: PaintCell) => {
+        if (!isPainting) return
+
+        if (selectionMode === "path") {
+            if (!isEditableCellKey(cell.key, slotDraftMap)) return
+            setPaintedCellKeys(prev => {
+                if (prev.has(cell.key)) return prev
+                const next = new Set(prev)
+                next.add(cell.key)
+                return next
+            })
+            return
+        }
+
+        if (!paintStartCell) return
+        setPaintedCellKeys(getRectCellKeys(paintStartCell, cell))
+    }
+
+    const commitPaint = () => {
+        if (!isPainting) return
+        setSlotDraftMap(prev => {
+            const next = new Map(prev)
+            for (const cellKey of paintedCellKeys) {
+                commitDraftActionForCell(next, cellKey, paintMode)
+            }
+            return next
+        })
+        clearPaintingState()
     }
 
     // Handlers
     const handleDragStart = (event: DragStartEvent) => {
         if (!isEditMode) return
+        clearPaintingState()
         setActiveId(event.active.id as string)
     }
 
@@ -246,7 +418,7 @@ export function AdminCalendar({ initialDate = new Date(), slots: initialSlots, l
         }
 
         // Track Change
-        setPendingChanges(prev => {
+        setPendingMoveChanges(prev => {
             const newMap = new Map(prev)
             newMap.set(activeIdStr, { type: 'move', to: { start: newStartTime, room: roomId } })
             return newMap
@@ -254,16 +426,20 @@ export function AdminCalendar({ initialDate = new Date(), slots: initialSlots, l
     }
 
     const handleSaveChanges = async () => {
-        if (pendingChanges.size === 0) return
-        if (!confirm(`${pendingChanges.size}件の変更を保存しますか？`)) return
+        const totalPending = pendingMoveChanges.size + slotDraftMap.size
+        if (totalPending === 0) return
+        if (!confirm(`${totalPending}件の変更を保存しますか？`)) return
 
         setIsSubmitting(true)
-        let successCount = 0
+        let appliedCount = 0
+        let skippedCount = 0
         let failureCount = 0
         let firstError = ""
+        const nextMoveChanges = new Map(pendingMoveChanges)
+        const nextSlotDraftMap = new Map(slotDraftMap)
 
         try {
-            for (const [key, change] of Array.from(pendingChanges.entries())) {
+            for (const [key, change] of Array.from(pendingMoveChanges.entries())) {
                 const [type, id] = key.split(":")
                 let res
                 if (type === "lesson") {
@@ -272,22 +448,75 @@ export function AdminCalendar({ initialDate = new Date(), slots: initialSlots, l
                     res = await moveOpenSlot(id, change.to.start, change.to.room)
                 }
                 if (res.success) {
-                    successCount++
+                    appliedCount++
+                    nextMoveChanges.delete(key)
                 } else {
                     failureCount++
                     if (!firstError && res.error) firstError = res.error
                 }
             }
 
-            if (failureCount > 0) {
-                toast.error(firstError || `${failureCount}件の変更を保存できませんでした。`)
-            } else {
-                toast.success(`${successCount}件の変更を保存しました。`)
+            const grouped = new Map<string, { add: string[], remove: string[], addKeys: string[], removeKeys: string[] }>()
+            for (const [cellKey, action] of Array.from(slotDraftMap.entries())) {
+                const base = getBaseItemsByCellKey(cellKey)
+                if (base.lesson || base.slot?.isBooked) {
+                    skippedCount++
+                    nextSlotDraftMap.delete(cellKey)
+                    continue
+                }
+
+                const { roomId, time } = parseCellKey(cellKey)
+                const iso = new Date(time).toISOString()
+                const roomGroup = grouped.get(roomId) || { add: [], remove: [], addKeys: [], removeKeys: [] }
+                if (action === "add") {
+                    roomGroup.add.push(iso)
+                    roomGroup.addKeys.push(cellKey)
+                } else {
+                    roomGroup.remove.push(iso)
+                    roomGroup.removeKeys.push(cellKey)
+                }
+                grouped.set(roomId, roomGroup)
             }
-            if (successCount > 0) {
-                setPendingChanges(new Map())
-                setIsEditMode(false)
+
+            for (const [roomId, group] of Array.from(grouped.entries())) {
+                if (group.add.length > 0) {
+                    const res = await bulkUpdateOpenSlots(roomId, group.add, "add")
+                    if (res.success) {
+                        appliedCount += group.add.length
+                        group.addKeys.forEach(key => nextSlotDraftMap.delete(key))
+                    } else {
+                        failureCount += group.add.length
+                        if (!firstError && res.error) firstError = res.error
+                    }
+                }
+                if (group.remove.length > 0) {
+                    const res = await bulkUpdateOpenSlots(roomId, group.remove, "remove")
+                    if (res.success) {
+                        appliedCount += group.remove.length
+                        group.removeKeys.forEach(key => nextSlotDraftMap.delete(key))
+                    } else {
+                        failureCount += group.remove.length
+                        if (!firstError && res.error) firstError = res.error
+                    }
+                }
+            }
+
+            setPendingMoveChanges(nextMoveChanges)
+            setSlotDraftMap(nextSlotDraftMap)
+
+            if (failureCount === 0 && skippedCount === 0) {
+                toast.success(`${appliedCount}件の変更を保存しました。`)
+            } else if (appliedCount > 0) {
+                toast.info(`一部反映: 反映${appliedCount}件 / 除外${skippedCount}件 / 失敗${failureCount}件`)
+            } else {
+                toast.error(firstError || `${failureCount}件の変更を保存できませんでした。`)
+            }
+
+            if (appliedCount > 0) {
                 router.refresh()
+            }
+            if (nextMoveChanges.size === 0 && nextSlotDraftMap.size === 0) {
+                setIsEditMode(false)
             }
         } catch (e) {
             console.error(e)
@@ -301,19 +530,58 @@ export function AdminCalendar({ initialDate = new Date(), slots: initialSlots, l
         if (confirm("全ての変更を取り消しますか？")) {
             setLocalSlots(initialSlots)
             setLocalLessons(initialLessons)
-            setPendingChanges(new Map())
+            setPendingMoveChanges(new Map())
+            setSlotDraftMap(new Map())
+            clearPaintingState()
         }
     }
 
+    useEffect(() => {
+        const handler = () => commitPaint()
+        window.addEventListener("mouseup", handler)
+        window.addEventListener("touchend", handler)
+        window.addEventListener("touchcancel", handler)
+        return () => {
+            window.removeEventListener("mouseup", handler)
+            window.removeEventListener("touchend", handler)
+            window.removeEventListener("touchcancel", handler)
+        }
+    })
+
+    useEffect(() => {
+        const el = gridRef.current
+        if (!el) return
+        const handler = (e: TouchEvent) => {
+            if (!isPainting) return
+            e.preventDefault()
+            const touch = e.touches[0]
+            const target = document.elementFromPoint(touch.clientX, touch.clientY) as HTMLElement | null
+            const cellEl = target?.closest<HTMLElement>("[data-cell-key]")
+            if (!cellEl) return
+            const row = Number(cellEl.dataset.row)
+            const col = Number(cellEl.dataset.col)
+            const roomId = cellEl.dataset.room
+            const cellKey = cellEl.dataset.cellKey
+            if (Number.isNaN(row) || Number.isNaN(col) || !roomId || !cellKey) return
+            const gridCol = col * 2 + (roomId === ROOMS.B.id ? 1 : 0)
+            updatePaint({ row, col, roomId, gridCol, key: cellKey })
+        }
+        el.addEventListener("touchmove", handler, { passive: false })
+        return () => el.removeEventListener("touchmove", handler)
+    })
+
     // Droppable Cell Component
-    const DroppableCell = ({ day, hour, minute, roomId, items, isEditMode: editMode, label }: {
+    const DroppableCell = ({ day, hour, minute, rowIndex, colIndex, roomId, items, isEditMode: editMode, label }: {
         day: Date, hour: number, minute: number, roomId: string,
-        items: { slot?: OpenSlot, lesson?: Lesson },
+        rowIndex: number, colIndex: number,
+        items: { slot?: OpenSlot, lesson?: Lesson, draftAction?: SlotDraftAction, isDraftAdded?: boolean, isDraftRemoved?: boolean },
         isEditMode: boolean,
         label: string
     }) => {
         const time = setMinutes(setHours(day, hour), minute).getTime()
         const id = `cell:${roomId}:${time}`
+        const cellKey = getCellKey(roomId, time)
+        const gridCol = colIndex * 2 + (roomId === ROOMS.B.id ? 1 : 0)
 
         const { setNodeRef, isOver } = useDroppable({
             id,
@@ -321,22 +589,53 @@ export function AdminCalendar({ initialDate = new Date(), slots: initialSlots, l
         })
 
         const hasItem = items.slot || items.lesson
+        const isPendingPaint = isPainting && paintedCellKeys.has(cellKey)
+        const canPaint = editMode && !items.lesson && !items.slot?.isBooked
+        const showDraftPreview = !!items.isDraftAdded && !items.lesson
+        const showRemovedPreview = !!items.isDraftRemoved && !items.lesson
 
         return (
             <div
                 ref={setNodeRef}
+                data-cell-key={cellKey}
+                data-row={rowIndex}
+                data-col={colIndex}
+                data-room={roomId}
+                onMouseDown={(e) => {
+                    if (e.button !== 0) return
+                    startPaint({ row: rowIndex, col: colIndex, roomId, gridCol, key: cellKey }, e.shiftKey)
+                }}
+                onMouseEnter={() => {
+                    updatePaint({ row: rowIndex, col: colIndex, roomId, gridCol, key: cellKey })
+                }}
+                onTouchStart={() => {
+                    startPaint({ row: rowIndex, col: colIndex, roomId, gridCol, key: cellKey }, false)
+                }}
                 className={cn(
                     "rounded min-h-[30px] flex items-center justify-center relative transition-colors text-xs",
                     isOver ? "bg-blue-100 ring-2 ring-blue-400 z-10" : "",
-                    !hasItem ? "hover:bg-slate-50" : "",
+                    editMode ? "cursor-pointer" : "cursor-default",
+                    editMode && !hasItem ? "hover:bg-slate-100" : "",
+                    editMode && hasItem ? "hover:brightness-95" : "",
+                    isPendingPaint && paintMode === "add" ? "ring-2 ring-blue-400 bg-blue-100/70" : "",
+                    isPendingPaint && paintMode === "remove" ? "ring-2 ring-rose-400 bg-rose-100/70" : "",
+                    showDraftPreview ? "ring-1 ring-blue-400 bg-blue-100/60" : "",
+                    showRemovedPreview ? "ring-1 ring-rose-300 bg-rose-50/80" : "",
                     items.lesson ? (items.lesson.status === "DRAFT" ? "bg-amber-50" : "bg-green-50") :
                         items.slot ? (items.slot.isBooked ? "bg-slate-100" : (items.slot.isPublic ? "bg-blue-50" : "bg-amber-50")) :
                             "border border-dashed border-slate-100"
                 )}
             >
                 {!hasItem && <span className="text-[8px] text-slate-200 pointer-events-none absolute">{label}</span>}
+                {showDraftPreview && <span className="text-[9px] font-bold text-blue-700 pointer-events-none">追加予定</span>}
+                {showRemovedPreview && <span className="text-[9px] font-bold text-rose-600 pointer-events-none">削除予定</span>}
+                {isPendingPaint && canPaint && (
+                    <span className={cn("text-[9px] font-bold pointer-events-none", paintMode === "add" ? "text-blue-700" : "text-rose-600")}>
+                        {paintMode === "add" ? "追加" : "削除"}
+                    </span>
+                )}
 
-                {items.slot && (
+                {items.slot && !items.isDraftAdded && (
                     <DraggableItem item={items.slot} type="slot" isEditMode={editMode} />
                 )}
 
@@ -399,6 +698,7 @@ export function AdminCalendar({ initialDate = new Date(), slots: initialSlots, l
         return (
             <div
                 ref={setNodeRef}
+                data-draggable-item="true"
                 style={style}
                 {...attributes}
                 {...listeners}
@@ -413,6 +713,8 @@ export function AdminCalendar({ initialDate = new Date(), slots: initialSlots, l
             </div>
         )
     }
+
+    const pendingCount = pendingMoveChanges.size + slotDraftMap.size
 
     return (
         <DndContext
@@ -443,7 +745,7 @@ export function AdminCalendar({ initialDate = new Date(), slots: initialSlots, l
                             <div
                                 className={cn("w-10 h-6 rounded-full p-1 cursor-pointer transition-colors duration-200 ease-in-out", isEditMode ? "bg-blue-600" : "bg-slate-300")}
                                 onClick={() => {
-                                    if (isEditMode && pendingChanges.size > 0) {
+                                    if (isEditMode && pendingCount > 0) {
                                         if (!confirm("変更を破棄してモードを終了しますか？")) return
                                         handleUndoAll()
                                     }
@@ -454,7 +756,7 @@ export function AdminCalendar({ initialDate = new Date(), slots: initialSlots, l
                             </div>
                         </div>
 
-                        {pendingChanges.size > 0 && (
+                        {pendingCount > 0 && (
                             <>
                                 <Button variant="outline" size="sm" onClick={handleUndoAll}>
                                     <RotateCcw className="h-4 w-4 mr-2" /> 元に戻す
@@ -465,7 +767,7 @@ export function AdminCalendar({ initialDate = new Date(), slots: initialSlots, l
                                     onClick={handleSaveChanges}
                                     disabled={isSubmitting}
                                 >
-                                    <Save className="h-4 w-4 mr-2" /> 保存 ({pendingChanges.size})
+                                    <Save className="h-4 w-4 mr-2" /> 保存 ({pendingCount})
                                 </Button>
                             </>
                         )}
@@ -477,11 +779,31 @@ export function AdminCalendar({ initialDate = new Date(), slots: initialSlots, l
                     <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-1 text-amber-700">空き枠（下書き）</span>
                     <span className="inline-flex items-center gap-1 rounded-full bg-green-50 px-2 py-1 text-green-700">予約済み</span>
                     <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-1 text-amber-800">振替待ち</span>
+                    <span className="inline-flex items-center gap-1 rounded-full bg-blue-100 px-2 py-1 text-blue-800">通常ドラッグ: 通過セル選択</span>
+                    <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-1 text-slate-700">Shift+ドラッグ: 矩形選択</span>
+                    <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-1 text-rose-700">保存で確定</span>
                 </div>
 
                 {/* Calendar */}
                 <ScrollArea className="h-[calc(100vh-200px)] border rounded-md bg-white">
-                    <div className="min-w-[1000px] p-4">
+                    <div
+                        ref={gridRef}
+                        className="min-w-[1000px] p-4"
+                        onMouseLeave={commitPaint}
+                        onMouseMove={(e) => {
+                            if (!isPainting) return
+                            const target = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null
+                            const cellEl = target?.closest<HTMLElement>("[data-cell-key]")
+                            if (!cellEl) return
+                            const row = Number(cellEl.dataset.row)
+                            const col = Number(cellEl.dataset.col)
+                            const roomId = cellEl.dataset.room
+                            const cellKey = cellEl.dataset.cellKey
+                            if (Number.isNaN(row) || Number.isNaN(col) || !roomId || !cellKey) return
+                            const gridCol = col * 2 + (roomId === ROOMS.B.id ? 1 : 0)
+                            updatePaint({ row, col, roomId, gridCol, key: cellKey })
+                        }}
+                    >
                         <div className="grid grid-cols-[80px_repeat(7,_1fr)] border-b bg-slate-50 sticky top-0 z-10 shadow-sm">
                             <div className="p-2 text-center text-xs font-bold text-slate-500 py-3">時間</div>
                             {days.map(day => (
@@ -498,15 +820,19 @@ export function AdminCalendar({ initialDate = new Date(), slots: initialSlots, l
                                         <div className="p-2 text-xs text-slate-400 text-right border-r flex items-start justify-end pr-3 pt-1">
                                             {minute === 0 ? <span className="font-mono">{hour}:00</span> : <span className="font-mono text-slate-200">{hour}:30</span>}
                                         </div>
-                                        {days.map(day => (
+                                        {days.map((day, colIndex) => (
                                             <div key={day.toISOString()} className="border-r border-dotted p-0.5 grid grid-cols-2 gap-0.5">
                                                 <DroppableCell
+                                                    rowIndex={getRowIndex(hour, minute)}
+                                                    colIndex={colIndex}
                                                     day={day} hour={hour} minute={minute} roomId={ROOMS.A.id}
                                                     items={getCellItems(day, hour, minute, ROOMS.A.id)}
                                                     isEditMode={isEditMode}
                                                     label="A"
                                                 />
                                                 <DroppableCell
+                                                    rowIndex={getRowIndex(hour, minute)}
+                                                    colIndex={colIndex}
                                                     day={day} hour={hour} minute={minute} roomId={ROOMS.B.id}
                                                     items={getCellItems(day, hour, minute, ROOMS.B.id)}
                                                     isEditMode={isEditMode}

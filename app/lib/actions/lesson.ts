@@ -41,12 +41,19 @@ export async function updateLessonReport(formData: FormData) {
         })
         revalidatePath(`/teacher/students`) // Ideally revalidate specific student page
         return { success: true }
-    } catch (error) {
+    } catch {
         return { success: false, error: "Failed to update report" }
     }
 }
 
 export async function getStudentHistory(studentId: string) {
+    const session = await auth()
+    if (!session?.user) return { success: false, error: "Unauthorized" }
+
+    if (session.user.role !== "TEACHER" && session.user.id !== studentId) {
+        return { success: false, error: "Unauthorized" }
+    }
+
     try {
         const lessons = await prisma.lesson.findMany({
             where: {
@@ -57,7 +64,7 @@ export async function getStudentHistory(studentId: string) {
             orderBy: { startTime: "desc" }
         })
         return { success: true, data: lessons }
-    } catch (error) {
+    } catch {
         return { success: false, error: "Failed to fetch history" }
     }
 }

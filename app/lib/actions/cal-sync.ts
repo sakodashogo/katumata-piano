@@ -1,9 +1,10 @@
 "use server"
 
 import { getCalendarClient } from "@/lib/google-calendar"; // Note: Adjust import if file location is different
+import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
-import { addDays, format, setHours, setMinutes, startOfDay, endOfDay, areIntervalsOverlapping, addMinutes } from "date-fns";
+import { addDays, setHours, setMinutes, startOfDay, endOfDay, areIntervalsOverlapping, addMinutes } from "date-fns";
 
 // Configuration for Working Hours
 const WORKING_HOURS_START = 10; // 10:00
@@ -11,6 +12,11 @@ const WORKING_HOURS_END = 20;   // 20:00
 const SLOT_DURATION_MINUTES = 30; // 30 minutes slots
 
 export async function syncScheduleFromGoogle(startDateStr: string, endDateStr: string, roomId: string = "A") {
+    const session = await auth()
+    if (!session?.user || session.user.role !== "TEACHER") {
+        return { success: false, error: "Unauthorized" }
+    }
+
     const calendarId = process.env.GOOGLE_CALENDAR_ID;
     if (!calendarId) {
         return { success: false, error: "Google Calendar ID is not configured." };

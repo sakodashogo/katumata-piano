@@ -9,24 +9,28 @@ import { Trash2 } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 
-type Student = {
+export type StudentListItem = {
     id: string
     name: string | null
     email: string
     createdAt: Date
 }
 
-export function StudentList({ students }: { students: Student[] }) {
-    const [deleteTarget, setDeleteTarget] = useState<Student | null>(null)
+export function StudentList({ students }: { students: StudentListItem[] }) {
+    const [deleteTarget, setDeleteTarget] = useState<StudentListItem | null>(null)
     const { toast } = useToast()
     const router = useRouter()
 
     async function handleDelete() {
         if (!deleteTarget) return
         try {
-            await deleteStudent(deleteTarget.id)
-            toast.success("生徒を削除しました")
-            router.refresh()
+            const result = await deleteStudent(deleteTarget.id)
+            if (result.success) {
+                toast.success("生徒を削除しました")
+                router.refresh()
+            } else {
+                toast.error(result.error || "削除に失敗しました")
+            }
         } catch {
             toast.error("削除に失敗しました")
         }
@@ -64,7 +68,7 @@ export function StudentList({ students }: { students: Student[] }) {
                                 <td className="px-6 py-4">{student.email}</td>
                                 <td className="px-6 py-4">{new Date(student.createdAt).toLocaleDateString("ja-JP")}</td>
                                 <td className="px-6 py-4 text-right">
-                                    <Button variant="ghost" size="sm" onClick={() => setDeleteTarget(student)} className="text-red-500 hover:bg-red-50 hover:text-red-600">
+                                    <Button variant="ghost" size="sm" onClick={() => setDeleteTarget(student)} className="text-red-500 hover:bg-red-50 hover:text-red-600" aria-label={`${student.name || "生徒"}を削除`}>
                                         <Trash2 className="h-4 w-4" />
                                     </Button>
                                 </td>

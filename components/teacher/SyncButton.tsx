@@ -1,10 +1,10 @@
 "use client"
 
-import { useState, useTransition } from "react"
+import { useTransition } from "react"
 import { Button } from "@/components/ui/button"
-import { Loader2, RefreshCw } from "lucide-react"
+import { RefreshCw } from "lucide-react"
 import { syncScheduleFromGoogle } from "@/app/lib/actions/cal-sync"
-import { addDays, format, startOfWeek, endOfWeek } from "date-fns"
+import { addDays, startOfWeek } from "date-fns"
 import { useToast } from "@/components/ui/toast"
 
 export function SyncButton({ currentDate, roomId }: { currentDate: Date, roomId: string }) {
@@ -24,7 +24,7 @@ export function SyncButton({ currentDate, roomId }: { currentDate: Date, roomId:
                 } else {
                     toast.error(`同期に失敗しました: ${res.error}`)
                 }
-            } catch (e) {
+            } catch {
                 toast.error("予期しないエラーが発生しました")
             }
         })
@@ -38,7 +38,7 @@ export function SyncButton({ currentDate, roomId }: { currentDate: Date, roomId:
             className="gap-2"
         >
             <RefreshCw className={`h-4 w-4 ${isPending ? 'animate-spin' : ''}`} />
-            {isPending ? "同期中..." : "Googleカレンダー同期"}
+            {isPending ? `Room ${roomId} 同期中...` : `Room ${roomId} 同期`}
         </Button>
     )
 }

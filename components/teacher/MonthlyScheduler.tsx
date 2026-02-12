@@ -2,8 +2,7 @@
 
 import { useState } from "react"
 import { useRouter } from "next/navigation"
-import { format, addMonths, subMonths } from "date-fns"
-import { ja } from "date-fns/locale"
+import { addMonths } from "date-fns"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -20,9 +19,10 @@ type Student = {
     id: string
     name: string | null
     email: string
+    defaultLessonCount: number
     availability: {
-        availableSlots: any
-        unavailableSlots: any
+        availableSlots: unknown
+        unavailableSlots: unknown
     } | null
 }
 
@@ -31,6 +31,7 @@ type Lesson = {
     startTime: string | Date
     endTime: string | Date
     studentId: string
+    roomId: string | null
 }
 
 type Props = {
@@ -61,7 +62,7 @@ export function MonthlyScheduler({ students, lessons, year, month }: Props) {
     }
 
     const handleCreateLessons = async (newLessons: { startTime: Date, endTime: Date }[]) => {
-        if (!selectedStudentId) return false
+        if (!selectedStudentId || !selectedStudent) return false
 
         const drafts = newLessons.map(l => ({
             studentId: selectedStudentId,
@@ -77,7 +78,7 @@ export function MonthlyScheduler({ students, lessons, year, month }: Props) {
             router.refresh()
             return true
         } else {
-            toast.error("作成に失敗しました。")
+            toast.error(result.error || "作成に失敗しました。")
             return false
         }
     }
@@ -95,9 +96,9 @@ export function MonthlyScheduler({ students, lessons, year, month }: Props) {
                 setViewMode("heatmap")
                 toast.success(`${result.suggestions.length}件の提案を作成しました。`)
             } else {
-                toast.error("提案の作成に失敗しました。")
+                toast.error(result.error || "提案の作成に失敗しました。")
             }
-        } catch (error) {
+        } catch {
             toast.error("エラーが発生しました。")
         } finally {
             setIsGenerating(false)
@@ -119,7 +120,7 @@ export function MonthlyScheduler({ students, lessons, year, month }: Props) {
             setViewMode("list")
             router.refresh()
         } else {
-            toast.error("作成に失敗しました。")
+            toast.error(result.error || "作成に失敗しました。")
         }
     }
 
@@ -138,6 +139,8 @@ export function MonthlyScheduler({ students, lessons, year, month }: Props) {
                     <ChevronRight className="ml-2 h-4 w-4" />
                 </Button>
             </div>
+
+            <p className="text-sm text-slate-500">この画面から作成するレッスンは Room A に登録されます。</p>
 
             <div className="flex justify-end">
                 {viewMode === "list" && (
@@ -170,7 +173,8 @@ export function MonthlyScheduler({ students, lessons, year, month }: Props) {
                                 <TableRow>
                                     <TableHead>生徒名</TableHead>
                                     <TableHead>希望提出</TableHead>
-                                    <TableHead>予約数</TableHead>
+                                    <TableHead>予約数 / 契約</TableHead>
+                                    <TableHead>不足回数</TableHead>
                                     <TableHead className="text-right">操作</TableHead>
                                 </TableRow>
                             </TableHeader>
@@ -178,6 +182,7 @@ export function MonthlyScheduler({ students, lessons, year, month }: Props) {
                                 {students.map((student) => {
                                     const hasAvailability = !!student.availability
                                     const lessonCount = getStudentLessonCount(student.id)
+                                    const remainingCount = Math.max(student.defaultLessonCount - lessonCount, 0)
 
                                     return (
                                         <TableRow key={student.id}>
@@ -193,7 +198,12 @@ export function MonthlyScheduler({ students, lessons, year, month }: Props) {
                                             </TableCell>
                                             <TableCell>
                                                 <Badge variant={lessonCount > 0 ? "secondary" : "outline"}>
-                                                    {lessonCount}回
+                                                    {lessonCount} / {student.defaultLessonCount}回
+                                                </Badge>
+                                            </TableCell>
+                                            <TableCell>
+                                                <Badge variant={remainingCount > 0 ? "outline" : "secondary"} className={remainingCount > 0 ? "text-amber-700 border-amber-200 bg-amber-50" : ""}>
+                                                    {remainingCount}回
                                                 </Badge>
                                             </TableCell>
                                             <TableCell className="text-right">
@@ -219,7 +229,11 @@ export function MonthlyScheduler({ students, lessons, year, month }: Props) {
                     studentName={selectedStudent.name || "生徒"}
                     availableSlots={Array.isArray(selectedStudent.availability?.availableSlots) ? selectedStudent.availability!.availableSlots.map(String) : []}
                     unavailableSlots={Array.isArray(selectedStudent.availability?.unavailableSlots) ? selectedStudent.availability!.unavailableSlots.map(String) : []}
-                    existingLessons={lessons.filter(l => l.studentId === selectedStudentId)}
+                    existingLessons={lessons.filter((lesson) => {
+                        if (lesson.studentId === selectedStudentId) return true
+                        const room = lesson.roomId || "A"
+                        return room === "A"
+                    })}
                     year={year}
                     month={month}
                     onSave={handleCreateLessons}
