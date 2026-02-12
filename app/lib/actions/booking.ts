@@ -197,3 +197,59 @@ export async function rescheduleLesson(lessonId: string, slotIds: string[]) {
         return { success: false, error: error instanceof Error ? error.message : "Reschedule failed" }
     }
 }
+
+export async function cancelLesson(lessonId: string) {
+    const session = await auth()
+    if (!session?.user?.id) return { success: false, error: "Unauthorized" }
+
+    try {
+        return await prisma.$transaction(async (tx) => {
+            const lesson = await tx.lesson.findUnique({
+                where: { id: lessonId },
+            })
+
+            if (!lesson) {
+                throw new Error("レッスンが見つかりません。")
+            }
+
+            // Students can only cancel their own lessons; teachers can cancel any
+            if (session.user.role !== "TEACHER" && lesson.studentId !== session.user.id) {
+                throw new Error("このレッスンをキャンセルする権限がありません。")
+            }
+
+            if (lesson.status === "CANCELLED") {
+                throw new Error("このレッスンはすでにキャンセル済みです。")
+            }
+
+            // 1. Cancel the lesson
+            await tx.lesson.update({
+                where: { id: lessonId },
+                data: { status: "CANCELLED" },
+            })
+
+            // 2. Free up the open slot (best effort)
+            await tx.openSlot.updateMany({
+                where: {
+                    startTime: lesson.startTime,
+                    endTime: lesson.endTime,
+                    isBooked: true,
+                },
+                data: { isBooked: false },
+            })
+
+            revalidatePath("/student")
+            revalidatePath("/teacher/schedule")
+
+            sendNotification("CANCEL", {
+                studentId: lesson.studentId,
+                startTime: lesson.startTime,
+                lessonId,
+            })
+
+            return { success: true }
+        })
+    } catch (error) {
+        console.error(error)
+        return { success: false, error: error instanceof Error ? error.message : "キャンセルに失敗しました" }
+    }
+}

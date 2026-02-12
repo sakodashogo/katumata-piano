@@ -4,9 +4,9 @@ const prisma = new PrismaClient()
 
 async function main() {
     const menus = [
-        { name: "Regular Lesson", duration: 30, price: 3000, description: "Standard 30-min piano lesson" },
-        { name: "Long Lesson", duration: 60, price: 6000, description: "Extended 60-min lesson" },
-        { name: "Practice (Room A)", duration: 30, price: 500, description: "Room rental for practice" },
+        { name: "通常レッスン", durationMin: 30, price: 3000, description: "30分のピアノレッスン" },
+        { name: "追加レッスン", durationMin: 60, price: 6000, description: "60分の追加レッスン" },
+        { name: "自主練（A教室）", durationMin: 30, price: 500, description: "練習室レンタル" },
     ]
 
     for (const menu of menus) {

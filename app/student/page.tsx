@@ -7,6 +7,7 @@ import Link from "next/link"
 import { format } from "date-fns"
 import { ja } from "date-fns/locale"
 import { LESSON_TYPE_LABELS, LESSON_STATUS_LABELS, LESSON_STATUS_STYLES } from "@/lib/constants"
+import { LessonActions } from "@/components/student/LessonActions"
 
 async function getStudentLessons(studentId: string) {
     return await prisma.lesson.findMany({
@@ -118,11 +119,7 @@ export default async function StudentDashboard() {
                                     <div className={`text-sm font-medium px-3 py-1 rounded-full ${LESSON_STATUS_STYLES[lesson.status] || "text-blue-600 bg-blue-50"}`}>
                                         {LESSON_STATUS_LABELS[lesson.status] || "予約済み"}
                                     </div>
-                                    <Link href={`/student/book?rescheduleId=${lesson.id}`}>
-                                        <Button variant="outline" size="sm" className="h-7 text-xs">
-                                            日時変更
-                                        </Button>
-                                    </Link>
+                                    <LessonActions lessonId={lesson.id} />
                                 </div>
                             </div>
                         ))}

@@ -65,7 +65,7 @@ export function BookingWizard({
         if (!selectedSlot || !selectedMenu) return
         setLoading(true)
 
-        let res;
+        let res: { success: boolean; error?: string };
         if (rescheduleLessonId) {
             res = await rescheduleLesson(rescheduleLessonId, [selectedSlot.id])
         } else {
@@ -75,7 +75,7 @@ export function BookingWizard({
         if (res.success) {
             setBookingSuccess(true)
         } else {
-            toast.error("予約に失敗しました: " + res.error)
+            toast.error("予約に失敗しました: " + (res.error || ""))
         }
         setLoading(false)
     }

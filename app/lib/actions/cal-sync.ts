@@ -43,7 +43,7 @@ export async function syncScheduleFromGoogle(startDateStr: string, endDateStr: s
             currentDay = addDays(currentDay, 1);
         }
 
-        const newSlotsToCreate = [];
+        const newSlotsToCreate: { roomId: string; startTime: Date; endTime: Date; isBooked: boolean }[] = [];
 
         for (const day of daysToProcess) {
             // Define working hours for this day
