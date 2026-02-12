@@ -36,6 +36,7 @@ type Props = {
     initialDate?: Date
     slots: OpenSlot[]
     lessons: Lesson[]
+    supportShifts?: Array<{ id: string; startTime: Date | string; endTime: Date | string }>
 }
 
 type ScheduleListItem = {
@@ -64,7 +65,12 @@ type PaintCell = {
     key: string
 }
 
-export function AdminCalendar({ initialDate = new Date(), slots: initialSlots, lessons: initialLessons }: Props) {
+export function AdminCalendar({
+    initialDate = new Date(),
+    slots: initialSlots,
+    lessons: initialLessons,
+    supportShifts: initialSupportShifts = [],
+}: Props) {
     const router = useRouter()
     const { toast } = useToast()
     const gridRef = useRef<HTMLDivElement>(null)
@@ -74,6 +80,7 @@ export function AdminCalendar({ initialDate = new Date(), slots: initialSlots, l
     const [isEditMode, setIsEditMode] = useState(false)
     const [localSlots, setLocalSlots] = useState<OpenSlot[]>(initialSlots)
     const [localLessons, setLocalLessons] = useState<Lesson[]>(initialLessons)
+    const [localSupportShifts, setLocalSupportShifts] = useState<Array<{ id: string; startTime: Date | string; endTime: Date | string }>>(initialSupportShifts)
     const [slotDraftMap, setSlotDraftMap] = useState<Map<string, SlotDraftAction>>(new Map())
     const [isSubmitting, setIsSubmitting] = useState(false)
     const [studentFilter, setStudentFilter] = useState("")
@@ -88,7 +95,8 @@ export function AdminCalendar({ initialDate = new Date(), slots: initialSlots, l
     useEffect(() => {
         setLocalSlots(initialSlots)
         setLocalLessons(initialLessons)
-    }, [initialSlots, initialLessons])
+        setLocalSupportShifts(initialSupportShifts)
+    }, [initialSlots, initialLessons, initialSupportShifts])
 
     // Calendar Grid
     const weekStart = startOfWeek(currentDate, { weekStartsOn: 1 })
@@ -234,6 +242,16 @@ export function AdminCalendar({ initialDate = new Date(), slots: initialSlots, l
     const getCellItems = (day: Date, hour: number, minute: number, roomId: string) => {
         const time = setMinutes(setHours(day, hour), minute).getTime()
         return getEffectiveItemsByCellKey(getCellKey(roomId, time), slotDraftMap)
+    }
+
+    const hasSupportAt = (day: Date, hour: number, minute: number) => {
+        const start = setMinutes(setHours(day, hour), minute)
+        const end = addMinutes(start, 30)
+        return localSupportShifts.some((shift) => {
+            const shiftStart = new Date(shift.startTime)
+            const shiftEnd = new Date(shift.endTime)
+            return shiftStart < end && shiftEnd > start
+        })
     }
 
     const isEditableCellKey = (cellKey: string, draftMap: Map<string, SlotDraftAction>) => {
@@ -482,6 +500,7 @@ export function AdminCalendar({ initialDate = new Date(), slots: initialSlots, l
         const canPaint = editMode && !items.lesson && !items.slot?.isBooked
         const showDraftPreview = !!items.isDraftAdded && !items.lesson
         const showRemovedPreview = !!items.isDraftRemoved && !items.lesson
+        const roomBWithoutSupport = roomId === ROOMS.B.id && !hasSupportAt(day, hour, minute)
 
         return (
             <div
@@ -509,12 +528,16 @@ export function AdminCalendar({ initialDate = new Date(), slots: initialSlots, l
                     isPendingPaint && paintMode === "remove" ? "ring-2 ring-rose-400 bg-rose-100/70" : "",
                     showDraftPreview ? "ring-1 ring-blue-400 bg-blue-100/60" : "",
                     showRemovedPreview ? "ring-1 ring-rose-300 bg-rose-50/80" : "",
+                    roomBWithoutSupport && !hasItem ? "bg-slate-100/70 border border-dashed border-slate-300" : "",
                     items.lesson ? (items.lesson.status === "DRAFT" ? "bg-amber-50" : "bg-green-50") :
                         items.slot ? (items.slot.isBooked ? "bg-slate-100" : (items.slot.isPublic ? "bg-blue-50" : "bg-amber-50")) :
                             "border border-dashed border-slate-100"
                 )}
             >
                 {!hasItem && <span className="text-[8px] text-slate-200 pointer-events-none absolute">{label}</span>}
+                {roomBWithoutSupport && !hasItem && (
+                    <span className="absolute bottom-0.5 right-0.5 rounded bg-slate-200 px-1 text-[8px] text-slate-600">自主練</span>
+                )}
                 {showDraftPreview && <span className="text-[9px] font-bold text-blue-700 pointer-events-none">追加予定</span>}
                 {showRemovedPreview && <span className="text-[9px] font-bold text-rose-600 pointer-events-none">削除予定</span>}
                 {isPendingPaint && canPaint && (
@@ -651,6 +674,7 @@ export function AdminCalendar({ initialDate = new Date(), slots: initialSlots, l
                 <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-1 text-amber-700">空き枠（下書き）</span>
                 <span className="inline-flex items-center gap-1 rounded-full bg-green-50 px-2 py-1 text-green-700">予約済み</span>
                 <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-1 text-amber-800">振替待ち</span>
+                <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-1 text-slate-700">RoomB サポート不在帯: 自主練想定</span>
                 <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-1 text-slate-700">ドラッグ: 矩形選択</span>
                 <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-1 text-rose-700">保存で確定</span>
             </div>

@@ -20,17 +20,25 @@ type Lesson = {
     startTime: Date | string
     endTime: Date | string
     roomId?: string | null
+    type?: "REGULAR" | "AD_HOC" | "PRACTICE" | "SOLO_ADDITIONAL" | "DUET_ADDITIONAL" | string
+    status?: string
     isEditable?: boolean
 }
 
 type Props = {
+    studentId: string
     studentName: string
     availableSlots: string[]
     unavailableSlots: string[]
     existingLessons: Lesson[]
     year: number
     month: number
-    onSave: (lessons: { startTime: Date, endTime: Date, roomId: string }[]) => Promise<boolean>
+    onSave: (lessons: {
+        startTime: Date
+        endTime: Date
+        roomId: string
+        type?: "REGULAR" | "AD_HOC" | "PRACTICE" | "SOLO_ADDITIONAL" | "DUET_ADDITIONAL"
+    }[]) => Promise<boolean>
     isOpen: boolean
     onClose: () => void
 }
@@ -41,6 +49,7 @@ const END_HOUR = 22
 type CellPos = { row: number; col: number }
 
 export function SchedulingCalendar({
+    studentId,
     studentName,
     availableSlots,
     unavailableSlots,
@@ -80,34 +89,77 @@ export function SchedulingCalendar({
     const availableSet = React.useMemo(() => new Set(availableSlots), [availableSlots])
     const unavailableSet = React.useMemo(() => new Set(unavailableSlots), [unavailableSlots])
 
-    const blockedTimes = React.useMemo(() => {
-        const set = new Set<number>()
+    const nonEditableByRoom = React.useMemo(() => {
+        const set = new Map<string, Set<number>>()
+        set.set("A", new Set())
+        set.set("B", new Set())
         existingLessons
             .filter((lesson) => !lesson.isEditable)
-            .forEach((lesson) => set.add(new Date(lesson.startTime).getTime()))
+            .forEach((lesson) => {
+                const roomId = lesson.roomId === "B" ? "B" : "A"
+                const ts = new Date(lesson.startTime).getTime()
+                set.get(roomId)?.add(ts)
+            })
         return set
     }, [existingLessons])
 
-    const editableTimeIsos = React.useMemo(() => {
-        const set = new Set<string>()
+    const nonEditableTypeByRoomIso = React.useMemo(() => {
+        const map = new Map<string, string>()
+        existingLessons
+            .filter((lesson) => !lesson.isEditable)
+            .forEach((lesson) => {
+                const roomId = lesson.roomId === "B" ? "B" : "A"
+                const iso = new Date(lesson.startTime).toISOString()
+                map.set(`${roomId}:${iso}`, lesson.type || "REGULAR")
+            })
+        return map
+    }, [existingLessons])
+
+    const editableLessonsByIso = React.useMemo(() => {
+        const map = new Map<string, "REGULAR" | "AD_HOC" | "PRACTICE" | "SOLO_ADDITIONAL" | "DUET_ADDITIONAL">()
         existingLessons
             .filter((lesson) => !!lesson.isEditable)
             .forEach((lesson) => {
                 const start = new Date(lesson.startTime)
                 if (!Number.isNaN(start.getTime())) {
-                    set.add(start.toISOString())
+                    map.set(
+                        start.toISOString(),
+                        (lesson.type as "REGULAR" | "AD_HOC" | "PRACTICE" | "SOLO_ADDITIONAL" | "DUET_ADDITIONAL") || "REGULAR"
+                    )
                 }
             })
-        return set
+        return map
     }, [existingLessons])
 
-    const [draftSlots, setDraftSlots] = React.useState<Set<string>>(new Set(editableTimeIsos))
+    const editableRoomByIso = React.useMemo(() => {
+        const map = new Map<string, "A" | "B">()
+        existingLessons
+            .filter((lesson) => !!lesson.isEditable)
+            .forEach((lesson) => {
+                const iso = new Date(lesson.startTime).toISOString()
+                map.set(iso, lesson.roomId === "B" ? "B" : "A")
+            })
+        return map
+    }, [existingLessons])
+
+    const [draftSlots, setDraftSlots] = React.useState<Set<string>>(new Set(Array.from(editableLessonsByIso.keys())))
+    const [draftTypes, setDraftTypes] = React.useState<Map<string, "REGULAR" | "AD_HOC" | "PRACTICE" | "SOLO_ADDITIONAL" | "DUET_ADDITIONAL">>(
+        new Map(editableLessonsByIso)
+    )
+    const [draftRooms, setDraftRooms] = React.useState<Map<string, "A" | "B">>(new Map(editableRoomByIso))
     const [selectedRoomId, setSelectedRoomId] = React.useState<"A" | "B">("A")
+    const [selectedLessonType, setSelectedLessonType] = React.useState<"REGULAR" | "PRACTICE" | "SOLO_ADDITIONAL" | "DUET_ADDITIONAL">("REGULAR")
     const [isSaving, setIsSaving] = React.useState(false)
+    const storageKey = React.useMemo(
+        () => `monthly-planner:${studentId}:${year}-${month}`,
+        [studentId, year, month]
+    )
 
     React.useEffect(() => {
-        setDraftSlots(new Set(editableTimeIsos))
-    }, [editableTimeIsos, isOpen])
+        setDraftSlots(new Set(Array.from(editableLessonsByIso.keys())))
+        setDraftTypes(new Map(editableLessonsByIso))
+        setDraftRooms(new Map(editableRoomByIso))
+    }, [editableLessonsByIso, editableRoomByIso, isOpen])
 
     React.useEffect(() => {
         const firstEditable = existingLessons.find((lesson) => lesson.isEditable && (lesson.roomId === "A" || lesson.roomId === "B"))
@@ -135,21 +187,27 @@ export function SchedulingCalendar({
     timeSlotsRef.current = timeSlots
     const draftSlotsRef = React.useRef(draftSlots)
     draftSlotsRef.current = draftSlots
+    const draftTypesRef = React.useRef(draftTypes)
+    draftTypesRef.current = draftTypes
+    const draftRoomsRef = React.useRef(draftRooms)
+    draftRoomsRef.current = draftRooms
 
     const getCellIso = (day: Date, hour: number, minute: number) =>
         setMinutes(setHours(startOfDay(day), hour), minute).toISOString()
 
     const isBooked = React.useCallback(
-        (iso: string) => blockedTimes.has(new Date(iso).getTime()),
-        [blockedTimes]
+        (iso: string) => nonEditableByRoom.get(selectedRoomId)?.has(new Date(iso).getTime()) ?? false,
+        [nonEditableByRoom, selectedRoomId]
     )
 
     const isDayInMonth = (day: Date) =>
         day.getMonth() === month - 1 && day.getFullYear() === year
 
-    const getSlotStatus = (iso: string): 'booked' | 'draft' | 'available' | 'unavailable' | 'neutral' => {
-        if (isBooked(iso)) return 'booked'
-        if (draftSlots.has(iso)) return 'draft'
+    const getSlotStatus = (iso: string): string => {
+        if (isBooked(iso)) return `booked:${nonEditableTypeByRoomIso.get(`${selectedRoomId}:${iso}`) || "REGULAR"}`
+        if (draftSlots.has(iso) && (draftRooms.get(iso) || "A") === selectedRoomId) {
+            return `draft:${draftTypes.get(iso) || "REGULAR"}`
+        }
         if (availableSet.has(iso)) return 'available'
         if (unavailableSet.has(iso)) return 'unavailable'
         return 'neutral'
@@ -214,23 +272,28 @@ export function SchedulingCalendar({
         }
 
         const paintType = paintTypeRef.current
-
-        setDraftSlots(prev => {
-            const next = new Set(prev)
-            isos.forEach(iso => {
-                if (paintType === 'draft') {
-                    next.add(iso)
-                } else {
-                    next.delete(iso)
-                }
-            })
-            return next
+        const nextSlots = new Set(draftSlotsRef.current)
+        const nextTypes = new Map(draftTypesRef.current)
+        const nextRooms = new Map(draftRoomsRef.current)
+        isos.forEach((iso) => {
+            if (paintType === "draft") {
+                nextSlots.add(iso)
+                nextTypes.set(iso, selectedLessonType)
+                nextRooms.set(iso, selectedRoomId)
+            } else {
+                nextSlots.delete(iso)
+                nextTypes.delete(iso)
+                nextRooms.delete(iso)
+            }
         })
+        setDraftSlots(nextSlots)
+        setDraftTypes(nextTypes)
+        setDraftRooms(nextRooms)
 
         startCellRef.current = null
         currentCellRef.current = null
         rerender()
-    }, [getRectIsos])
+    }, [getRectIsos, selectedLessonType, selectedRoomId])
 
     const handleCellStart = React.useCallback((row: number, col: number) => {
         const day = daysRef.current[col]
@@ -240,11 +303,14 @@ export function SchedulingCalendar({
         if (isBooked(iso)) return
 
         isPaintingRef.current = true
-        paintTypeRef.current = draftSlotsRef.current.has(iso) ? 'neutral' : 'draft'
+        const hasDraftInCurrentRoom =
+            draftSlotsRef.current.has(iso) &&
+            (draftRoomsRef.current.get(iso) || "A") === selectedRoomId
+        paintTypeRef.current = hasDraftInCurrentRoom ? 'neutral' : 'draft'
         startCellRef.current = { row, col }
         currentCellRef.current = { row, col }
         rerender()
-    }, [isBooked])
+    }, [isBooked, selectedRoomId])
 
     const updateCurrentCell = React.useCallback((row: number, col: number) => {
         if (!isPaintingRef.current) return
@@ -289,17 +355,66 @@ export function SchedulingCalendar({
         return () => el.removeEventListener('touchmove', handler)
     }, [updateCurrentCell])
 
+    React.useEffect(() => {
+        if (!isOpen || typeof window === "undefined") return
+        const raw = window.localStorage.getItem(storageKey)
+        if (!raw) return
+        try {
+            const parsed = JSON.parse(raw) as {
+                slots?: string[]
+                types?: Array<[string, "REGULAR" | "AD_HOC" | "PRACTICE" | "SOLO_ADDITIONAL" | "DUET_ADDITIONAL"]>
+                rooms?: Array<[string, "A" | "B"]>
+                roomId?: "A" | "B"
+            }
+            if (Array.isArray(parsed.slots)) {
+                setDraftSlots(new Set(parsed.slots))
+            }
+            if (Array.isArray(parsed.types)) {
+                setDraftTypes(new Map(parsed.types))
+            }
+            if (Array.isArray(parsed.rooms)) {
+                setDraftRooms(new Map(parsed.rooms))
+            }
+            if (parsed.roomId === "A" || parsed.roomId === "B") {
+                setSelectedRoomId(parsed.roomId)
+            }
+        } catch {
+            // ignore corrupted local state
+        }
+    }, [isOpen, storageKey])
+
+    React.useEffect(() => {
+        if (!isOpen || typeof window === "undefined") return
+        const payload = JSON.stringify({
+            slots: Array.from(draftSlots),
+            types: Array.from(draftTypes.entries()),
+            rooms: Array.from(draftRooms.entries()),
+            roomId: selectedRoomId,
+        })
+        window.localStorage.setItem(storageKey, payload)
+    }, [draftSlots, draftTypes, draftRooms, isOpen, selectedRoomId, storageKey])
+
     const handleSave = async () => {
         setIsSaving(true)
         try {
             const lessons = Array.from(draftSlots).map(iso => {
                 const start = new Date(iso)
                 const end = new Date(start.getTime() + 30 * 60 * 1000)
-                return { startTime: start, endTime: end, roomId: selectedRoomId }
+                return {
+                    startTime: start,
+                    endTime: end,
+                    roomId: draftRooms.get(iso) || selectedRoomId,
+                    type: draftTypes.get(iso) || "REGULAR",
+                }
             })
             const success = await onSave(lessons)
             if (success) {
                 setDraftSlots(new Set())
+                setDraftTypes(new Map())
+                setDraftRooms(new Map())
+                if (typeof window !== "undefined") {
+                    window.localStorage.removeItem(storageKey)
+                }
                 onClose()
             }
         } finally {
@@ -312,9 +427,9 @@ export function SchedulingCalendar({
     }
 
     const getVisualState = (iso: string, row: number, col: number) => {
-        if (isBooked(iso)) return 'booked'
+        if (isBooked(iso)) return `booked:${nonEditableTypeByRoomIso.get(`${selectedRoomId}:${iso}`) || "REGULAR"}`
         if (isInPendingRect(row, col)) {
-            if (paintTypeRef.current === 'draft') return 'draft'
+            if (paintTypeRef.current === 'draft') return `draft:${selectedLessonType}`
             // When un-drafting, show underlying state
             if (availableSet.has(iso)) return 'available'
             if (unavailableSet.has(iso)) return 'unavailable'
@@ -323,9 +438,25 @@ export function SchedulingCalendar({
         return getSlotStatus(iso)
     }
 
+    const typeColor = (type: string) => {
+        if (type === "PRACTICE") return "bg-slate-500 text-white"
+        if (type === "SOLO_ADDITIONAL") return "bg-indigo-500 text-white"
+        if (type === "DUET_ADDITIONAL") return "bg-rose-500 text-white"
+        if (type === "AD_HOC") return "bg-amber-500 text-white"
+        return "bg-blue-500 text-white"
+    }
+
+    const typeShort = (type: string) => {
+        if (type === "PRACTICE") return "自"
+        if (type === "SOLO_ADDITIONAL") return "ソ"
+        if (type === "DUET_ADDITIONAL") return "連"
+        if (type === "AD_HOC") return "追"
+        return "通"
+    }
+
     return (
         <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
-            <DialogContent className="max-w-4xl max-h-[90vh] overflow-hidden flex flex-col p-4 sm:p-6">
+            <DialogContent className="max-w-[96vw] h-[92vh] overflow-hidden flex flex-col p-4 sm:p-6">
                 <DialogHeader>
                     <DialogTitle>{studentName} - レッスン作成 ({year}年{month}月)</DialogTitle>
                 </DialogHeader>
@@ -355,9 +486,29 @@ export function SchedulingCalendar({
                                 <option value="B">第2レッスン室</option>
                             </select>
                         </div>
+                        <div className="flex items-center gap-2 rounded border bg-white px-2 py-1">
+                            <span className="text-slate-500">追加種別</span>
+                            <select
+                                value={selectedLessonType}
+                                onChange={(e) =>
+                                    setSelectedLessonType(
+                                        e.target.value as "REGULAR" | "PRACTICE" | "SOLO_ADDITIONAL" | "DUET_ADDITIONAL"
+                                    )
+                                }
+                                className="h-6 rounded border px-1 text-[11px]"
+                            >
+                                <option value="REGULAR">通常</option>
+                                <option value="PRACTICE">自主練</option>
+                                <option value="SOLO_ADDITIONAL">ソロ</option>
+                                <option value="DUET_ADDITIONAL">連弾</option>
+                            </select>
+                        </div>
                         <div className="flex items-center gap-1"><div className="w-2.5 h-2.5 rounded bg-green-200 border border-green-400" />希望</div>
                         <div className="flex items-center gap-1"><div className="w-2.5 h-2.5 rounded bg-red-200 border border-red-400" />不可</div>
-                        <div className="flex items-center gap-1"><div className="w-2.5 h-2.5 rounded bg-blue-500" />追加</div>
+                        <div className="flex items-center gap-1"><div className="w-2.5 h-2.5 rounded bg-blue-500" />通常</div>
+                        <div className="flex items-center gap-1"><div className="w-2.5 h-2.5 rounded bg-slate-500" />自主練</div>
+                        <div className="flex items-center gap-1"><div className="w-2.5 h-2.5 rounded bg-indigo-500" />ソロ</div>
+                        <div className="flex items-center gap-1"><div className="w-2.5 h-2.5 rounded bg-rose-500" />連弾</div>
                         <div className="flex items-center gap-1"><div className="w-2.5 h-2.5 rounded bg-slate-400" />予約済</div>
                         <div className="flex items-center gap-1 text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">
                             <PenLine className="h-2.5 w-2.5" />ドラッグで範囲選択
@@ -371,7 +522,7 @@ export function SchedulingCalendar({
                     className="overflow-auto flex-1 rounded-lg border border-slate-200 bg-white select-none"
                     onMouseLeave={() => commitPaint()}
                 >
-                    <table className="w-full min-w-[520px] text-center text-sm border-collapse">
+                    <table className="w-full min-w-[980px] text-center text-sm border-collapse">
                         <thead className="bg-slate-50 text-slate-500 sticky top-0 z-20">
                             <tr>
                                 <th className="w-12 px-1 py-1.5 text-[10px] font-medium sticky left-0 bg-slate-50 z-30 border-r border-slate-200">
@@ -451,17 +602,17 @@ export function SchedulingCalendar({
                                                         if (inMonth) handleCellStart(rowIndex, colIndex)
                                                     }}
                                                     className={cn(
-                                                        "w-full h-[26px] flex items-center justify-center transition-colors duration-75",
+                                                        "w-full h-[34px] flex items-center justify-center transition-colors duration-75",
                                                         !inMonth && "bg-slate-50 opacity-30",
-                                                        inMonth && visual === 'booked' && "bg-slate-400 text-white cursor-not-allowed",
-                                                        inMonth && visual === 'draft' && "bg-blue-500 text-white cursor-pointer",
+                                                        inMonth && visual.startsWith("booked:") && "cursor-not-allowed bg-slate-400 text-white",
+                                                        inMonth && visual.startsWith("draft:") && `cursor-pointer ${typeColor(visual.split(":")[1] || "REGULAR")}`,
                                                         inMonth && visual === 'available' && "bg-green-100 cursor-pointer hover:bg-green-200",
                                                         inMonth && visual === 'unavailable' && "bg-red-100 cursor-pointer hover:bg-red-200",
                                                         inMonth && visual === 'neutral' && "cursor-pointer hover:bg-slate-50",
                                                     )}
                                                 >
-                                                    {inMonth && visual === 'booked' && <span className="text-[9px] font-bold">済</span>}
-                                                    {inMonth && visual === 'draft' && <span className="text-[9px] font-bold">+</span>}
+                                                    {inMonth && visual.startsWith("booked:") && <span className="text-[9px] font-bold">済</span>}
+                                                    {inMonth && visual.startsWith("draft:") && <span className="text-[9px] font-bold">{typeShort(visual.split(":")[1] || "REGULAR")}</span>}
                                                     {inMonth && visual === 'available' && <span className="text-[9px] text-green-600 font-medium">◯</span>}
                                                     {inMonth && visual === 'unavailable' && <span className="text-[9px] text-red-400">✕</span>}
                                                 </div>
@@ -480,8 +631,18 @@ export function SchedulingCalendar({
                             {draftSlots.size}件のレッスンを保存予定
                         </div>
                         <div className="flex gap-2">
+                            <Button
+                                variant="outline"
+                                onClick={() => {
+                                    setDraftSlots(new Set())
+                                    setDraftTypes(new Map())
+                                    setDraftRooms(new Map())
+                                }}
+                            >
+                                全削除
+                            </Button>
                             <Button variant="outline" onClick={onClose}>キャンセル</Button>
-                            <Button onClick={handleSave} disabled={isSaving || draftSlots.size === 0}>
+                            <Button onClick={handleSave} disabled={isSaving}>
                                 {isSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                                 下書きを保存
                             </Button>

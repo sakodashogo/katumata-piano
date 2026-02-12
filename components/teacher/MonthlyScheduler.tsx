@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge"
 import { ChevronLeft, ChevronRight, CalendarCheck, Wand2 } from "lucide-react"
 import { SchedulingCalendar } from "@/components/teacher/SchedulingCalendar"
 import {
+    appendStudentMonthlyLesson,
     bulkCreateLessons,
     publishMonthlySchedule,
     replaceStudentMonthlyLessons,
@@ -36,6 +37,7 @@ type Lesson = {
     studentId: string
     roomId: string | null
     status: string
+    type?: "REGULAR" | "AD_HOC" | "PRACTICE" | "SOLO_ADDITIONAL" | "DUET_ADDITIONAL"
 }
 
 type Props = {
@@ -63,6 +65,13 @@ export function MonthlyScheduler({
     const [suggestions, setSuggestions] = useState<ScheduleSuggestion[]>([])
     const [isGenerating, setIsGenerating] = useState(false)
     const [isPublishingMonth, setIsPublishingMonth] = useState(false)
+    const [manualStudentId, setManualStudentId] = useState(students[0]?.id ?? "")
+    const [manualDate, setManualDate] = useState("")
+    const [manualTime, setManualTime] = useState("14:00")
+    const [manualDuration, setManualDuration] = useState(30)
+    const [manualRoomId, setManualRoomId] = useState<"A" | "B">("A")
+    const [manualType, setManualType] = useState<"REGULAR" | "PRACTICE" | "SOLO_ADDITIONAL" | "DUET_ADDITIONAL">("REGULAR")
+    const [isAppending, setIsAppending] = useState(false)
 
     const selectedStudent = students.find((student) => student.id === selectedStudentId)
 
@@ -82,7 +91,12 @@ export function MonthlyScheduler({
         router.push(`/teacher/schedule/monthly?${params.toString()}`)
     }
 
-    const handleSaveStudentLessons = async (newLessons: Array<{ startTime: Date; endTime: Date; roomId: string }>) => {
+    const handleSaveStudentLessons = async (newLessons: Array<{
+        startTime: Date
+        endTime: Date
+        roomId: string
+        type?: "REGULAR" | "AD_HOC" | "PRACTICE" | "SOLO_ADDITIONAL" | "DUET_ADDITIONAL"
+    }>) => {
         if (!selectedStudentId) return false
 
         const result = await replaceStudentMonthlyLessons({
@@ -140,6 +154,51 @@ export function MonthlyScheduler({
         }
     }
 
+    const handleAppendManualLesson = async () => {
+        if (!manualStudentId || !manualDate || !manualTime) {
+            toast.error("生徒・日付・時間を入力してください。")
+            return
+        }
+
+        setIsAppending(true)
+        const [hour, minute] = manualTime.split(":").map(Number)
+        const start = new Date(`${manualDate}T00:00:00`)
+        start.setHours(hour, minute, 0, 0)
+        const end = new Date(start.getTime() + manualDuration * 60 * 1000)
+
+        const result = await appendStudentMonthlyLesson({
+            studentId: manualStudentId,
+            startTime: start,
+            endTime: end,
+            roomId: manualRoomId,
+            type: manualType,
+            status: isPublished ? "BOOKED" : "DRAFT",
+        })
+        setIsAppending(false)
+
+        if (!result.success) {
+            toast.error(result.error || "手動追加に失敗しました。")
+            return
+        }
+        toast.success("手動で予定を追加しました。")
+        router.refresh()
+    }
+
+    const handleClearStudentLessons = async (studentId: string, studentName?: string | null) => {
+        const result = await replaceStudentMonthlyLessons({
+            studentId,
+            year,
+            month,
+            lessons: [],
+        })
+        if (!result.success) {
+            toast.error(result.error || "予定のクリアに失敗しました。")
+            return
+        }
+        toast.success(`${studentName || "生徒"}の予定をクリアしました。`)
+        router.refresh()
+    }
+
     const handlePublishMonth = async () => {
         setIsPublishingMonth(true)
         const result = await publishMonthlySchedule(year, month)
@@ -185,9 +244,70 @@ export function MonthlyScheduler({
                     )}
                 </div>
                 <p>
-                    生徒ごとに下書き保存し、最後に月単位で公開します。公開後も再編集して再反映できます。
+                    生徒ごとに下書き保存し、最後に月単位で公開します。既存予定は自動提案時に固定枠として扱われます。
                 </p>
             </div>
+
+            <Card>
+                <CardContent className="space-y-3 p-4">
+                    <div className="text-sm font-semibold text-slate-800">全生徒一括調整（手動追加）</div>
+                    <div className="grid gap-2 md:grid-cols-7">
+                        <select
+                            value={manualStudentId}
+                            onChange={(e) => setManualStudentId(e.target.value)}
+                            className="h-9 rounded border px-2 text-sm"
+                        >
+                            {students.map((student) => (
+                                <option key={student.id} value={student.id}>
+                                    {student.name || student.email}
+                                </option>
+                            ))}
+                        </select>
+                        <input
+                            type="date"
+                            value={manualDate}
+                            onChange={(e) => setManualDate(e.target.value)}
+                            className="h-9 rounded border px-2 text-sm"
+                        />
+                        <input
+                            type="time"
+                            value={manualTime}
+                            onChange={(e) => setManualTime(e.target.value)}
+                            className="h-9 rounded border px-2 text-sm"
+                        />
+                        <select
+                            value={String(manualDuration)}
+                            onChange={(e) => setManualDuration(Number(e.target.value))}
+                            className="h-9 rounded border px-2 text-sm"
+                        >
+                            <option value="30">30分</option>
+                            <option value="45">45分</option>
+                            <option value="60">60分</option>
+                        </select>
+                        <select
+                            value={manualRoomId}
+                            onChange={(e) => setManualRoomId(e.target.value === "B" ? "B" : "A")}
+                            className="h-9 rounded border px-2 text-sm"
+                        >
+                            <option value="A">第1レッスン室</option>
+                            <option value="B">第2レッスン室</option>
+                        </select>
+                        <select
+                            value={manualType}
+                            onChange={(e) => setManualType(e.target.value as "REGULAR" | "PRACTICE" | "SOLO_ADDITIONAL" | "DUET_ADDITIONAL")}
+                            className="h-9 rounded border px-2 text-sm"
+                        >
+                            <option value="REGULAR">通常</option>
+                            <option value="PRACTICE">自主練</option>
+                            <option value="SOLO_ADDITIONAL">ソロ</option>
+                            <option value="DUET_ADDITIONAL">連弾</option>
+                        </select>
+                        <Button onClick={handleAppendManualLesson} disabled={isAppending}>
+                            {isAppending ? "追加中..." : "手動追加"}
+                        </Button>
+                    </div>
+                </CardContent>
+            </Card>
 
             <div className="flex items-center justify-between gap-3">
                 <Button
@@ -232,6 +352,7 @@ export function MonthlyScheduler({
                                     <TableHead>希望提出</TableHead>
                                     <TableHead>予定数 / 契約</TableHead>
                                     <TableHead>不足回数</TableHead>
+                                    <TableHead>既存予定</TableHead>
                                     <TableHead className="text-right">操作</TableHead>
                                 </TableRow>
                             </TableHeader>
@@ -266,14 +387,40 @@ export function MonthlyScheduler({
                                                     {remainingCount}回
                                                 </Badge>
                                             </TableCell>
+                                            <TableCell className="max-w-[360px]">
+                                                <div className="flex flex-wrap gap-1">
+                                                    {lessons
+                                                        .filter((lesson) => lesson.studentId === student.id)
+                                                        .slice(0, 6)
+                                                        .map((lesson) => (
+                                                            <Badge key={lesson.id} variant="outline" className="text-[10px]">
+                                                                {format(new Date(lesson.startTime), "M/d HH:mm")} {lesson.roomId || "A"}
+                                                            </Badge>
+                                                        ))}
+                                                    {lessons.filter((lesson) => lesson.studentId === student.id).length > 6 && (
+                                                        <Badge variant="outline" className="text-[10px]">
+                                                            +{lessons.filter((lesson) => lesson.studentId === student.id).length - 6}
+                                                        </Badge>
+                                                    )}
+                                                </div>
+                                            </TableCell>
                                             <TableCell className="text-right">
-                                                <Button
-                                                    size="sm"
-                                                    onClick={() => setSelectedStudentId(student.id)}
-                                                >
-                                                    <CalendarCheck className="mr-2 h-4 w-4" />
-                                                    予定を編集
-                                                </Button>
+                                                <div className="flex justify-end gap-2">
+                                                    <Button
+                                                        size="sm"
+                                                        variant="outline"
+                                                        onClick={() => handleClearStudentLessons(student.id, student.name)}
+                                                    >
+                                                        予定を全削除
+                                                    </Button>
+                                                    <Button
+                                                        size="sm"
+                                                        onClick={() => setSelectedStudentId(student.id)}
+                                                    >
+                                                        <CalendarCheck className="mr-2 h-4 w-4" />
+                                                        予定を編集
+                                                    </Button>
+                                                </div>
                                             </TableCell>
                                         </TableRow>
                                     )
@@ -286,6 +433,7 @@ export function MonthlyScheduler({
 
             {selectedStudent && (
                 <SchedulingCalendar
+                    studentId={selectedStudent.id}
                     studentName={selectedStudent.name || "生徒"}
                     availableSlots={Array.isArray(selectedStudent.availability?.availableSlots) ? selectedStudent.availability!.availableSlots.map(String) : []}
                     unavailableSlots={Array.isArray(selectedStudent.availability?.unavailableSlots) ? selectedStudent.availability!.unavailableSlots.map(String) : []}

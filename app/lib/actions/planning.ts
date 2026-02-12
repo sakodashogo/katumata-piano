@@ -150,7 +150,7 @@ export type LessonDraft = {
     roomId: string
     menuId?: string
     price?: number
-    type?: "REGULAR" | "AD_HOC" | "PRACTICE"
+    type?: "REGULAR" | "AD_HOC" | "PRACTICE" | "SOLO_ADDITIONAL" | "DUET_ADDITIONAL"
     status?: "BOOKED" | "DRAFT"
 }
 
@@ -304,6 +304,7 @@ type ReplaceMonthlyLessonsInput = {
         startTime: string | Date
         endTime: string | Date
         roomId?: string
+        type?: "REGULAR" | "AD_HOC" | "PRACTICE" | "SOLO_ADDITIONAL" | "DUET_ADDITIONAL"
     }>
 }
 
@@ -320,6 +321,7 @@ export async function replaceStudentMonthlyLessons(input: ReplaceMonthlyLessonsI
             startTime: new Date(lesson.startTime),
             endTime: new Date(lesson.endTime),
             roomId: lesson.roomId || "A",
+            type: lesson.type || "REGULAR",
         }))
         .filter((lesson) =>
             !Number.isNaN(lesson.startTime.getTime()) &&
@@ -356,7 +358,6 @@ export async function replaceStudentMonthlyLessons(input: ReplaceMonthlyLessonsI
             const existing = await tx.lesson.findMany({
                 where: {
                     studentId: input.studentId,
-                    type: "REGULAR",
                     status: { in: ["DRAFT", "BOOKED"] },
                     startTime: { gte: monthStart, lt: monthEnd },
                 },
@@ -366,19 +367,20 @@ export async function replaceStudentMonthlyLessons(input: ReplaceMonthlyLessonsI
                     startTime: true,
                     endTime: true,
                     roomId: true,
+                    type: true,
                 },
             })
 
             const existingIds = existing.map((lesson) => lesson.id)
             const existingByKey = new Map(
                 existing.map((lesson) => [
-                    `${lesson.startTime.toISOString()}__${lesson.endTime.toISOString()}__${lesson.roomId || "A"}`,
+                    `${lesson.startTime.toISOString()}__${lesson.endTime.toISOString()}__${lesson.roomId || "A"}__${lesson.type}`,
                     lesson,
                 ])
             )
             const normalizedByKey = new Map(
                 normalizedLessons.map((lesson) => [
-                    `${lesson.startTime.toISOString()}__${lesson.endTime.toISOString()}__${lesson.roomId || "A"}`,
+                    `${lesson.startTime.toISOString()}__${lesson.endTime.toISOString()}__${lesson.roomId || "A"}__${lesson.type}`,
                     lesson,
                 ])
             )
@@ -426,7 +428,7 @@ export async function replaceStudentMonthlyLessons(input: ReplaceMonthlyLessonsI
 
             const idsToDelete = existing
                 .filter((lesson) =>
-                    !normalizedByKey.has(`${lesson.startTime.toISOString()}__${lesson.endTime.toISOString()}__${lesson.roomId || "A"}`)
+                    !normalizedByKey.has(`${lesson.startTime.toISOString()}__${lesson.endTime.toISOString()}__${lesson.roomId || "A"}__${lesson.type}`)
                 )
                 .map((lesson) => lesson.id)
 
@@ -438,7 +440,7 @@ export async function replaceStudentMonthlyLessons(input: ReplaceMonthlyLessonsI
 
             const toCreate = normalizedLessons.filter(
                 (lesson) =>
-                    !existingByKey.has(`${lesson.startTime.toISOString()}__${lesson.endTime.toISOString()}__${lesson.roomId || "A"}`)
+                    !existingByKey.has(`${lesson.startTime.toISOString()}__${lesson.endTime.toISOString()}__${lesson.roomId || "A"}__${lesson.type}`)
             )
 
             if (toCreate.length > 0) {
@@ -449,7 +451,7 @@ export async function replaceStudentMonthlyLessons(input: ReplaceMonthlyLessonsI
                         startTime: lesson.startTime,
                         endTime: lesson.endTime,
                         roomId: lesson.roomId,
-                        type: "REGULAR",
+                        type: lesson.type,
                         status: isMonthPublished ? "BOOKED" : "DRAFT",
                     })),
                 })
@@ -468,5 +470,85 @@ export async function replaceStudentMonthlyLessons(input: ReplaceMonthlyLessonsI
             return { success: false as const, error: error.message }
         }
         return { success: false as const, error: "月間スケジュールの保存に失敗しました。" }
+    }
+}
+
+export async function appendStudentMonthlyLesson(input: {
+    studentId: string
+    startTime: string | Date
+    endTime: string | Date
+    roomId?: string
+    type?: "REGULAR" | "AD_HOC" | "PRACTICE" | "SOLO_ADDITIONAL" | "DUET_ADDITIONAL"
+    status?: "DRAFT" | "BOOKED"
+}) {
+    const session = await auth()
+    if (!session?.user || session.user.role !== "TEACHER") {
+        return { success: false as const, error: "Unauthorized" }
+    }
+
+    try {
+        const startTime = new Date(input.startTime)
+        const endTime = new Date(input.endTime)
+        const roomId = input.roomId || "A"
+        const type = input.type || "REGULAR"
+        if (Number.isNaN(startTime.getTime()) || Number.isNaN(endTime.getTime()) || endTime <= startTime) {
+            return { success: false as const, error: "日時が不正です。" }
+        }
+
+        const [roomConflict, studentConflict] = await Promise.all([
+            prisma.lesson.findFirst({
+                where: {
+                    status: { not: "CANCELLED" },
+                    ...(roomId === "A"
+                        ? { OR: [{ roomId: "A" }, { roomId: null }] }
+                        : { roomId }),
+                    startTime: { lt: endTime },
+                    endTime: { gt: startTime },
+                },
+                select: { id: true },
+            }),
+            prisma.lesson.findFirst({
+                where: {
+                    status: { not: "CANCELLED" },
+                    studentId: input.studentId,
+                    startTime: { lt: endTime },
+                    endTime: { gt: startTime },
+                },
+                select: { id: true },
+            }),
+        ])
+        if (roomConflict) {
+            return { success: false as const, error: `同時間帯にRoom ${roomId} の予定があります。` }
+        }
+        if (studentConflict) {
+            return { success: false as const, error: "同じ生徒の予定が重複しています。" }
+        }
+
+        if (roomId === "B" && type !== "PRACTICE") {
+            const hasSupport = await hasSupportShiftInRange(startTime, endTime)
+            if (!hasSupport) {
+                return { success: false as const, error: "第2レッスン室で通常レッスンを設定するにはサポート講師シフトが必要です。" }
+            }
+        }
+
+        await prisma.lesson.create({
+            data: {
+                studentId: input.studentId,
+                teacherId: session.user.id!,
+                startTime,
+                endTime,
+                roomId,
+                type,
+                status: input.status || "DRAFT",
+            },
+        })
+
+        revalidatePath("/teacher/schedule/monthly")
+        revalidatePath("/teacher/schedule")
+        revalidatePath("/student")
+        return { success: true as const }
+    } catch (error) {
+        console.error("appendStudentMonthlyLesson error", error)
+        return { success: false as const, error: "手動追加に失敗しました。" }
     }
 }

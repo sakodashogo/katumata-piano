@@ -89,11 +89,12 @@ export async function generateSuggestedSchedule(year: number, month: number) {
         }),
         getSupportShiftsInRangeSafe(start, end),
     ])
+    const typedSupportShifts = supportShifts as Array<{ startTime: Date; endTime: Date }>
 
     // 2. Generate All Possible Teacher Slots
     const teacherSlotsA = generateTeacherSlots(year, month)
     const teacherSlotsB = teacherSlotsA.filter((slot) =>
-        supportShifts.some((shift) => shift.startTime < slot.endTime && shift.endTime > slot.startTime)
+        typedSupportShifts.some((shift) => shift.startTime < slot.endTime && shift.endTime > slot.startTime)
     ).map((slot) => ({ ...slot, roomId: "B" }))
     const teacherSlots = [...teacherSlotsA, ...teacherSlotsB]
 
@@ -150,7 +151,7 @@ export async function generateSuggestedSchedule(year: number, month: number) {
 
             if (checkAvailability(student, slot.dayOfWeek, slot.startTime, slot.endTime)) {
                 allSuggestions.push({
-                    id: `${student.id}-${slot.startTime.getTime()}`,
+                    id: `${student.id}-${slot.roomId}-${slot.startTime.getTime()}`,
                     slot,
                     studentId: student.id,
                     matchReason: "Matched",
@@ -345,7 +346,10 @@ export async function generateSuggestedSchedule(year: number, month: number) {
     const suggestionsWithStatus = allSuggestions.map(s => {
         // Conflict = Is this slot claimed by ANY recommendation (other than self)?
         // Or simpler: Conflict = Multiple students want this slot
-        const othersInSlot = allSuggestions.filter(o => o.slot.startTime.getTime() === s.slot.startTime.getTime())
+        const othersInSlot = allSuggestions.filter((o) =>
+            o.slot.startTime.getTime() === s.slot.startTime.getTime() &&
+            o.slot.roomId === s.slot.roomId
+        )
         const isConflict = othersInSlot.length > 1
 
         return {

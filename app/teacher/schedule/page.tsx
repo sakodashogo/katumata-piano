@@ -25,6 +25,12 @@ type ScheduleLesson = {
     student: { name: string | null }
 }
 
+type SupportShift = {
+    id: string
+    startTime: Date | string
+    endTime: Date | string
+}
+
 export default async function SchedulePage({
     searchParams,
 }: {
@@ -55,6 +61,7 @@ export default async function SchedulePage({
 
     const rawSlots = scheduleResult.data.slots as ScheduleSlot[]
     const rawLessons = scheduleResult.data.lessons as ScheduleLesson[]
+    const rawSupportShifts = (scheduleResult.data.supportShifts || []) as SupportShift[]
 
     const slots = rawSlots.map((s) => ({
         ...s,
@@ -66,6 +73,11 @@ export default async function SchedulePage({
         ...l,
         startTime: new Date(l.startTime),
         endTime: new Date(l.endTime)
+    }))
+    const supportShifts = rawSupportShifts.map((shift) => ({
+        ...shift,
+        startTime: new Date(shift.startTime),
+        endTime: new Date(shift.endTime),
     }))
 
     return (
@@ -98,6 +110,7 @@ export default async function SchedulePage({
                 initialDate={date}
                 slots={slots}
                 lessons={lessons}
+                supportShifts={supportShifts}
             />
         </div>
     )

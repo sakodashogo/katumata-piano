@@ -6,7 +6,13 @@ import { format } from "date-fns"
 import { ja } from "date-fns/locale"
 import { Button } from "@/components/ui/button"
 import { useToast } from "@/components/ui/toast"
-import { deleteSupportShift, upsertSupportShift } from "@/app/lib/actions/support"
+import {
+    createMonthlySupportShifts,
+    createSupportStaff,
+    deleteSupportShift,
+    setSupportStaffActive,
+    upsertSupportShift,
+} from "@/app/lib/actions/support"
 
 type SupportStaff = {
     id: string
@@ -31,10 +37,19 @@ export function SupportShiftManager({
 }) {
     const { toast } = useToast()
     const router = useRouter()
-    const [staffId, setStaffId] = useState(staff[0]?.id ?? "")
+    const activeStaff = useMemo(() => staff.filter((member) => member.active), [staff])
+    const [newStaffName, setNewStaffName] = useState("")
+    const [staffId, setStaffId] = useState(activeStaff[0]?.id ?? "")
     const [startTime, setStartTime] = useState("")
     const [endTime, setEndTime] = useState("")
+    const [monthValue, setMonthValue] = useState(format(new Date(), "yyyy-MM"))
+    const [weekdayFlags, setWeekdayFlags] = useState<Record<number, boolean>>({
+        1: true, 2: true, 3: true, 4: true, 5: true, 6: false, 0: false,
+    })
+    const [monthStartTime, setMonthStartTime] = useState("14:00")
+    const [monthEndTime, setMonthEndTime] = useState("20:00")
     const [isSaving, setIsSaving] = useState(false)
+    const selectedStaffId = activeStaff.some((member) => member.id === staffId) ? staffId : (activeStaff[0]?.id ?? "")
 
     const sortedShifts = useMemo(
         () => [...shifts].sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime()),
@@ -42,13 +57,13 @@ export function SupportShiftManager({
     )
 
     const handleCreate = async () => {
-        if (!staffId || !startTime || !endTime) {
+        if (!selectedStaffId || !startTime || !endTime) {
             toast.error("講師・開始・終了を入力してください。")
             return
         }
         setIsSaving(true)
         const res = await upsertSupportShift({
-            staffId,
+            staffId: selectedStaffId,
             startTime: new Date(startTime).toISOString(),
             endTime: new Date(endTime).toISOString(),
         })
@@ -58,6 +73,61 @@ export function SupportShiftManager({
             return
         }
         toast.success("シフトを保存しました。")
+        router.refresh()
+    }
+
+    const handleCreateStaff = async () => {
+        if (!newStaffName.trim()) {
+            toast.error("講師名を入力してください。")
+            return
+        }
+        const res = await createSupportStaff(newStaffName.trim())
+        if (!res.success) {
+            toast.error(res.error || "講師登録に失敗しました。")
+            return
+        }
+        toast.success("サポート講師を登録しました。")
+        setNewStaffName("")
+        router.refresh()
+    }
+
+    const handleToggleStaff = async (target: SupportStaff) => {
+        const res = await setSupportStaffActive(target.id, !target.active)
+        if (!res.success) {
+            toast.error(res.error || "講師状態の更新に失敗しました。")
+            return
+        }
+        toast.success(target.active ? "無効化しました。" : "有効化しました。")
+        router.refresh()
+    }
+
+    const handleMonthlyCreate = async () => {
+        if (!selectedStaffId) {
+            toast.error("講師を選択してください。")
+            return
+        }
+        const [yearStr, monthStr] = monthValue.split("-")
+        const [startH, startM] = monthStartTime.split(":").map(Number)
+        const [endH, endM] = monthEndTime.split(":").map(Number)
+        const weekdays = Object.entries(weekdayFlags)
+            .filter(([, enabled]) => enabled)
+            .map(([day]) => Number(day))
+
+        const res = await createMonthlySupportShifts({
+            staffId: selectedStaffId,
+            year: Number(yearStr),
+            month: Number(monthStr),
+            weekdays,
+            startHour: startH,
+            startMinute: startM,
+            endHour: endH,
+            endMinute: endM,
+        })
+        if (!res.success) {
+            toast.error(res.error || "月間登録に失敗しました。")
+            return
+        }
+        toast.success(`月間登録完了: 追加${res.created}件 / スキップ${res.skipped}件`)
         router.refresh()
     }
 
@@ -73,18 +143,91 @@ export function SupportShiftManager({
 
     return (
         <div className="rounded-xl border bg-white p-4 shadow-sm">
-            <h3 className="text-sm font-bold text-slate-900">サポート講師シフト</h3>
-            <p className="mt-1 text-xs text-slate-500">第2レッスン室で通常レッスンを入れられる時間帯を管理します。</p>
+            <h3 className="text-sm font-bold text-slate-900">サポート講師・シフト管理</h3>
+            <p className="mt-1 text-xs text-slate-500">講師登録、単発シフト、月間一括登録をこの画面で管理できます。</p>
 
-            {staff.length === 0 && (
+            <div className="mt-4 rounded-lg border bg-slate-50 p-3">
+                <p className="text-xs font-semibold text-slate-700">サポート講師を登録</p>
+                <div className="mt-2 flex flex-col gap-2 md:flex-row">
+                    <input
+                        value={newStaffName}
+                        onChange={(e) => setNewStaffName(e.target.value)}
+                        placeholder="例: バイトC"
+                        className="h-9 flex-1 rounded border px-2 text-sm"
+                    />
+                    <Button onClick={handleCreateStaff}>講師を追加</Button>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                    {staff.map((member) => (
+                        <div key={member.id} className="inline-flex items-center gap-2 rounded border bg-white px-2 py-1 text-xs">
+                            <span className={member.active ? "text-slate-800" : "text-slate-400 line-through"}>
+                                {member.name}
+                            </span>
+                            <Button size="sm" variant="outline" onClick={() => handleToggleStaff(member)}>
+                                {member.active ? "無効化" : "有効化"}
+                            </Button>
+                        </div>
+                    ))}
+                </div>
+            </div>
+
+            {activeStaff.length === 0 && (
                 <p className="mt-3 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
-                    サポート講師データがありません。DBマイグレーション後に講師データを登録してください。
+                    有効なサポート講師がいません。先に講師登録してください。
                 </p>
             )}
 
-            <div className="mt-3 grid gap-2 md:grid-cols-4">
-                <select value={staffId} onChange={(e) => setStaffId(e.target.value)} className="h-9 rounded border px-2 text-sm">
-                    {staff.map((member) => (
+            <div className="mt-4 rounded-lg border bg-blue-50 p-3">
+                <p className="text-xs font-semibold text-blue-800">月間シフト一括登録</p>
+                <div className="mt-2 grid gap-2 md:grid-cols-6">
+                    <select value={selectedStaffId} onChange={(e) => setStaffId(e.target.value)} className="h-9 rounded border px-2 text-sm">
+                        {activeStaff.map((member) => (
+                            <option key={member.id} value={member.id}>{member.name}</option>
+                        ))}
+                    </select>
+                    <input
+                        type="month"
+                        value={monthValue}
+                        onChange={(e) => setMonthValue(e.target.value)}
+                        className="h-9 rounded border px-2 text-sm"
+                    />
+                    <input
+                        type="time"
+                        value={monthStartTime}
+                        onChange={(e) => setMonthStartTime(e.target.value)}
+                        className="h-9 rounded border px-2 text-sm"
+                    />
+                    <input
+                        type="time"
+                        value={monthEndTime}
+                        onChange={(e) => setMonthEndTime(e.target.value)}
+                        className="h-9 rounded border px-2 text-sm"
+                    />
+                    <div className="col-span-2 flex flex-wrap items-center gap-1 rounded border bg-white px-2 py-1 text-xs">
+                        {[1, 2, 3, 4, 5, 6, 0].map((day) => (
+                            <label key={day} className="inline-flex items-center gap-1">
+                                <input
+                                    type="checkbox"
+                                    checked={weekdayFlags[day]}
+                                    onChange={(e) =>
+                                        setWeekdayFlags((prev) => ({ ...prev, [day]: e.target.checked }))
+                                    }
+                                />
+                                {["日", "月", "火", "水", "木", "金", "土"][day]}
+                            </label>
+                        ))}
+                    </div>
+                </div>
+                <div className="mt-2 flex justify-end">
+                    <Button onClick={handleMonthlyCreate} disabled={activeStaff.length === 0}>
+                        月間一括登録
+                    </Button>
+                </div>
+            </div>
+
+            <div className="mt-4 grid gap-2 md:grid-cols-4">
+                <select value={selectedStaffId} onChange={(e) => setStaffId(e.target.value)} className="h-9 rounded border px-2 text-sm">
+                    {activeStaff.map((member) => (
                         <option key={member.id} value={member.id}>{member.name}</option>
                     ))}
                 </select>
@@ -100,7 +243,7 @@ export function SupportShiftManager({
                     onChange={(e) => setEndTime(e.target.value)}
                     className="h-9 rounded border px-2 text-sm"
                 />
-                <Button onClick={handleCreate} disabled={isSaving || staff.length === 0}>{isSaving ? "保存中..." : "追加"}</Button>
+                <Button onClick={handleCreate} disabled={isSaving || activeStaff.length === 0}>{isSaving ? "保存中..." : "単発追加"}</Button>
             </div>
 
             <div className="mt-3 space-y-2">
