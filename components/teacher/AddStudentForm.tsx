@@ -41,6 +41,10 @@ export function AddStudentForm() {
                 <form action={handleSubmit} className="space-y-4">
                     <Input name="name" placeholder="氏名" required />
                     <Input name="email" type="email" placeholder="メールアドレス" required />
+                    <div className="space-y-1">
+                        <label className="text-sm font-medium text-slate-700">月間レッスン回数（契約）</label>
+                        <Input name="defaultLessonCount" type="number" min={1} defaultValue={4} required />
+                    </div>
 
                     {error && <p className="text-sm text-red-500">{error}</p>}
 

@@ -12,6 +12,9 @@ import { SchedulingCalendar } from "@/components/teacher/SchedulingCalendar"
 import { bulkCreateLessons } from "@/app/lib/actions/planning"
 import { useToast } from "@/components/ui/toast"
 import { Badge } from "@/components/ui/badge"
+import { HeatmapScheduler } from "@/components/teacher/HeatmapScheduler"
+import { generateSuggestedSchedule, ScheduleSuggestion } from "@/app/lib/actions/schedule-maker"
+import { Wand2 } from "lucide-react"
 
 type Student = {
     id: string
@@ -42,6 +45,9 @@ export function MonthlyScheduler({ students, lessons, year, month }: Props) {
     const { toast } = useToast()
 
     const [selectedStudentId, setSelectedStudentId] = useState<string | null>(null)
+    const [viewMode, setViewMode] = useState<"list" | "heatmap">("list")
+    const [suggestions, setSuggestions] = useState<ScheduleSuggestion[]>([])
+    const [isGenerating, setIsGenerating] = useState(false)
 
     // Derived state
     const selectedStudent = students.find(s => s.id === selectedStudentId)
@@ -80,6 +86,43 @@ export function MonthlyScheduler({ students, lessons, year, month }: Props) {
         return lessons.filter(l => l.studentId === studentId).length
     }
 
+    const handleAutoSchedule = async () => {
+        setIsGenerating(true)
+        try {
+            const result = await generateSuggestedSchedule(year, month)
+            if (result.success && result.suggestions) {
+                setSuggestions(result.suggestions)
+                setViewMode("heatmap")
+                toast.success(`${result.suggestions.length}件の提案を作成しました。`)
+            } else {
+                toast.error("提案の作成に失敗しました。")
+            }
+        } catch (error) {
+            toast.error("エラーが発生しました。")
+        } finally {
+            setIsGenerating(false)
+        }
+    }
+
+    const handleConfirmSuggestions = async (selectedSuggestions: ScheduleSuggestion[]) => {
+        const drafts = selectedSuggestions.map(s => ({
+            studentId: s.studentId,
+            startTime: s.slot.startTime,
+            endTime: s.slot.endTime,
+            roomId: "A", // Default
+            type: "REGULAR" as const
+        }))
+
+        const result = await bulkCreateLessons(drafts)
+        if (result.success) {
+            toast.success(`${drafts.length}件のレッスンを一括作成しました。`)
+            setViewMode("list")
+            router.refresh()
+        } else {
+            toast.error("作成に失敗しました。")
+        }
+    }
+
     return (
         <div className="space-y-6">
             <div className="flex justify-between items-center">
@@ -96,55 +139,80 @@ export function MonthlyScheduler({ students, lessons, year, month }: Props) {
                 </Button>
             </div>
 
-            <Card>
-                <CardContent className="p-0">
-                    <Table>
-                        <TableHeader>
-                            <TableRow>
-                                <TableHead>生徒名</TableHead>
-                                <TableHead>希望提出</TableHead>
-                                <TableHead>予約数</TableHead>
-                                <TableHead className="text-right">操作</TableHead>
-                            </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                            {students.map((student) => {
-                                const hasAvailability = !!student.availability
-                                const lessonCount = getStudentLessonCount(student.id)
+            <div className="flex justify-end">
+                {viewMode === "list" && (
+                    <Button onClick={handleAutoSchedule} disabled={isGenerating}>
+                        <Wand2 className="mr-2 h-4 w-4" />
+                        {isGenerating ? "生成中..." : "自動割り当て提案"}
+                    </Button>
+                )}
+                {viewMode === "heatmap" && (
+                    <Button variant="outline" onClick={() => setViewMode("list")}>
+                        リストに戻る
+                    </Button>
+                )}
+            </div>
 
-                                return (
-                                    <TableRow key={student.id}>
-                                        <TableCell className="font-medium">{student.name}</TableCell>
-                                        <TableCell>
-                                            {hasAvailability ? (
-                                                <Badge variant="outline" className="text-green-600 border-green-200 bg-green-50">
-                                                    提出済
+            {viewMode === "heatmap" ? (
+                <HeatmapScheduler
+                    suggestions={suggestions}
+                    students={students}
+                    year={year}
+                    month={month}
+                    onConfirm={handleConfirmSuggestions}
+                    onCancel={() => setViewMode("list")}
+                />
+            ) : (
+                <Card>
+                    <CardContent className="p-0">
+                        <Table>
+                            <TableHeader>
+                                <TableRow>
+                                    <TableHead>生徒名</TableHead>
+                                    <TableHead>希望提出</TableHead>
+                                    <TableHead>予約数</TableHead>
+                                    <TableHead className="text-right">操作</TableHead>
+                                </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                                {students.map((student) => {
+                                    const hasAvailability = !!student.availability
+                                    const lessonCount = getStudentLessonCount(student.id)
+
+                                    return (
+                                        <TableRow key={student.id}>
+                                            <TableCell className="font-medium">{student.name}</TableCell>
+                                            <TableCell>
+                                                {hasAvailability ? (
+                                                    <Badge variant="outline" className="text-green-600 border-green-200 bg-green-50">
+                                                        提出済
+                                                    </Badge>
+                                                ) : (
+                                                    <span className="text-muted-foreground text-sm">-</span>
+                                                )}
+                                            </TableCell>
+                                            <TableCell>
+                                                <Badge variant={lessonCount > 0 ? "secondary" : "outline"}>
+                                                    {lessonCount}回
                                                 </Badge>
-                                            ) : (
-                                                <span className="text-muted-foreground text-sm">-</span>
-                                            )}
-                                        </TableCell>
-                                        <TableCell>
-                                            <Badge variant={lessonCount > 0 ? "secondary" : "outline"}>
-                                                {lessonCount}回
-                                            </Badge>
-                                        </TableCell>
-                                        <TableCell className="text-right">
-                                            <Button
-                                                size="sm"
-                                                onClick={() => setSelectedStudentId(student.id)}
-                                            >
-                                                <CalendarCheck className="mr-2 h-4 w-4" />
-                                                スケジュール
-                                            </Button>
-                                        </TableCell>
-                                    </TableRow>
-                                )
-                            })}
-                        </TableBody>
-                    </Table>
-                </CardContent>
-            </Card>
+                                            </TableCell>
+                                            <TableCell className="text-right">
+                                                <Button
+                                                    size="sm"
+                                                    onClick={() => setSelectedStudentId(student.id)}
+                                                >
+                                                    <CalendarCheck className="mr-2 h-4 w-4" />
+                                                    スケジュール
+                                                </Button>
+                                            </TableCell>
+                                        </TableRow>
+                                    )
+                                })}
+                            </TableBody>
+                        </Table>
+                    </CardContent>
+                </Card>
+            )}
 
             {selectedStudent && (
                 <SchedulingCalendar

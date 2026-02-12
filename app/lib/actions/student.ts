@@ -8,6 +8,7 @@ import { z } from "zod"
 const StudentSchema = z.object({
     name: z.string().min(1, "Name is required"),
     email: z.string().email("Invalid email address"),
+    defaultLessonCount: z.coerce.number().min(1).default(4),
 })
 
 export async function getStudents() {
@@ -27,6 +28,7 @@ export async function createStudent(formData: FormData) {
     const rawData = {
         name: formData.get("name"),
         email: formData.get("email"),
+        defaultLessonCount: formData.get("defaultLessonCount"),
     }
 
     const validatedFields = StudentSchema.safeParse(rawData)
@@ -45,6 +47,7 @@ export async function createStudent(formData: FormData) {
                 email,
                 password: hashedPassword,
                 role: "STUDENT",
+                defaultLessonCount: validatedFields.data.defaultLessonCount,
             },
         })
         revalidatePath("/teacher/students")

@@ -57,7 +57,8 @@ export async function getMonthlyPlanningData(year: number, month: number) {
         data: {
             students: students.map(s => ({
                 ...s,
-                availability: s.monthlyAvailabilities[0] || null
+                availability: s.monthlyAvailabilities[0] || null,
+                defaultLessonCount: s.defaultLessonCount
             })),
             lessons
         }

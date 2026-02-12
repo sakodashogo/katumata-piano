@@ -38,6 +38,7 @@ model User {
   availabilities   Availability[] @relation("StudentAvailability")
   monthlyAvailabilities MonthlyAvailability[] @relation("StudentMonthlyAvailability")
   cancellationCredits CancellationCredit[]
+  defaultLessonCount Int      @default(4) // Monthly contract lesson count
 }
 
 model MonthlyAvailability {
