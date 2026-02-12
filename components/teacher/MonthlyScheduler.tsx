@@ -1,19 +1,22 @@
 "use client"
 
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
-import { addMonths } from "date-fns"
+import { addMonths, format } from "date-fns"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { ChevronLeft, ChevronRight, CalendarCheck } from "lucide-react"
-import { SchedulingCalendar } from "@/components/teacher/SchedulingCalendar"
-import { bulkCreateLessons, publishMonthlySchedule } from "@/app/lib/actions/planning"
-import { useToast } from "@/components/ui/toast"
 import { Badge } from "@/components/ui/badge"
-import { HeatmapScheduler } from "@/components/teacher/HeatmapScheduler"
+import { ChevronLeft, ChevronRight, CalendarCheck, Wand2 } from "lucide-react"
+import { SchedulingCalendar } from "@/components/teacher/SchedulingCalendar"
+import {
+    bulkCreateLessons,
+    publishMonthlySchedule,
+    replaceStudentMonthlyLessons,
+} from "@/app/lib/actions/planning"
 import { generateSuggestedSchedule, ScheduleSuggestion } from "@/app/lib/actions/schedule-maker"
-import { Wand2 } from "lucide-react"
+import { useToast } from "@/components/ui/toast"
+import { HeatmapScheduler } from "@/components/teacher/HeatmapScheduler"
 
 type Student = {
     id: string
@@ -32,6 +35,7 @@ type Lesson = {
     endTime: string | Date
     studentId: string
     roomId: string | null
+    status: string
 }
 
 type Props = {
@@ -39,9 +43,18 @@ type Props = {
     lessons: Lesson[]
     year: number
     month: number
+    isPublished?: boolean
+    publishedAt?: string | Date | null
 }
 
-export function MonthlyScheduler({ students, lessons, year, month }: Props) {
+export function MonthlyScheduler({
+    students,
+    lessons,
+    year,
+    month,
+    isPublished = false,
+    publishedAt = null,
+}: Props) {
     const router = useRouter()
     const { toast } = useToast()
 
@@ -51,8 +64,15 @@ export function MonthlyScheduler({ students, lessons, year, month }: Props) {
     const [isGenerating, setIsGenerating] = useState(false)
     const [isPublishingMonth, setIsPublishingMonth] = useState(false)
 
-    // Derived state
-    const selectedStudent = students.find(s => s.id === selectedStudentId)
+    const selectedStudent = students.find((student) => student.id === selectedStudentId)
+
+    const draftLessons = useMemo(
+        () => lessons.filter((lesson) => lesson.status === "DRAFT"),
+        [lessons]
+    )
+
+    const getStudentLessonCount = (studentId: string) =>
+        lessons.filter((lesson) => lesson.studentId === studentId).length
 
     const handleMonthChange = (offset: number) => {
         const d = addMonths(new Date(year, month - 1), offset)
@@ -62,30 +82,28 @@ export function MonthlyScheduler({ students, lessons, year, month }: Props) {
         router.push(`/teacher/schedule/monthly?${params.toString()}`)
     }
 
-    const handleCreateLessons = async (newLessons: { startTime: Date, endTime: Date }[]) => {
-        if (!selectedStudentId || !selectedStudent) return false
+    const handleSaveStudentLessons = async (newLessons: Array<{ startTime: Date; endTime: Date }>) => {
+        if (!selectedStudentId) return false
 
-        const drafts = newLessons.map(l => ({
+        const result = await replaceStudentMonthlyLessons({
             studentId: selectedStudentId,
-            startTime: l.startTime,
-            endTime: l.endTime,
-            roomId: "A", // Default to A for now
-            type: "REGULAR" as const
-        })) // Cast to verify with LessonDraft
+            year,
+            month,
+            lessons: newLessons.map((lesson) => ({
+                startTime: lesson.startTime,
+                endTime: lesson.endTime,
+                roomId: "A",
+            })),
+        })
 
-        const result = await bulkCreateLessons(drafts)
         if (result.success) {
-            toast.success(`${drafts.length}件のレッスンを追加しました。`)
+            toast.success(`${selectedStudent?.name || "生徒"}の月間予定を下書き保存しました。`)
             router.refresh()
             return true
-        } else {
-            toast.error(result.error || "作成に失敗しました。")
-            return false
         }
-    }
 
-    const getStudentLessonCount = (studentId: string) => {
-        return lessons.filter(l => l.studentId === studentId).length
+        toast.error(result.error || "保存に失敗しました。")
+        return false
     }
 
     const handleAutoSchedule = async () => {
@@ -107,17 +125,18 @@ export function MonthlyScheduler({ students, lessons, year, month }: Props) {
     }
 
     const handleConfirmSuggestions = async (selectedSuggestions: ScheduleSuggestion[]) => {
-        const drafts = selectedSuggestions.map(s => ({
-            studentId: s.studentId,
-            startTime: s.slot.startTime,
-            endTime: s.slot.endTime,
-            roomId: "A", // Default
-            type: "REGULAR" as const
+        const drafts = selectedSuggestions.map((suggestion) => ({
+            studentId: suggestion.studentId,
+            startTime: suggestion.slot.startTime,
+            endTime: suggestion.slot.endTime,
+            roomId: "A",
+            type: "REGULAR" as const,
+            status: "DRAFT" as const,
         }))
 
         const result = await bulkCreateLessons(drafts)
         if (result.success) {
-            toast.success(`${drafts.length}件のレッスンを一括作成しました。`)
+            toast.success(`${drafts.length}件の提案を下書き保存しました。`)
             setViewMode("list")
             router.refresh()
         } else {
@@ -130,12 +149,13 @@ export function MonthlyScheduler({ students, lessons, year, month }: Props) {
         const result = await publishMonthlySchedule(year, month)
         if (result.success) {
             if (result.alreadyPublished) {
-                toast.info(`${year}年${month}月はすでに確定済みです。`)
+                toast.info(`${year}年${month}月は確定済みでした。下書き変更分を再反映しました。`)
             } else {
-                toast.success(`${year}年${month}月のスケジュールを確定しました。`)
+                toast.success(`${year}年${month}月の下書きを公開しました。`)
             }
+            router.refresh()
         } else {
-            toast.error(result.error || "月間スケジュールの確定に失敗しました。")
+            toast.error(result.error || "月間スケジュールの公開に失敗しました。")
         }
         setIsPublishingMonth(false)
     }
@@ -147,24 +167,39 @@ export function MonthlyScheduler({ students, lessons, year, month }: Props) {
                     <ChevronLeft className="mr-2 h-4 w-4" />
                     前月
                 </Button>
-                <h2 className="text-xl font-bold">
-                    {year}年 {month}月
-                </h2>
+                <h2 className="text-xl font-bold">{year}年 {month}月</h2>
                 <Button variant="outline" onClick={() => handleMonthChange(1)}>
                     次月
                     <ChevronRight className="ml-2 h-4 w-4" />
                 </Button>
             </div>
 
-            <p className="text-sm text-slate-500">この画面から作成するレッスンは Room A に登録されます。</p>
+            <div className="rounded-lg border bg-slate-50 px-4 py-3 text-sm text-slate-700 space-y-2">
+                <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant="outline" className="bg-amber-50 border-amber-200 text-amber-700">
+                        下書き {draftLessons.length}件
+                    </Badge>
+                    <Badge variant="outline">
+                        公開済み {lessons.filter((lesson) => lesson.status === "BOOKED").length}件
+                    </Badge>
+                    {isPublished && (
+                        <Badge variant="secondary">
+                            公開済み {publishedAt ? format(new Date(publishedAt), "yyyy/MM/dd HH:mm") : ""}
+                        </Badge>
+                    )}
+                </div>
+                <p>
+                    生徒ごとに下書き保存し、最後に月単位で公開します。公開後も再編集して再反映できます。
+                </p>
+            </div>
 
             <div className="flex items-center justify-between gap-3">
                 <Button
                     onClick={handlePublishMonth}
-                    disabled={isPublishingMonth}
+                    disabled={isPublishingMonth || draftLessons.length === 0}
                     className="bg-emerald-600 text-white hover:bg-emerald-700"
                 >
-                    {isPublishingMonth ? "確定中..." : "月間スケジュールを確定"}
+                    {isPublishingMonth ? "公開中..." : "下書きを公開"}
                 </Button>
 
                 <div className="flex justify-end">
@@ -199,7 +234,7 @@ export function MonthlyScheduler({ students, lessons, year, month }: Props) {
                                 <TableRow>
                                     <TableHead>生徒名</TableHead>
                                     <TableHead>希望提出</TableHead>
-                                    <TableHead>予約数 / 契約</TableHead>
+                                    <TableHead>予定数 / 契約</TableHead>
                                     <TableHead>不足回数</TableHead>
                                     <TableHead className="text-right">操作</TableHead>
                                 </TableRow>
@@ -228,7 +263,10 @@ export function MonthlyScheduler({ students, lessons, year, month }: Props) {
                                                 </Badge>
                                             </TableCell>
                                             <TableCell>
-                                                <Badge variant={remainingCount > 0 ? "outline" : "secondary"} className={remainingCount > 0 ? "text-amber-700 border-amber-200 bg-amber-50" : ""}>
+                                                <Badge
+                                                    variant={remainingCount > 0 ? "outline" : "secondary"}
+                                                    className={remainingCount > 0 ? "text-amber-700 border-amber-200 bg-amber-50" : ""}
+                                                >
                                                     {remainingCount}回
                                                 </Badge>
                                             </TableCell>
@@ -238,7 +276,7 @@ export function MonthlyScheduler({ students, lessons, year, month }: Props) {
                                                     onClick={() => setSelectedStudentId(student.id)}
                                                 >
                                                     <CalendarCheck className="mr-2 h-4 w-4" />
-                                                    スケジュール
+                                                    予定を編集
                                                 </Button>
                                             </TableCell>
                                         </TableRow>
@@ -255,14 +293,19 @@ export function MonthlyScheduler({ students, lessons, year, month }: Props) {
                     studentName={selectedStudent.name || "生徒"}
                     availableSlots={Array.isArray(selectedStudent.availability?.availableSlots) ? selectedStudent.availability!.availableSlots.map(String) : []}
                     unavailableSlots={Array.isArray(selectedStudent.availability?.unavailableSlots) ? selectedStudent.availability!.unavailableSlots.map(String) : []}
-                    existingLessons={lessons.filter((lesson) => {
-                        if (lesson.studentId === selectedStudentId) return true
-                        const room = lesson.roomId || "A"
-                        return room === "A"
-                    })}
+                    existingLessons={lessons
+                        .filter((lesson) => {
+                            if (lesson.studentId === selectedStudentId) return true
+                            const room = lesson.roomId || "A"
+                            return room === "A"
+                        })
+                        .map((lesson) => ({
+                            ...lesson,
+                            isEditable: lesson.studentId === selectedStudentId,
+                        }))}
                     year={year}
                     month={month}
-                    onSave={handleCreateLessons}
+                    onSave={handleSaveStudentLessons}
                     isOpen={!!selectedStudentId}
                     onClose={() => setSelectedStudentId(null)}
                 />

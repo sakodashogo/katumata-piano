@@ -13,7 +13,8 @@ export default async function ResourcesPage({
     const month = params.month ? parseInt(params.month) : getMonth(now) + 1
 
     const result = await getOpenSlots(year, month)
-    const slots = result.success ? (result.data ?? []) : []
+    const slots = result.success ? (result.data?.slots ?? []) : []
+    const lessons = result.success ? (result.data?.lessons ?? []) : []
 
     return (
         <div className="p-6 max-w-7xl mx-auto space-y-6">
@@ -26,6 +27,7 @@ export default async function ResourcesPage({
 
             <ResourceManager
                 initialSlots={slots}
+                initialLessons={lessons}
                 year={year}
                 month={month}
             />

@@ -43,17 +43,44 @@ export async function getOpenSlots(year: number, month: number) {
     const end = new Date(year, month, 0, 23, 59, 59, 999)
 
     try {
-        const slots = await prisma.openSlot.findMany({
-            where: {
-                startTime: {
-                    gte: start,
-                    lte: end,
-                }
-            },
-            include: { menu: true },
-            orderBy: { startTime: 'asc' }
-        })
-        return { success: true, data: slots }
+        const [slots, lessons] = await Promise.all([
+            prisma.openSlot.findMany({
+                where: {
+                    startTime: {
+                        gte: start,
+                        lte: end,
+                    }
+                },
+                include: {
+                    menu: {
+                        select: {
+                            id: true,
+                            name: true,
+                            durationMin: true,
+                            price: true,
+                            description: true,
+                        },
+                    },
+                },
+                orderBy: { startTime: 'asc' }
+            }),
+            prisma.lesson.findMany({
+                where: {
+                    startTime: {
+                        gte: start,
+                        lte: end,
+                    },
+                    status: { not: "CANCELLED" },
+                },
+                include: {
+                    student: {
+                        select: { name: true }
+                    }
+                },
+                orderBy: { startTime: "asc" },
+            }),
+        ])
+        return { success: true, data: { slots, lessons } }
     } catch {
         return { success: false, error: "Failed to fetch slots" }
     }

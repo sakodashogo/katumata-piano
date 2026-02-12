@@ -2,21 +2,19 @@
 
 import Link from "next/link"
 import { useMemo, useState } from "react"
-import { format, addDays, startOfToday, isSameDay } from "date-fns"
+import { addDays, format, isSameDay } from "date-fns"
 import { ja } from "date-fns/locale"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
+import { ROOMS } from "@/lib/constants"
 import {
+    ArrowRight,
+    Calendar as CalendarIcon,
     ChevronLeft,
     ChevronRight,
     LayoutGrid,
-    Calendar as CalendarIcon,
-    ArrowRight,
 } from "lucide-react"
-
-const HOURS = [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21]
-const ROOMS = ["A", "B"] as const
 
 type OpenSlot = {
     id: string
@@ -25,6 +23,15 @@ type OpenSlot = {
     endTime: Date
     isBooked: boolean
     isPublic: boolean
+}
+
+type Lesson = {
+    id: string
+    roomId: string | null
+    startTime: Date
+    endTime: Date
+    status: string
+    student?: { name: string | null } | null
 }
 
 type Props = {
@@ -36,13 +43,19 @@ type Props = {
         isBooked: boolean
         isPublic: boolean
     }>
+    initialLessons: Array<{
+        id: string
+        roomId: string | null
+        startTime: Date | string
+        endTime: Date | string
+        status: string
+        student?: { name: string | null } | null
+    }>
     year: number
     month: number
 }
 
-export function ResourceManager({ initialSlots, year, month }: Props) {
-    const [selectedDate, setSelectedDate] = useState(startOfToday())
-
+export function ResourceManager({ initialSlots, initialLessons, year, month }: Props) {
     const slots = useMemo<OpenSlot[]>(
         () =>
             initialSlots.map((slot) => ({
@@ -53,14 +66,56 @@ export function ResourceManager({ initialSlots, year, month }: Props) {
         [initialSlots]
     )
 
+    const lessons = useMemo<Lesson[]>(
+        () =>
+            initialLessons.map((lesson) => ({
+                ...lesson,
+                startTime: new Date(lesson.startTime),
+                endTime: new Date(lesson.endTime),
+            })),
+        [initialLessons]
+    )
+
+    const firstDateWithData = useMemo(() => {
+        const allStarts = [
+            ...slots.map((slot) => slot.startTime),
+            ...lessons.map((lesson) => lesson.startTime),
+        ].sort((a, b) => a.getTime() - b.getTime())
+        return allStarts[0] ?? new Date(year, month - 1, 1)
+    }, [lessons, month, slots, year])
+
+    const [selectedDate, setSelectedDate] = useState<Date>(firstDateWithData)
+
     const filteredSlots = useMemo(
         () => slots.filter((slot) => isSameDay(slot.startTime, selectedDate)),
         [selectedDate, slots]
     )
+    const filteredLessons = useMemo(
+        () => lessons.filter((lesson) => isSameDay(lesson.startTime, selectedDate)),
+        [lessons, selectedDate]
+    )
+
+    const hourRange = useMemo(() => {
+        const starts = [...filteredSlots, ...filteredLessons].map((item) => item.startTime.getHours())
+        const ends = [...filteredSlots, ...filteredLessons].map((item) =>
+            item.endTime.getHours() + (item.endTime.getMinutes() > 0 ? 1 : 0)
+        )
+        const minHour = starts.length > 0 ? Math.min(9, ...starts) : 9
+        const maxHour = ends.length > 0 ? Math.max(21, ...ends) : 21
+        return { minHour, maxHour }
+    }, [filteredLessons, filteredSlots])
+
+    const HOURS = useMemo(
+        () => Array.from({ length: hourRange.maxHour - hourRange.minHour + 1 }, (_, idx) => hourRange.minHour + idx),
+        [hourRange.maxHour, hourRange.minHour]
+    )
 
     const draftCount = filteredSlots.filter((slot) => !slot.isBooked && !slot.isPublic).length
     const publicCount = filteredSlots.filter((slot) => !slot.isBooked && slot.isPublic).length
-    const bookedCount = filteredSlots.filter((slot) => slot.isBooked).length
+    const bookedSlotCount = filteredSlots.filter((slot) => slot.isBooked).length
+    const lessonCount = filteredLessons.length
+
+    const roomIds = [ROOMS.A.id, ROOMS.B.id] as const
 
     return (
         <div className="grid grid-cols-1 gap-8 lg:grid-cols-[320px_1fr]">
@@ -89,16 +144,20 @@ export function ResourceManager({ initialSlots, year, month }: Props) {
 
                     <div className="space-y-2 text-xs">
                         <div className="flex items-center justify-between rounded-lg border bg-amber-50 px-3 py-2 text-amber-800">
-                            <span>下書き</span>
+                            <span>空き枠 下書き</span>
                             <span className="font-bold">{draftCount}</span>
                         </div>
                         <div className="flex items-center justify-between rounded-lg border bg-blue-50 px-3 py-2 text-blue-800">
-                            <span>公開中</span>
+                            <span>空き枠 公開中</span>
                             <span className="font-bold">{publicCount}</span>
                         </div>
                         <div className="flex items-center justify-between rounded-lg border bg-green-50 px-3 py-2 text-green-800">
-                            <span>予約済み</span>
-                            <span className="font-bold">{bookedCount}</span>
+                            <span>空き枠 予約済み</span>
+                            <span className="font-bold">{bookedSlotCount}</span>
+                        </div>
+                        <div className="flex items-center justify-between rounded-lg border bg-emerald-50 px-3 py-2 text-emerald-800">
+                            <span>レッスン予定</span>
+                            <span className="font-bold">{lessonCount}</span>
                         </div>
                     </div>
                 </div>
@@ -106,7 +165,7 @@ export function ResourceManager({ initialSlots, year, month }: Props) {
                 <div className="space-y-3 rounded-xl border border-blue-100 bg-blue-50 p-4">
                     <h3 className="text-sm font-bold text-blue-900">編集は専用画面で実施</h3>
                     <p className="text-xs text-blue-800">
-                        この画面は2部屋の稼働状況を素早く確認するための可視化画面です。空き枠の作成・公開は専用画面から操作してください。
+                        第1レッスン室を主軸に、第2レッスン室（サポート/自主練）の稼働状況を確認できます。
                     </p>
                     <div className="space-y-2">
                         <Link href={`/teacher/schedule?date=${format(selectedDate, "yyyy-MM-dd")}`} className="block">
@@ -128,10 +187,10 @@ export function ResourceManager({ initialSlots, year, month }: Props) {
             <div className="flex h-[700px] flex-col overflow-hidden rounded-2xl border bg-white shadow-sm">
                 <div className="grid grid-cols-[80px_1fr_1fr] border-b bg-slate-100">
                     <div className="border-r p-4" />
-                    {ROOMS.map((room) => (
-                        <div key={room} className="flex items-center justify-center gap-2 border-r p-4 text-center font-bold text-slate-700 last:border-r-0">
+                    {roomIds.map((roomId) => (
+                        <div key={roomId} className="flex items-center justify-center gap-2 border-r p-4 text-center font-bold text-slate-700 last:border-r-0">
                             <LayoutGrid className="h-4 w-4 text-slate-400" />
-                            ピアノ室 {room}
+                            {roomId === ROOMS.A.id ? ROOMS.A.name : ROOMS.B.name}
                         </div>
                     ))}
                 </div>
@@ -147,17 +206,28 @@ export function ResourceManager({ initialSlots, year, month }: Props) {
                             ))}
                         </div>
 
-                        {ROOMS.map((room) => (
-                            <div key={room} className="relative border-r bg-slate-50/30 last:border-r-0">
-                                {HOURS.map((hour) => (
-                                    <div key={hour} className="h-24 border-b" />
-                                ))}
+                        {roomIds.map((roomId) => {
+                            const roomLessons = filteredLessons.filter((lesson) => (lesson.roomId || "A") === roomId)
+                            const roomSlots = filteredSlots
+                                .filter((slot) => slot.roomId === roomId)
+                                .filter((slot) => {
+                                    if (!slot.isBooked) return true
+                                    return !roomLessons.some(
+                                        (lesson) =>
+                                            lesson.startTime.getTime() === slot.startTime.getTime() &&
+                                            lesson.endTime.getTime() === slot.endTime.getTime()
+                                    )
+                                })
 
-                                {filteredSlots
-                                    .filter((slot) => slot.roomId === room)
-                                    .map((slot) => {
+                            return (
+                                <div key={roomId} className="relative border-r bg-slate-50/30 last:border-r-0">
+                                    {HOURS.map((hour) => (
+                                        <div key={hour} className="h-24 border-b" />
+                                    ))}
+
+                                    {roomSlots.map((slot) => {
                                         const startMin = slot.startTime.getHours() * 60 + slot.startTime.getMinutes()
-                                        const offsetTop = ((startMin - HOURS[0] * 60) / 60) * 96
+                                        const offsetTop = ((startMin - hourRange.minHour * 60) / 60) * 96
                                         const durationMin = (slot.endTime.getTime() - slot.startTime.getTime()) / 60000
                                         const height = (durationMin / 60) * 96
 
@@ -195,8 +265,33 @@ export function ResourceManager({ initialSlots, year, month }: Props) {
                                             </div>
                                         )
                                     })}
-                            </div>
-                        ))}
+
+                                    {roomLessons.map((lesson) => {
+                                        const startMin = lesson.startTime.getHours() * 60 + lesson.startTime.getMinutes()
+                                        const offsetTop = ((startMin - hourRange.minHour * 60) / 60) * 96
+                                        const durationMin = (lesson.endTime.getTime() - lesson.startTime.getTime()) / 60000
+                                        const height = (durationMin / 60) * 96
+                                        return (
+                                            <div
+                                                key={lesson.id}
+                                                style={{ top: `${offsetTop}px`, height: `${height}px` }}
+                                                className="absolute left-1 right-1 rounded-lg border border-emerald-300 bg-emerald-50 px-2 py-1 shadow-sm"
+                                            >
+                                                <div className="text-[10px] font-bold text-emerald-800">
+                                                    {format(lesson.startTime, "HH:mm")} - {format(lesson.endTime, "HH:mm")}
+                                                </div>
+                                                <div className="mt-1 text-[10px] text-emerald-700 font-medium truncate">
+                                                    {lesson.student?.name || "生徒未設定"}
+                                                </div>
+                                                <Badge variant="outline" className="mt-1 border-emerald-200 bg-emerald-100 text-[10px] text-emerald-800">
+                                                    レッスン
+                                                </Badge>
+                                            </div>
+                                        )
+                                    })}
+                                </div>
+                            )
+                        })}
                     </div>
                 </div>
             </div>

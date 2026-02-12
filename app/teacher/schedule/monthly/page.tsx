@@ -36,7 +36,7 @@ export default async function MonthlyPlanningPage({
         return <div>データの取得に失敗しました</div>
     }
 
-    const { students, lessons } = result.data
+    const { students, lessons, isPublished, publishedAt } = result.data
 
     return (
         <div className="space-y-6">
@@ -52,6 +52,8 @@ export default async function MonthlyPlanningPage({
                 lessons={lessons}
                 year={year}
                 month={month}
+                isPublished={isPublished}
+                publishedAt={publishedAt}
             />
         </div>
     )

@@ -37,6 +37,13 @@ export async function getMenusForSlots() {
 
     try {
         const menus = await prisma.menu.findMany({
+            select: {
+                id: true,
+                name: true,
+                durationMin: true,
+                price: true,
+                description: true,
+            },
             orderBy: [{ price: "asc" }, { durationMin: "asc" }],
         })
         const filteredMenus = menus.filter((menu) =>
@@ -181,7 +188,17 @@ export async function getDraftSlots(year: number, month: number) {
                 isPublic: false,
                 isBooked: false,
             },
-            include: { menu: true },
+            include: {
+                menu: {
+                    select: {
+                        id: true,
+                        name: true,
+                        durationMin: true,
+                        price: true,
+                        description: true,
+                    },
+                },
+            },
             orderBy: { startTime: 'asc' },
         })
         return { success: true as const, data: slots }
@@ -202,7 +219,17 @@ export async function getAllSlotsByMonth(year: number, month: number) {
             where: {
                 startTime: { gte: start, lte: end },
             },
-            include: { menu: true },
+            include: {
+                menu: {
+                    select: {
+                        id: true,
+                        name: true,
+                        durationMin: true,
+                        price: true,
+                        description: true,
+                    },
+                },
+            },
             orderBy: { startTime: 'asc' },
         })
         return { success: true as const, data: slots }
@@ -266,7 +293,17 @@ export async function updateSlotDetails(
         const slot = await prisma.openSlot.update({
             where: { id: slotId },
             data: updateData,
-            include: { menu: true },
+            include: {
+                menu: {
+                    select: {
+                        id: true,
+                        name: true,
+                        durationMin: true,
+                        price: true,
+                        description: true,
+                    },
+                },
+            },
         })
 
         revalidatePath('/teacher/slots')

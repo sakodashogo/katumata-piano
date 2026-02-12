@@ -11,7 +11,6 @@ import {
     setHours,
     setMinutes,
     startOfDay,
-    endOfMonth,
 } from "date-fns"
 import { ja } from "date-fns/locale"
 import { Loader2, ChevronLeft, ChevronRight, PenLine } from "lucide-react"
@@ -20,6 +19,7 @@ type Lesson = {
     id: string
     startTime: Date | string
     endTime: Date | string
+    isEditable?: boolean
 }
 
 type Props = {
@@ -58,7 +58,6 @@ export function SchedulingCalendar({
 
     React.useEffect(() => {
         setWeekStart(startOfWeek(new Date(year, month - 1, 1), { weekStartsOn: 1 }))
-        setDraftSlots(new Set())
     }, [year, month, isOpen])
 
     const days = React.useMemo(
@@ -80,14 +79,33 @@ export function SchedulingCalendar({
     const availableSet = React.useMemo(() => new Set(availableSlots), [availableSlots])
     const unavailableSet = React.useMemo(() => new Set(unavailableSlots), [unavailableSlots])
 
-    const bookedTimes = React.useMemo(() => {
+    const blockedTimes = React.useMemo(() => {
         const set = new Set<number>()
-        existingLessons.forEach(l => set.add(new Date(l.startTime).getTime()))
+        existingLessons
+            .filter((lesson) => !lesson.isEditable)
+            .forEach((lesson) => set.add(new Date(lesson.startTime).getTime()))
         return set
     }, [existingLessons])
 
-    const [draftSlots, setDraftSlots] = React.useState<Set<string>>(new Set())
+    const editableTimeIsos = React.useMemo(() => {
+        const set = new Set<string>()
+        existingLessons
+            .filter((lesson) => !!lesson.isEditable)
+            .forEach((lesson) => {
+                const start = new Date(lesson.startTime)
+                if (!Number.isNaN(start.getTime())) {
+                    set.add(start.toISOString())
+                }
+            })
+        return set
+    }, [existingLessons])
+
+    const [draftSlots, setDraftSlots] = React.useState<Set<string>>(new Set(editableTimeIsos))
     const [isSaving, setIsSaving] = React.useState(false)
+
+    React.useEffect(() => {
+        setDraftSlots(new Set(editableTimeIsos))
+    }, [editableTimeIsos, isOpen])
 
     // --- Rectangle-based drag state ---
     const isPaintingRef = React.useRef(false)
@@ -110,7 +128,10 @@ export function SchedulingCalendar({
     const getCellIso = (day: Date, hour: number, minute: number) =>
         setMinutes(setHours(startOfDay(day), hour), minute).toISOString()
 
-    const isBooked = (iso: string) => bookedTimes.has(new Date(iso).getTime())
+    const isBooked = React.useCallback(
+        (iso: string) => blockedTimes.has(new Date(iso).getTime()),
+        [blockedTimes]
+    )
 
     const isDayInMonth = (day: Date) =>
         day.getMonth() === month - 1 && day.getFullYear() === year
@@ -167,7 +188,7 @@ export function SchedulingCalendar({
             }
         }
         return result
-    }, [month, year, bookedTimes])
+    }, [isBooked, month, year])
 
     const commitPaint = React.useCallback(() => {
         if (!isPaintingRef.current) return
@@ -212,7 +233,7 @@ export function SchedulingCalendar({
         startCellRef.current = { row, col }
         currentCellRef.current = { row, col }
         rerender()
-    }, [bookedTimes])
+    }, [isBooked])
 
     const updateCurrentCell = React.useCallback((row: number, col: number) => {
         if (!isPaintingRef.current) return
@@ -434,13 +455,13 @@ export function SchedulingCalendar({
                 <DialogFooter className="flex-shrink-0">
                     <div className="flex justify-between w-full items-center">
                         <div className="text-sm text-muted-foreground">
-                            {draftSlots.size}件のレッスンを作成予定
+                            {draftSlots.size}件のレッスンを保存予定
                         </div>
                         <div className="flex gap-2">
                             <Button variant="outline" onClick={onClose}>キャンセル</Button>
                             <Button onClick={handleSave} disabled={isSaving || draftSlots.size === 0}>
                                 {isSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                                作成する
+                                下書きを保存
                             </Button>
                         </div>
                     </div>

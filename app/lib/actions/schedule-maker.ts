@@ -154,141 +154,181 @@ export async function generateSuggestedSchedule(year: number, month: number) {
     }
 
 
-    // 4. Optimization (Greedy)
-    // Sort students by "scarcity" (fewer available slots -> higher priority)
+    // 4. Optimization (Greedy with weekday fixation + weekly distribution + gap minimization)
+    const studentById = new Map(students.map((student) => [student.id, student]))
     const studentScarcity = new Map<string, number>()
-    for (const s of allSuggestions) {
-        studentScarcity.set(s.studentId, (studentScarcity.get(s.studentId) || 0) + 1)
+    for (const suggestion of allSuggestions) {
+        studentScarcity.set(suggestion.studentId, (studentScarcity.get(suggestion.studentId) || 0) + 1)
     }
 
-    // Tracking for optimization
     const occupiedSlots = new Set<number>()
-    const studentDailyCounts = new Map<string, Set<number>>() // studentId -> Set of Day numbers
+    const studentDailyCounts = new Map<string, Set<number>>()
     const studentMonthCounts = new Map<string, number>()
-    const studentWeeklyCounts = new Map<string, Map<number, number>>() // studentId -> Map<WeekNum, Count>
+    const studentWeeklyCounts = new Map<string, Map<number, number>>()
 
-    // Helper to get week number (simple 0-4 based on the month)
     const getWeekNumber = (date: Date) => {
-        // week starts on Sunday or Monday? date-fns startOfWeek defaults to Sunday.
-        // Let's use ISO week or just simple division
         const firstDayOfMonth = new Date(year, month - 1, 1)
         const dayDiff = date.getDate() - 1
         return Math.floor((dayDiff + getDay(firstDayOfMonth)) / 7)
     }
 
-    // Initialize counts with existing lessons
-    for (const l of existingLessons) {
-        occupiedSlots.add(l.startTime.getTime())
+    for (const lesson of existingLessons) {
+        occupiedSlots.add(lesson.startTime.getTime())
+        const day = lesson.startTime.getDate()
+        if (!studentDailyCounts.has(lesson.studentId)) studentDailyCounts.set(lesson.studentId, new Set())
+        studentDailyCounts.get(lesson.studentId)?.add(day)
+        studentMonthCounts.set(lesson.studentId, (studentMonthCounts.get(lesson.studentId) || 0) + 1)
 
-        const day = l.startTime.getDate()
-        if (!studentDailyCounts.has(l.studentId)) studentDailyCounts.set(l.studentId, new Set())
-        studentDailyCounts.get(l.studentId)?.add(day)
-
-        studentMonthCounts.set(l.studentId, (studentMonthCounts.get(l.studentId) || 0) + 1)
-
-        const week = getWeekNumber(l.startTime)
-        if (!studentWeeklyCounts.has(l.studentId)) studentWeeklyCounts.set(l.studentId, new Map())
-        const weekCounts = studentWeeklyCounts.get(l.studentId)!
+        const week = getWeekNumber(lesson.startTime)
+        if (!studentWeeklyCounts.has(lesson.studentId)) studentWeeklyCounts.set(lesson.studentId, new Map())
+        const weekCounts = studentWeeklyCounts.get(lesson.studentId)!
         weekCounts.set(week, (weekCounts.get(week) || 0) + 1)
     }
 
+    const getMode = (values: number[]) => {
+        const counts = new Map<number, number>()
+        for (const value of values) {
+            counts.set(value, (counts.get(value) || 0) + 1)
+        }
+        const sorted = Array.from(counts.entries()).sort((a, b) => b[1] - a[1])
+        return sorted[0]?.[0]
+    }
 
-    // Sort candidates
-    // Priority:
-    // 1. Scarcity (Least options first)
-    // 2. Gap Minimization (Prefer slots adjacent to existing lessons)
-    // 3. Time (Fill from start of day)
+    const preferredWeekdayByStudent = new Map<string, number>()
+    for (const student of students) {
+        const existingDays = existingLessons
+            .filter((lesson) => lesson.studentId === student.id)
+            .map((lesson) => getDay(lesson.startTime))
+        if (existingDays.length > 0) {
+            const mode = getMode(existingDays)
+            if (mode !== undefined) preferredWeekdayByStudent.set(student.id, mode)
+            continue
+        }
 
-    // Let's also add "Adjacency to INITIAL existing lessons" to the static sort.
+        const candidateDays = allSuggestions
+            .filter((suggestion) => suggestion.studentId === student.id)
+            .map((suggestion) => getDay(suggestion.slot.startTime))
+        const candidateMode = getMode(candidateDays)
+        if (candidateMode !== undefined) preferredWeekdayByStudent.set(student.id, candidateMode)
+    }
+
     const initialOccupied = new Set<number>()
-    for (const l of existingLessons) {
-        initialOccupied.add(l.startTime.getTime())
+    for (const lesson of existingLessons) {
+        initialOccupied.add(lesson.startTime.getTime())
     }
-    const isAdjacentToInitial = (t: number) => {
-        return initialOccupied.has(t - 30 * 60000) || initialOccupied.has(t + 30 * 60000)
-    }
+    const isAdjacentToInitial = (time: number) =>
+        initialOccupied.has(time - 30 * 60000) || initialOccupied.has(time + 30 * 60000)
 
     const sortedCandidates = [...allSuggestions].sort((a, b) => {
-        // 1. Scarcity
         const scarcityA = studentScarcity.get(a.studentId) || 999
         const scarcityB = studentScarcity.get(b.studentId) || 999
         if (scarcityA !== scarcityB) return scarcityA - scarcityB
 
-        // 2. Adjacency to INITIAL (Bonus)
+        const preferredA = preferredWeekdayByStudent.get(a.studentId)
+        const preferredB = preferredWeekdayByStudent.get(b.studentId)
+        const fixedA = preferredA !== undefined && preferredA === getDay(a.slot.startTime) ? 1 : 0
+        const fixedB = preferredB !== undefined && preferredB === getDay(b.slot.startTime) ? 1 : 0
+        if (fixedA !== fixedB) return fixedB - fixedA
+
         const adjA = isAdjacentToInitial(a.slot.startTime.getTime()) ? 1 : 0
         const adjB = isAdjacentToInitial(b.slot.startTime.getTime()) ? 1 : 0
-        if (adjA !== adjB) return adjB - adjA // Higher score first
+        if (adjA !== adjB) return adjB - adjA
 
-        // 3. Time (Ascending) - Standard packing
         return a.slot.startTime.getTime() - b.slot.startTime.getTime()
     })
 
     const finalRecommendations = new Set<string>()
 
-    const processCandidates = (candidates: typeof sortedCandidates, strictDistribution: boolean) => {
-        // We need to re-evaluate "Best Slot" for the high-priority students dynamically?
-        // The static sort by TIME helps a lot.
-        // But if we want to "Search for closure", we might need to skip ahead in the list for the SAME student?
+    const canAssign = (candidate: ScheduleSuggestion, strictDistribution: boolean) => {
+        const slotTime = candidate.slot.startTime.getTime()
+        const day = candidate.slot.startTime.getDate()
+        const week = getWeekNumber(candidate.slot.startTime)
+        const student = studentById.get(candidate.studentId)
+        if (!student) return false
 
-        // For now, let's stick to the linear scan but with the improved sort.
-        // The "Time" sort is the most effective simple heuristic for gap minimization (First Fit).
+        const maxLessons = student.defaultLessonCount || 4
+        const currentMonthCount = studentMonthCounts.get(candidate.studentId) || 0
+        if (currentMonthCount >= maxLessons) return false
+        if (occupiedSlots.has(slotTime)) return false
+        if (studentDailyCounts.get(candidate.studentId)?.has(day)) return false
 
-        for (const cand of candidates) {
-            if (finalRecommendations.has(cand.id)) continue;
+        if (strictDistribution) {
+            const currentWeekCount = studentWeeklyCounts.get(candidate.studentId)?.get(week) || 0
+            if (currentWeekCount >= 1) return false
+        }
 
-            // Constraints
-            const slotTime = cand.slot.startTime.getTime()
-            const day = cand.slot.startTime.getDate()
-            const week = getWeekNumber(cand.slot.startTime)
-            const student = students.find(s => s.id === cand.studentId)
-            if (!student) continue
+        return true
+    }
 
-            const maxLessons = student.defaultLessonCount || 4
-            const currentMonthCount = studentMonthCounts.get(cand.studentId) || 0
+    const scoreCandidate = (candidate: ScheduleSuggestion, strictDistribution: boolean) => {
+        const slotTime = candidate.slot.startTime.getTime()
+        const week = getWeekNumber(candidate.slot.startTime)
+        const preferredDay = preferredWeekdayByStudent.get(candidate.studentId)
+        const dayOfWeek = getDay(candidate.slot.startTime)
+        const weekCount = studentWeeklyCounts.get(candidate.studentId)?.get(week) || 0
+        const adjacentBefore = occupiedSlots.has(slotTime - 30 * 60000) ? 1 : 0
+        const adjacentAfter = occupiedSlots.has(slotTime + 30 * 60000) ? 1 : 0
+        const adjacentCount = adjacentBefore + adjacentAfter
+        const closesGap = adjacentCount === 2 ? 1 : 0
+        const fixedWeekday = preferredDay !== undefined && preferredDay === dayOfWeek ? 1 : 0
 
-            // 1. Quota Check
-            if (currentMonthCount >= maxLessons) continue
+        return (
+            fixedWeekday * 100 +
+            closesGap * 40 +
+            adjacentCount * 20 -
+            weekCount * (strictDistribution ? 50 : 20) -
+            candidate.slot.startTime.getTime() / 10_000_000_000
+        )
+    }
 
-            // 2. Slot Occupied Check
-            if (occupiedSlots.has(slotTime)) continue
+    const acceptCandidate = (candidate: ScheduleSuggestion) => {
+        const slotTime = candidate.slot.startTime.getTime()
+        const day = candidate.slot.startTime.getDate()
+        const week = getWeekNumber(candidate.slot.startTime)
+        const currentMonthCount = studentMonthCounts.get(candidate.studentId) || 0
 
-            // 3. Daily Limit Check
-            if (studentDailyCounts.get(cand.studentId)?.has(day)) continue
+        finalRecommendations.add(candidate.id)
+        occupiedSlots.add(slotTime)
+        if (!studentDailyCounts.has(candidate.studentId)) studentDailyCounts.set(candidate.studentId, new Set())
+        studentDailyCounts.get(candidate.studentId)?.add(day)
+        studentMonthCounts.set(candidate.studentId, currentMonthCount + 1)
+        if (!studentWeeklyCounts.has(candidate.studentId)) studentWeeklyCounts.set(candidate.studentId, new Map())
+        const weekCounts = studentWeeklyCounts.get(candidate.studentId)!
+        weekCounts.set(week, (weekCounts.get(week) || 0) + 1)
+    }
 
-            // 4. Weekly Distribution Check
-            if (strictDistribution) {
-                const weekCounts = studentWeeklyCounts.get(cand.studentId)
-                const currentWeekCount = weekCounts?.get(week) || 0
-                // Target is roughly 1 per week for standard 4 lesson/month
-                // If we allow >1, it clumps.
-                if (currentWeekCount >= 1) continue
+    const studentOrder = students
+        .map((student) => student.id)
+        .sort((a, b) => (studentScarcity.get(a) || 999) - (studentScarcity.get(b) || 999))
+
+    const processCandidates = (strictDistribution: boolean) => {
+        for (const studentId of studentOrder) {
+            while (true) {
+                const pool = sortedCandidates
+                    .filter((candidate) => candidate.studentId === studentId && !finalRecommendations.has(candidate.id))
+                    .filter((candidate) => canAssign(candidate, strictDistribution))
+
+                if (pool.length === 0) break
+
+                pool.sort((a, b) => {
+                    const scoreDiff = scoreCandidate(b, strictDistribution) - scoreCandidate(a, strictDistribution)
+                    if (scoreDiff !== 0) return scoreDiff
+                    return a.slot.startTime.getTime() - b.slot.startTime.getTime()
+                })
+
+                acceptCandidate(pool[0])
             }
-
-            // Optimization Check:
-            // If this student has OTHER candidates that are better (e.g. adjacent to just-added slot),
-            // should we search for them?
-            // This is complex. The Time-based sort usually handles it.
-
-            // Accept Candidate
-            finalRecommendations.add(cand.id)
-
-            // Update State
-            occupiedSlots.add(slotTime)
-            if (!studentDailyCounts.has(cand.studentId)) studentDailyCounts.set(cand.studentId, new Set())
-            studentDailyCounts.get(cand.studentId)?.add(day)
-            studentMonthCounts.set(cand.studentId, currentMonthCount + 1)
-
-            if (!studentWeeklyCounts.has(cand.studentId)) studentWeeklyCounts.set(cand.studentId, new Map())
-            const weekCounts = studentWeeklyCounts.get(cand.studentId)!
-            weekCounts.set(week, (weekCounts.get(week) || 0) + 1)
         }
     }
 
-    // First Pass: Strict distribution (max 1 per week)
-    processCandidates(sortedCandidates, true)
+    processCandidates(true)
+    processCandidates(false)
 
-    // Second Pass: Relaxed (fill remaining quota if possible)
-    processCandidates(sortedCandidates, false)
+    for (const candidate of sortedCandidates) {
+        if (finalRecommendations.has(candidate.id)) continue
+        if (!canAssign(candidate, false)) continue
+        acceptCandidate(candidate)
+    }
 
     // Update suggestions with "Conflict" and "Recommended" status
     const suggestionsWithStatus = allSuggestions.map(s => {

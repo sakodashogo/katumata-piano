@@ -22,8 +22,13 @@ export default async function StudentDashboard() {
     if (!session?.user?.id) return null
 
     const allLessons = await getStudentLessons(session.user.id)
-    const upcomingLessons = allLessons.filter(l => new Date(l.startTime) > new Date() && l.status !== "CANCELLED")
-    const historyLessons = allLessons.filter(l => new Date(l.startTime) <= new Date()).reverse()
+    const now = new Date()
+    const upcomingLessons = allLessons.filter(
+        (lesson) => new Date(lesson.startTime) > now && lesson.status === "BOOKED"
+    )
+    const historyLessons = allLessons
+        .filter((lesson) => new Date(lesson.startTime) <= now && lesson.status !== "DRAFT")
+        .reverse()
     const upcomingRegular = upcomingLessons.filter((lesson) => lesson.type === "REGULAR")
     const upcomingAdditional = upcomingLessons.filter((lesson) =>
         lesson.type === "AD_HOC" || lesson.type === "SOLO_ADDITIONAL" || lesson.type === "DUET_ADDITIONAL"

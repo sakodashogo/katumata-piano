@@ -57,6 +57,13 @@ export default async function SlotsPage({
     const loadMonthData = async (year: number, month: number) => {
         const { start, end } = getMonthRange(year, month)
         const menusRaw = await prisma.menu.findMany({
+            select: {
+                id: true,
+                name: true,
+                durationMin: true,
+                price: true,
+                description: true,
+            },
             orderBy: [{ price: "asc" }, { durationMin: "asc" }],
         })
 
@@ -66,7 +73,17 @@ export default async function SlotsPage({
                 where: {
                     startTime: { gte: start, lte: end },
                 },
-                include: { menu: true },
+                include: {
+                    menu: {
+                        select: {
+                            id: true,
+                            name: true,
+                            durationMin: true,
+                            price: true,
+                            description: true,
+                        },
+                    },
+                },
                 orderBy: { startTime: "asc" },
             }) as Array<Record<string, unknown>>
         } catch (error) {

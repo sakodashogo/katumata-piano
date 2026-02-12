@@ -31,8 +31,8 @@ export const DAY_LABELS: Record<string, string> = {
 }
 
 export const ROOMS = {
-    A: { id: 'A', name: 'Room A (グランドピアノ)' },
-    B: { id: 'B', name: 'Room B (アップライト)' },
+    A: { id: 'A', name: '第1レッスン室（メイン）' },
+    B: { id: 'B', name: '第2レッスン室（サポート/自主練）' },
 } as const
 
 export const SLOT_MENU_LABELS: Record<string, string> = {

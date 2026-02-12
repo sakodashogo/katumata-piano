@@ -10,7 +10,15 @@ import { notifyEvent } from "@/lib/notifications"
 
 export async function getMenus() {
     try {
-        const menus = await prisma.menu.findMany()
+        const menus = await prisma.menu.findMany({
+            select: {
+                id: true,
+                name: true,
+                durationMin: true,
+                price: true,
+                description: true,
+            },
+        })
         return { success: true, data: menus }
     } catch {
         return { success: false, error: "Failed to fetch menus" }
@@ -104,6 +112,13 @@ async function assertNoReservationConflict(
 export async function getBookableMenusForStudent() {
     try {
         const menus = await prisma.menu.findMany({
+            select: {
+                id: true,
+                name: true,
+                durationMin: true,
+                price: true,
+                description: true,
+            },
             orderBy: [{ price: "asc" }, { durationMin: "asc" }]
         })
 
@@ -200,7 +215,7 @@ function buildBookableStartTimes(
     slots: Array<{ id: string; roomId: string; startTime: Date; endTime: Date }>,
     durationMin: number
 ) {
-    const requiredSlotCount = Math.max(1, Math.ceil(durationMin / 30))
+    const requiredDuration = Math.max(30, durationMin)
     const byRoom = new Map<string, Array<{ id: string; roomId: string; startTime: Date; endTime: Date }>>()
 
     for (const slot of slots) {
@@ -214,24 +229,38 @@ function buildBookableStartTimes(
         roomSlots.sort((a, b) => a.startTime.getTime() - b.startTime.getTime())
 
         for (let i = 0; i < roomSlots.length; i++) {
-            const chain = [roomSlots[i]]
-            for (let j = i + 1; j < roomSlots.length && chain.length < requiredSlotCount; j++) {
-                const prev = chain[chain.length - 1]
-                const next = roomSlots[j]
-                if (prev.endTime.getTime() === next.startTime.getTime()) {
-                    chain.push(next)
-                } else {
-                    break
-                }
-            }
+            const chain: Array<{ id: string; roomId: string; startTime: Date; endTime: Date }> = [roomSlots[i]]
+            const chainStart = roomSlots[i].startTime
+            let chainEnd = roomSlots[i].endTime
 
-            if (chain.length === requiredSlotCount) {
+            if ((chainEnd.getTime() - chainStart.getTime()) / 60000 >= requiredDuration) {
                 candidates.push({
-                    startTime: chain[0].startTime,
-                    endTime: chain[chain.length - 1].endTime,
-                    roomId: chain[0].roomId,
+                    startTime: chainStart,
+                    endTime: chainEnd,
+                    roomId: roomSlots[i].roomId,
                     slotIds: chain.map((s) => s.id),
                 })
+                continue
+            }
+
+            for (let j = i + 1; j < roomSlots.length; j++) {
+                const prev = chain[chain.length - 1]
+                const next = roomSlots[j]
+                if (prev.endTime.getTime() !== next.startTime.getTime()) {
+                    break
+                }
+                chain.push(next)
+                chainEnd = next.endTime
+
+                if ((chainEnd.getTime() - chainStart.getTime()) / 60000 >= requiredDuration) {
+                    candidates.push({
+                        startTime: chainStart,
+                        endTime: chainEnd,
+                        roomId: chain[0].roomId,
+                        slotIds: chain.map((s) => s.id),
+                    })
+                    break
+                }
             }
         }
     }
@@ -240,21 +269,36 @@ function buildBookableStartTimes(
     return candidates
 }
 
-export async function getBookableStartTimes(dateStr: string, menuId: string) {
+export async function getBookableStartTimes(dateStr: string, menuId: string, dateEndStr?: string) {
     try {
-        const menu = await prisma.menu.findUnique({ where: { id: menuId } })
+        const menu = await prisma.menu.findUnique({
+            where: { id: menuId },
+            select: {
+                id: true,
+                name: true,
+                durationMin: true,
+                price: true,
+                description: true,
+            },
+        })
         if (!menu) return { success: false, error: "メニューが見つかりません。" }
 
         const start = new Date(dateStr)
-        start.setHours(0, 0, 0, 0)
-        const end = new Date(dateStr)
-        end.setHours(23, 59, 59, 999)
+        const end = dateEndStr ? new Date(dateEndStr) : new Date(dateStr)
+        if (!dateEndStr) {
+            start.setHours(0, 0, 0, 0)
+            end.setHours(23, 59, 59, 999)
+        }
+
+        if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+            return { success: false, error: "日付指定が不正です。" }
+        }
 
         const slots = await prisma.openSlot.findMany({
             where: {
                 isBooked: false,
                 isPublic: true,
-                startTime: { gte: start, lte: end },
+                startTime: { gte: start, lt: end },
                 OR: [{ menuId: null }, { menuId }],
             },
             select: {
@@ -276,7 +320,16 @@ export async function getBookableStartTimes(dateStr: string, menuId: string) {
 
 export async function getBookableDaysInRange(startStr: string, endStr: string, menuId: string) {
     try {
-        const menu = await prisma.menu.findUnique({ where: { id: menuId } })
+        const menu = await prisma.menu.findUnique({
+            where: { id: menuId },
+            select: {
+                id: true,
+                name: true,
+                durationMin: true,
+                price: true,
+                description: true,
+            },
+        })
         if (!menu) return { success: false, error: "メニューが見つかりません。" }
 
         const start = new Date(startStr)
@@ -285,7 +338,7 @@ export async function getBookableDaysInRange(startStr: string, endStr: string, m
             where: {
                 isBooked: false,
                 isPublic: true,
-                startTime: { gte: start, lte: end },
+                startTime: { gte: start, lt: end },
                 OR: [{ menuId: null }, { menuId }],
             },
             select: {
@@ -306,6 +359,50 @@ export async function getBookableDaysInRange(startStr: string, endStr: string, m
     } catch (error) {
         console.error(error)
         return { success: false, error: "予約可能日の取得に失敗しました。" }
+    }
+}
+
+export async function getBookableSlotsInRange(startStr: string, endStr: string, menuId: string) {
+    try {
+        const menu = await prisma.menu.findUnique({
+            where: { id: menuId },
+            select: {
+                id: true,
+                name: true,
+                durationMin: true,
+                price: true,
+                description: true,
+            },
+        })
+        if (!menu) return { success: false, error: "メニューが見つかりません。" }
+
+        const start = new Date(startStr)
+        const end = new Date(endStr)
+        if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+            return { success: false, error: "日付指定が不正です。" }
+        }
+
+        const slots = await prisma.openSlot.findMany({
+            where: {
+                isBooked: false,
+                isPublic: true,
+                startTime: { gte: start, lt: end },
+                OR: [{ menuId: null }, { menuId }],
+            },
+            select: {
+                id: true,
+                roomId: true,
+                startTime: true,
+                endTime: true,
+            },
+            orderBy: { startTime: "asc" },
+        })
+
+        const candidates = buildBookableStartTimes(slots, menu.durationMin)
+        return { success: true, data: candidates }
+    } catch (error) {
+        console.error(error)
+        return { success: false, error: "予約可能枠の取得に失敗しました。" }
     }
 }
 
@@ -424,7 +521,16 @@ export async function bookLesson(slotIds: string[], menuId: string, useCredit: b
             }
 
             // 3. Look up menu to determine lesson type
-            const menu = await tx.menu.findUnique({ where: { id: menuId } })
+            const menu = await tx.menu.findUnique({
+                where: { id: menuId },
+                select: {
+                    id: true,
+                    name: true,
+                    durationMin: true,
+                    price: true,
+                    description: true,
+                },
+            })
             const lessonType = menu
                 ? toLessonTypeFromMenu(menu as { name?: string | null; category?: unknown })
                 : "REGULAR"
@@ -477,6 +583,7 @@ export async function bookLesson(slotIds: string[], menuId: string, useCredit: b
             })
 
             revalidatePath("/student")
+            revalidatePath("/student/book")
             revalidatePath("/teacher/schedule")
 
             // Send Notification (Fire and forget)
@@ -623,6 +730,7 @@ export async function rescheduleLesson(lessonId: string, slotIds: string[]) {
             }
 
             revalidatePath("/student")
+            revalidatePath("/student/book")
             revalidatePath("/teacher/schedule")
 
             void notifyEvent("RESCHEDULE_COMPLETED", {
@@ -719,6 +827,7 @@ export async function cancelLesson(lessonId: string) {
             }
 
             revalidatePath("/student")
+            revalidatePath("/student/book")
             revalidatePath("/teacher/schedule")
 
             void notifyEvent("LESSON_CANCELLED", {
