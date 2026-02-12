@@ -36,7 +36,26 @@ model User {
   lessonsAsStudent Lesson[] @relation("StudentLessons")
   lessonsAsTeacher Lesson[] @relation("TeacherLessons")
   availabilities   Availability[] @relation("StudentAvailability")
+  monthlyAvailabilities MonthlyAvailability[] @relation("StudentMonthlyAvailability")
   cancellationCredits CancellationCredit[]
+}
+
+model MonthlyAvailability {
+  id        String   @id @default(cuid())
+  studentId String
+  student   User     @relation("StudentMonthlyAvailability", fields: [studentId], references: [id])
+  
+  year      Int
+  month     Int
+  
+  // JSON arrays of date-time strings (ISO format or similar) representing 30-min slots
+  availableSlots   Json? // e.g., ["2023-10-01T10:00:00.000Z", ...]
+  unavailableSlots Json? // e.g., ["2023-10-01T10:00:00.000Z", ...]
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([studentId, year, month])
 }
 
 model Lesson {

@@ -1,20 +1,39 @@
 import { prisma } from "@/lib/prisma"
 import { getStudentHistory } from "@/app/lib/actions/lesson"
+import { getMonthlyAvailability } from "@/app/lib/actions/availability"
 import { LessonReportDialog } from "@/components/teacher/LessonReportDialog"
+import { StudentAvailabilityCard } from "@/components/teacher/StudentAvailabilityCard"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { format } from "date-fns"
 import { ja } from "date-fns/locale"
 import { LESSON_STATUS_LABELS } from "@/lib/constants"
 
-export default async function StudentDetailPage({ params }: { params: { id: string } }) {
+export default async function StudentDetailPage({
+    params,
+    searchParams
+}: {
+    params: { id: string },
+    searchParams: { year?: string, month?: string }
+}) {
+    // Await params and searchParams before using
+    const { id } = await Promise.resolve(params);
+    const resolvedSearchParams = await Promise.resolve(searchParams);
+
     const student = await prisma.user.findUnique({
-        where: { id: params.id }
+        where: { id }
     })
 
     if (!student) return <div>生徒が見つかりません</div>
 
-    const { data: lessons } = await getStudentHistory(params.id)
+    const now = new Date()
+    const year = resolvedSearchParams.year ? parseInt(resolvedSearchParams.year) : now.getFullYear()
+    const month = resolvedSearchParams.month ? parseInt(resolvedSearchParams.month) : now.getMonth() + 1
+
+    const [{ data: lessons }, { data: availability }] = await Promise.all([
+        getStudentHistory(id),
+        getMonthlyAvailability(id, year, month)
+    ])
 
     return (
         <div className="space-y-6">
@@ -78,21 +97,30 @@ export default async function StudentDetailPage({ params }: { params: { id: stri
                     </CardContent>
                 </Card>
 
-                <Card>
-                    <CardHeader>
-                        <CardTitle>プロフィール</CardTitle>
-                    </CardHeader>
-                    <CardContent className="space-y-4">
-                        <div>
-                            <div className="text-sm font-medium text-slate-500">メール</div>
-                            <div>{student.email}</div>
-                        </div>
-                        <div>
-                            <div className="text-sm font-medium text-slate-500">登録日</div>
-                            <div>{format(student.createdAt, "yyyy年M月", { locale: ja })}</div>
-                        </div>
-                    </CardContent>
-                </Card>
+                <div className="space-y-6">
+                    <Card>
+                        <CardHeader>
+                            <CardTitle>プロフィール</CardTitle>
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                            <div>
+                                <div className="text-sm font-medium text-slate-500">メール</div>
+                                <div>{student.email}</div>
+                            </div>
+                            <div>
+                                <div className="text-sm font-medium text-slate-500">登録日</div>
+                                <div>{format(student.createdAt, "yyyy年M月", { locale: ja })}</div>
+                            </div>
+                        </CardContent>
+                    </Card>
+
+                    <StudentAvailabilityCard
+                        studentId={student.id}
+                        year={year}
+                        month={month}
+                        initialData={availability}
+                    />
+                </div>
             </div>
         </div>
     )

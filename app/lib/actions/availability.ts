@@ -61,3 +61,74 @@ export async function getLatestAvailability(studentId: string) {
         return { success: false, error: "Failed to fetch availability" }
     }
 }
+
+export async function getMonthlyAvailability(studentId: string, year: number, month: number) {
+    const session = await auth()
+    if (!session?.user) return { success: false, error: "Unauthorized" }
+
+    // Allow student to see own, or teacher to see any
+    if (session.user.role !== "TEACHER" && session.user.id !== studentId) {
+        return { success: false, error: "Unauthorized" }
+    }
+
+    try {
+        const availability = await prisma.monthlyAvailability.findUnique({
+            where: {
+                studentId_year_month: {
+                    studentId,
+                    year,
+                    month
+                }
+            }
+        })
+        return { success: true, data: availability }
+    } catch (error) {
+        console.error("Failed to fetch availability:", error)
+        return { success: false, error: "Failed to fetch availability" }
+    }
+}
+
+export async function saveMonthlyAvailability(
+    studentId: string,
+    year: number,
+    month: number,
+    data: { availableSlots: string[], unavailableSlots: string[] }
+) {
+    const session = await auth()
+    if (!session?.user) return { success: false, error: "Unauthorized" }
+
+    // Allow student to edit own, or teacher to edit any
+    if (session.user.role !== "TEACHER" && session.user.id !== studentId) {
+        return { success: false, error: "Unauthorized" }
+    }
+
+    try {
+        const availability = await prisma.monthlyAvailability.upsert({
+            where: {
+                studentId_year_month: {
+                    studentId,
+                    year,
+                    month
+                }
+            },
+            update: {
+                availableSlots: data.availableSlots,
+                unavailableSlots: data.unavailableSlots,
+            },
+            create: {
+                studentId,
+                year,
+                month,
+                availableSlots: data.availableSlots,
+                unavailableSlots: data.unavailableSlots,
+            }
+        })
+
+        revalidatePath(`/teacher/schedule/monthly`)
+        revalidatePath(`/teacher/students/${studentId}`)
+        return { success: true, data: availability }
+    } catch (error) {
+        console.error("Failed to save availability:", error)
+        return { success: false, error: "Failed to save availability" }
+    }
+}

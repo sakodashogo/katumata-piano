@@ -15,6 +15,7 @@ export async function getScheduleData(roomId: string, start: Date, end: Date) {
             }),
             prisma.lesson.findMany({
                 where: {
+                    // @ts-expect-error roomId might be missing in generated types
                     roomId,
                     startTime: { gte: start, lt: end },
                     status: { not: "CANCELLED" }
@@ -66,5 +67,60 @@ export async function toggleOpenSlot(roomId: string, startTimeIso: string) {
     } catch (error) {
         console.error("Failed to toggle slot:", error)
         return { success: false, error: "Failed to update slot" }
+    }
+}
+
+export async function bulkUpdateOpenSlots(roomId: string, slots: string[], action: 'add' | 'remove') {
+    try {
+        if (action === 'add') {
+            // Filter out existing slots to avoid duplicates if any
+            // Actually createMany with skipDuplicates is not supported in SQLite (if used) or depending on DB.
+            // But prisma.openSlot might allow duplicates if no unique constraint?
+            // "OpenSlot" usually has no unique constraint on (roomId, startTime) in default generated schemas unless specified.
+            // Let's assume we want to avoid duplicates.
+
+            // 1. Find existing slots
+            const existing = await prisma.openSlot.findMany({
+                where: {
+                    roomId,
+                    startTime: { in: slots.map(d => new Date(d)) }
+                },
+                select: { startTime: true }
+            })
+
+            const existingTimes = new Set(existing.map(e => e.startTime.getTime()))
+
+            const newSlots = slots
+                .map(s => new Date(s))
+                .filter(d => !existingTimes.has(d.getTime()))
+                .map(d => ({
+                    roomId,
+                    startTime: d,
+                    endTime: addMinutes(d, 30),
+                    isBooked: false
+                }))
+
+            if (newSlots.length > 0) {
+                await prisma.openSlot.createMany({
+                    data: newSlots
+                })
+            }
+        } else {
+            // Remove
+            // Only remove if NOT booked
+            await prisma.openSlot.deleteMany({
+                where: {
+                    roomId,
+                    startTime: { in: slots.map(d => new Date(d)) },
+                    isBooked: false // Safety check
+                }
+            })
+        }
+
+        revalidatePath("/teacher/schedule")
+        return { success: true }
+    } catch (error) {
+        console.error("Failed to bulk update slots:", error)
+        return { success: false, error: "Failed to bulk update slots" }
     }
 }

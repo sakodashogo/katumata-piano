@@ -7,7 +7,7 @@ import { redirect } from "next/navigation"
 import { format, startOfDay, endOfDay, startOfWeek, endOfWeek, addWeeks } from "date-fns"
 import { ja } from "date-fns/locale"
 import { LESSON_TYPE_LABELS, LESSON_STATUS_LABELS } from "@/lib/constants"
-import { CalendarDays, Users, Clock, BookOpen } from "lucide-react"
+import { CalendarDays, Users, Clock, BookOpen, CalendarCheck } from "lucide-react"
 import Link from "next/link"
 
 export default async function TeacherDashboard() {
@@ -191,6 +191,14 @@ export default async function TeacherDashboard() {
                         <CardContent className="pt-6 text-center">
                             <CalendarDays className="h-8 w-8 mx-auto mb-2 text-blue-600" />
                             <p className="font-medium">スケジュール管理</p>
+                        </CardContent>
+                    </Card>
+                </Link>
+                <Link href="/teacher/schedule/monthly" className="block">
+                    <Card className="hover:border-blue-300 transition-colors cursor-pointer">
+                        <CardContent className="pt-6 text-center">
+                            <CalendarCheck className="h-8 w-8 mx-auto mb-2 text-green-600" />
+                            <p className="font-medium">月間スケジュール作成</p>
                         </CardContent>
                     </Card>
                 </Link>
