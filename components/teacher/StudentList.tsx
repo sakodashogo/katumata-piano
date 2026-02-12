@@ -1,8 +1,13 @@
 "use client"
 
+import { useState } from "react"
 import { deleteStudent } from "@/app/lib/actions/student"
 import { Button } from "@/components/ui/button"
+import { ConfirmDialog } from "@/components/ui/confirm-dialog"
+import { useToast } from "@/components/ui/toast"
 import { Trash2 } from "lucide-react"
+import Link from "next/link"
+import { useRouter } from "next/navigation"
 
 type Student = {
     id: string
@@ -11,53 +16,73 @@ type Student = {
     createdAt: Date
 }
 
-import Link from "next/link"
-
 export function StudentList({ students }: { students: Student[] }) {
-    async function handleDelete(id: string) {
-        if (confirm("Are you sure you want to delete this student?")) {
-            await deleteStudent(id)
+    const [deleteTarget, setDeleteTarget] = useState<Student | null>(null)
+    const { toast } = useToast()
+    const router = useRouter()
+
+    async function handleDelete() {
+        if (!deleteTarget) return
+        try {
+            await deleteStudent(deleteTarget.id)
+            toast.success("生徒を削除しました")
+            router.refresh()
+        } catch {
+            toast.error("削除に失敗しました")
         }
+        setDeleteTarget(null)
     }
 
     if (students.length === 0) {
         return (
             <div className="rounded-lg border border-dashed border-slate-300 p-8 text-center text-slate-500">
-                No students found. Add one to get started!
+                生徒がまだいません。追加してください。
             </div>
         )
     }
 
     return (
-        <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-            <table className="w-full text-left text-sm text-slate-600">
-                <thead className="bg-slate-50 text-xs font-semibold uppercase text-slate-500">
-                    <tr>
-                        <th className="px-6 py-3">Name</th>
-                        <th className="px-6 py-3">Email</th>
-                        <th className="px-6 py-3">Joined</th>
-                        <th className="px-6 py-3 text-right">Actions</th>
-                    </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                    {students.map((student) => (
-                        <tr key={student.id} className="hover:bg-slate-50">
-                            <td className="px-6 py-4 font-medium text-slate-900">
-                                <Link href={`/teacher/students/${student.id}`} className="hover:underline text-blue-600">
-                                    {student.name}
-                                </Link>
-                            </td>
-                            <td className="px-6 py-4">{student.email}</td>
-                            <td className="px-6 py-4">{new Date(student.createdAt).toLocaleDateString()}</td>
-                            <td className="px-6 py-4 text-right">
-                                <Button variant="ghost" size="sm" onClick={() => handleDelete(student.id)} className="text-red-500 hover:bg-red-50 hover:text-red-600">
-                                    <Trash2 className="h-4 w-4" />
-                                </Button>
-                            </td>
+        <>
+            <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+                <table className="w-full text-left text-sm text-slate-600">
+                    <thead className="bg-slate-50 text-xs font-semibold uppercase text-slate-500">
+                        <tr>
+                            <th className="px-6 py-3">氏名</th>
+                            <th className="px-6 py-3">メール</th>
+                            <th className="px-6 py-3">登録日</th>
+                            <th className="px-6 py-3 text-right">操作</th>
                         </tr>
-                    ))}
-                </tbody>
-            </table>
-        </div>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                        {students.map((student) => (
+                            <tr key={student.id} className="hover:bg-slate-50">
+                                <td className="px-6 py-4 font-medium text-slate-900">
+                                    <Link href={`/teacher/students/${student.id}`} className="hover:underline text-blue-600">
+                                        {student.name}
+                                    </Link>
+                                </td>
+                                <td className="px-6 py-4">{student.email}</td>
+                                <td className="px-6 py-4">{new Date(student.createdAt).toLocaleDateString("ja-JP")}</td>
+                                <td className="px-6 py-4 text-right">
+                                    <Button variant="ghost" size="sm" onClick={() => setDeleteTarget(student)} className="text-red-500 hover:bg-red-50 hover:text-red-600">
+                                        <Trash2 className="h-4 w-4" />
+                                    </Button>
+                                </td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+
+            <ConfirmDialog
+                open={!!deleteTarget}
+                onOpenChange={(open) => !open && setDeleteTarget(null)}
+                title="生徒を削除"
+                description={`${deleteTarget?.name || "この生徒"} を削除してもよろしいですか？この操作は取り消せません。`}
+                confirmLabel="削除する"
+                onConfirm={handleDelete}
+                destructive
+            />
+        </>
     )
 }

@@ -6,9 +6,9 @@ export default function LoginPage() {
         <div className="flex justify-center items-center min-h-screen bg-slate-50 p-4">
             <Card className="w-full max-w-md">
                 <CardHeader className="space-y-1">
-                    <CardTitle className="text-2xl font-bold text-center">Login</CardTitle>
+                    <CardTitle className="text-2xl font-bold text-center">ログイン</CardTitle>
                     <CardDescription className="text-center">
-                        Enter your credentials to access your account
+                        メールアドレスとパスワードを入力してください
                     </CardDescription>
                 </CardHeader>
                 <CardContent>

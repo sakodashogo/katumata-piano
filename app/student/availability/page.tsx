@@ -17,9 +17,9 @@ export default async function AvailabilityPage() {
     return (
         <div className="container max-w-2xl mx-auto py-8 space-y-8">
             <div>
-                <h1 className="text-3xl font-bold text-slate-900">My Availability</h1>
+                <h1 className="text-3xl font-bold text-slate-900">空き状況の登録</h1>
                 <p className="text-slate-500">
-                    Help us create your lesson schedule by letting us know when you can attend.
+                    レッスンに参加できる曜日を教えてください。
                 </p>
             </div>
 

@@ -4,6 +4,7 @@ import { useState, useTransition } from "react"
 import { toggleOpenSlot } from "@/app/lib/actions/schedule"
 import { cn } from "@/lib/utils"
 import { addDays, format, isSameDay, startOfWeek, addMinutes, setHours, setMinutes, isSameMinute } from "date-fns"
+import { ja } from "date-fns/locale"
 import { Button } from "@/components/ui/button"
 import { ChevronLeft, ChevronRight, Loader2 } from "lucide-react"
 import { useRouter } from "next/navigation"
@@ -28,12 +29,10 @@ export function WeeklySchedule({
     const router = useRouter()
     const [isPending, startTransition] = useTransition()
 
-    // Grid configuration
-    const startHour = 10 // 10:00
-    const endHour = 20 // 20:00
+    const startHour = 10
+    const endHour = 20
     const days = Array.from({ length: 7 }, (_, i) => addDays(startOfWeek(date, { weekStartsOn: 1 }), i))
 
-    // Generate time slots (30 min intervals)
     const timeSlots: Date[] = []
     let currentTime = setMinutes(setHours(date, startHour), 0)
     const endTime = setMinutes(setHours(date, endHour), 0)
@@ -44,9 +43,7 @@ export function WeeklySchedule({
     }
 
     const handleToggle = async (day: Date, time: Date) => {
-        // Construct the specific datetime for this cell
         const cellDateTime = setMinutes(setHours(day, time.getHours()), time.getMinutes())
-
         startTransition(async () => {
             await toggleOpenSlot(roomId, cellDateTime.toISOString())
         })
@@ -73,7 +70,7 @@ export function WeeklySchedule({
                             roomId === "A" ? "bg-white shadow text-slate-900" : "text-slate-500 hover:text-slate-900"
                         )}
                     >
-                        Room A
+                        A教室
                     </button>
                     <button
                         onClick={() => switchRoom("B")}
@@ -82,7 +79,7 @@ export function WeeklySchedule({
                             roomId === "B" ? "bg-white shadow text-slate-900" : "text-slate-500 hover:text-slate-900"
                         )}
                     >
-                        Room B
+                        B教室
                     </button>
                 </div>
 
@@ -91,7 +88,7 @@ export function WeeklySchedule({
                         <ChevronLeft className="h-4 w-4" />
                     </Button>
                     <span className="font-medium text-slate-900">
-                        {format(days[0], "MMM d")} - {format(days[6], "MMM d, yyyy")}
+                        {format(days[0], "M月d日", { locale: ja })} - {format(days[6], "M月d日", { locale: ja })}
                     </span>
                     <Button variant="outline" size="sm" onClick={() => navigateWeek('next')}>
                         <ChevronRight className="h-4 w-4" />
@@ -104,11 +101,11 @@ export function WeeklySchedule({
                 <table className="w-full min-w-[800px] text-center text-sm">
                     <thead className="bg-slate-50 text-slate-500">
                         <tr>
-                            <th className="w-20 px-4 py-3 font-medium">Time</th>
+                            <th className="w-20 px-4 py-3 font-medium">時間</th>
                             {days.map((day) => (
                                 <th key={day.toString()} className="px-4 py-3 font-medium">
                                     <div className="flex flex-col">
-                                        <span className="text-xs uppercase">{format(day, "EEE")}</span>
+                                        <span className="text-xs">{format(day, "E", { locale: ja })}</span>
                                         <span className="text-lg text-slate-900">{format(day, "d")}</span>
                                     </div>
                                 </th>
@@ -142,7 +139,7 @@ export function WeeklySchedule({
                                                             : "hover:bg-slate-100 text-transparent hover:text-slate-400"
                                                 )}
                                             >
-                                                {isBooked ? "Booked" : isOpen ? "Open" : "+"}
+                                                {isBooked ? "予約済" : isOpen ? "空き" : "+"}
                                             </button>
                                         </td>
                                     )
@@ -155,7 +152,7 @@ export function WeeklySchedule({
             {isPending && (
                 <div className="fixed bottom-4 right-4 flex items-center gap-2 rounded-full bg-slate-900 px-4 py-2 text-sm text-white shadow-lg">
                     <Loader2 className="h-4 w-4 animate-spin" />
-                    Saving...
+                    保存中...
                 </div>
             )}
         </div>

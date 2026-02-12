@@ -9,11 +9,13 @@ import { Label } from "@/components/ui/label"
 import { Input } from "@/components/ui/input"
 import { FileText, Loader2 } from "lucide-react"
 import { useRouter } from "next/navigation"
+import { useToast } from "@/components/ui/toast"
 
 export function LessonReportDialog({ lesson }: { lesson: any }) {
     const [open, setOpen] = useState(false)
     const [loading, setLoading] = useState(false)
     const router = useRouter()
+    const { toast } = useToast()
 
     async function handleSubmit(formData: FormData) {
         setLoading(true)
@@ -25,7 +27,7 @@ export function LessonReportDialog({ lesson }: { lesson: any }) {
             setOpen(false)
             router.refresh()
         } else {
-            alert("Failed to update report")
+            toast.error("レポートの保存に失敗しました")
         }
         setLoading(false)
     }
@@ -35,38 +37,38 @@ export function LessonReportDialog({ lesson }: { lesson: any }) {
             <DialogTrigger asChild>
                 <Button variant="outline" size="sm">
                     <FileText className="mr-2 h-4 w-4" />
-                    {lesson.report ? "Edit Report" : "Add Report"}
+                    {lesson.report ? "レポート編集" : "レポート作成"}
                 </Button>
             </DialogTrigger>
             <DialogContent className="sm:max-w-[425px]">
                 <DialogHeader>
-                    <DialogTitle>Lesson Report</DialogTitle>
+                    <DialogTitle>レッスンレポート</DialogTitle>
                     <DialogDescription>
-                        Update records for the lesson on {new Date(lesson.startTime).toLocaleDateString()}.
+                        {new Date(lesson.startTime).toLocaleDateString("ja-JP")} のレッスン記録を更新します。
                     </DialogDescription>
                 </DialogHeader>
                 <form action={handleSubmit}>
                     <div className="grid gap-4 py-4">
                         <div className="grid gap-2">
-                            <Label htmlFor="report">Lesson Notes</Label>
+                            <Label htmlFor="report">レッスンメモ</Label>
                             <Textarea
                                 id="report"
                                 name="report"
                                 defaultValue={lesson.report || ""}
-                                placeholder="What was improved? What needs work?"
+                                placeholder="上達した点、課題など"
                             />
                         </div>
                         <div className="grid gap-2">
-                            <Label htmlFor="homework">Homework</Label>
+                            <Label htmlFor="homework">宿題</Label>
                             <Textarea
                                 id="homework"
                                 name="homework"
                                 defaultValue={lesson.homework || ""}
-                                placeholder="Bach Invention No.1, etc."
+                                placeholder="バッハ インヴェンション 第1番 など"
                             />
                         </div>
                         <div className="grid gap-2">
-                            <Label htmlFor="rating">Rating (1-5)</Label>
+                            <Label htmlFor="rating">評価（1-5）</Label>
                             <Input
                                 id="rating"
                                 name="rating"
@@ -80,7 +82,7 @@ export function LessonReportDialog({ lesson }: { lesson: any }) {
                     <DialogFooter>
                         <Button type="submit" disabled={loading}>
                             {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                            Save Report
+                            保存する
                         </Button>
                     </DialogFooter>
                 </form>

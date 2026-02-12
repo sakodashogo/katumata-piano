@@ -10,7 +10,7 @@ const WORKING_HOURS_START = 10; // 10:00
 const WORKING_HOURS_END = 20;   // 20:00
 const SLOT_DURATION_MINUTES = 30; // 30 minutes slots
 
-export async function syncScheduleFromGoogle(startDateStr: string, endDateStr: string, room: string = "A") {
+export async function syncScheduleFromGoogle(startDateStr: string, endDateStr: string, roomId: string = "A") {
     const calendarId = process.env.GOOGLE_CALENDAR_ID;
     if (!calendarId) {
         return { success: false, error: "Google Calendar ID is not configured." };

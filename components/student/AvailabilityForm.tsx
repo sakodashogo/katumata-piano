@@ -9,34 +9,35 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter }
 import { Label } from "@/components/ui/label"
 import { Loader2, Save } from "lucide-react"
 import { useRouter } from "next/navigation"
+import { useToast } from "@/components/ui/toast"
 
 const DAYS = [
-    { id: "monday", label: "Monday" },
-    { id: "tuesday", label: "Tuesday" },
-    { id: "wednesday", label: "Wednesday" },
-    { id: "thursday", label: "Thursday" },
-    { id: "friday", label: "Friday" },
-    { id: "saturday", label: "Saturday" },
-    { id: "sunday", label: "Sunday" },
+    { id: "monday", label: "月曜日" },
+    { id: "tuesday", label: "火曜日" },
+    { id: "wednesday", label: "水曜日" },
+    { id: "thursday", label: "木曜日" },
+    { id: "friday", label: "金曜日" },
+    { id: "saturday", label: "土曜日" },
+    { id: "sunday", label: "日曜日" },
 ]
 
 export function AvailabilityForm({ initialData }: { initialData?: any }) {
     const [loading, setLoading] = useState(false)
     const router = useRouter()
+    const { toast } = useToast()
 
     async function handleSubmit(formData: FormData) {
         setLoading(true)
         const res = await saveAvailability(formData)
         if (res?.success) {
-            alert("Availability saved!")
+            toast.success("保存しました")
             router.refresh()
         } else {
-            alert("Failed to save.")
+            toast.error("保存に失敗しました")
         }
         setLoading(false)
     }
 
-    // Checking if a day is selected in initialData (assuming JSON array of strings)
     const isChecked = (dayId: string) => {
         if (!initialData?.days) return false
         return (initialData.days as string[]).includes(dayId)
@@ -46,10 +47,9 @@ export function AvailabilityForm({ initialData }: { initialData?: any }) {
         <form action={handleSubmit}>
             <Card>
                 <CardHeader>
-                    <CardTitle>Lesson Availability Preference</CardTitle>
+                    <CardTitle>レッスン希望曜日</CardTitle>
                     <CardDescription>
-                        Select the days you are generally available for lessons.
-                        Use the notes section for specific times (e.g., "After 4 PM").
+                        レッスン可能な曜日を選択してください。備考欄に希望時間帯等を記入できます。
                     </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-6">
@@ -70,11 +70,11 @@ export function AvailabilityForm({ initialData }: { initialData?: any }) {
                     </div>
 
                     <div className="space-y-2">
-                        <Label htmlFor="note">Additional Notes</Label>
+                        <Label htmlFor="note">備考</Label>
                         <Textarea
                             id="note"
                             name="note"
-                            placeholder="e.g. Prefer 16:30 - 18:00. Unavailable during school holidays."
+                            placeholder="例: 16:30〜18:00 希望。学校の長期休暇中は不可。"
                             defaultValue={initialData?.note || ""}
                             className="min-h-[100px]"
                         />
@@ -84,7 +84,7 @@ export function AvailabilityForm({ initialData }: { initialData?: any }) {
                     <Button disabled={loading} className="w-full md:w-auto">
                         {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                         <Save className="mr-2 h-4 w-4" />
-                        Save Preferences
+                        保存する
                     </Button>
                 </CardFooter>
             </Card>

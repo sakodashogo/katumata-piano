@@ -16,7 +16,7 @@ export default async function BookingPage({
     return (
         <div className="container max-w-4xl mx-auto py-8">
             <h1 className="text-3xl font-bold mb-8 text-center">
-                {rescheduleId ? "Reschedule Lesson" : "Book a Lesson"}
+                {rescheduleId ? "日時変更" : "レッスン予約"}
             </h1>
             <BookingWizard 
                 menus={menus as any[]} 

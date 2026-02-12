@@ -24,7 +24,7 @@ export default async function SchedulePage({
             <div className="flex justify-between items-center">
                 <div>
                     <h1 className="text-2xl font-bold text-slate-900">スケジュール管理</h1>
-                    <p className="text-slate-500">Room {room} の空き枠管理</p>
+                    <p className="text-slate-500">{room}教室 の空き枠管理</p>
                 </div>
                 <SyncButton currentDate={date} roomId={room} />
             </div>

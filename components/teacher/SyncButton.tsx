@@ -5,10 +5,11 @@ import { Button } from "@/components/ui/button"
 import { Loader2, RefreshCw } from "lucide-react"
 import { syncScheduleFromGoogle } from "@/app/lib/actions/cal-sync"
 import { addDays, format, startOfWeek, endOfWeek } from "date-fns"
-import { toast } from "sonner" // Assuming sonner is used, or alert/console if not.
+import { useToast } from "@/components/ui/toast"
 
 export function SyncButton({ currentDate, roomId }: { currentDate: Date, roomId: string }) {
     const [isPending, startTransition] = useTransition()
+    const { toast } = useToast()
 
     // Sync current week + next 4 weeks (standard planning horizon)
     const handleSync = () => {
@@ -19,13 +20,12 @@ export function SyncButton({ currentDate, roomId }: { currentDate: Date, roomId:
             try {
                 const res = await syncScheduleFromGoogle(start.toISOString(), end.toISOString(), roomId)
                 if (res.success) {
-                    alert(`Sync complete! created/verified slots.`)
-                    // In a real app, use toast.success
+                    toast.success("同期が完了しました")
                 } else {
-                    alert(`Sync failed: ${res.error}`)
+                    toast.error(`同期に失敗しました: ${res.error}`)
                 }
             } catch (e) {
-                alert("An unexpected error occurred.")
+                toast.error("予期しないエラーが発生しました")
             }
         })
     }
@@ -38,7 +38,7 @@ export function SyncButton({ currentDate, roomId }: { currentDate: Date, roomId:
             className="gap-2"
         >
             <RefreshCw className={`h-4 w-4 ${isPending ? 'animate-spin' : ''}`} />
-            {isPending ? "Syncing..." : "Sync GCal"}
+            {isPending ? "同期中..." : "Googleカレンダー同期"}
         </Button>
     )
 }

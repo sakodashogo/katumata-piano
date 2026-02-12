@@ -11,7 +11,7 @@ function LoginButton() {
 
     return (
         <Button className="w-full mt-4" disabled={pending}>
-            {pending ? 'Logging in...' : 'Login'}
+            {pending ? 'ログイン中...' : 'ログイン'}
         </Button>
     )
 }
@@ -24,17 +24,15 @@ export default function LoginForm() {
             <Input
                 type="email"
                 name="email"
-                placeholder="Email"
+                placeholder="メールアドレス"
                 required
-                label="Email"
             />
             <Input
                 type="password"
                 name="password"
-                placeholder="Password"
+                placeholder="パスワード"
                 required
                 minLength={6}
-                label="Password"
             />
             <LoginButton />
             {errorMessage && (

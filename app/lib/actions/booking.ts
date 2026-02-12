@@ -65,7 +65,7 @@ export async function bookLesson(slotIds: string[], menuId: string) {
             })
 
             if (slots.some((s) => s.isBooked)) {
-                throw new Error("One or more selected slots are no longer available.")
+                throw new Error("選択された枠はすでに予約済みです。")
             }
 
             // 2. Mark slots as booked
@@ -74,8 +74,22 @@ export async function bookLesson(slotIds: string[], menuId: string) {
                 data: { isBooked: true },
             })
 
-            // 3. Create Lesson
-            // Assuming single slot for MVP, or taking start of first slot and end of last
+            // 3. Look up menu to determine lesson type
+            const menu = await tx.menu.findUnique({ where: { id: menuId } })
+            let lessonType: "REGULAR" | "AD_HOC" | "PRACTICE" = "REGULAR"
+            if (menu) {
+                const name = menu.name.toLowerCase()
+                if (name.includes("自主練") || name.includes("practice")) {
+                    lessonType = "PRACTICE"
+                } else if (name.includes("追加") || name.includes("ad_hoc") || name.includes("ad hoc")) {
+                    lessonType = "AD_HOC"
+                }
+            }
+
+            // 4. Look up teacher (first TEACHER user)
+            const teacher = await tx.user.findFirst({ where: { role: "TEACHER" } })
+
+            // 5. Create Lesson
             const sortedSlots = slots.sort((a, b) => a.startTime.getTime() - b.startTime.getTime())
             const startTime = sortedSlots[0].startTime
             const endTime = sortedSlots[sortedSlots.length - 1].endTime
@@ -83,11 +97,11 @@ export async function bookLesson(slotIds: string[], menuId: string) {
             await tx.lesson.create({
                 data: {
                     studentId: session.user.id!,
-                    teacherId: "teacher-id-placeholder", // We might need to store teacherId on OpenSlot or look it up
+                    teacherId: teacher?.id ?? null,
                     startTime,
                     endTime,
                     status: "BOOKED",
-                    type: "REGULAR", // or derive from Menu
+                    type: lessonType,
                 },
             })
 
