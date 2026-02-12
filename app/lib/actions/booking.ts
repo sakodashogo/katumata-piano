@@ -186,18 +186,17 @@ export async function rescheduleLesson(lessonId: string, slotIds: string[]) {
                 throw new Error("Lesson not found or unauthorized.")
             }
 
-            // 2. Validate Cancellation Rules (2 days prior)
+            // 2. Validate Cancellation Rules (24 hours prior)
             const lessonStart = new Date(lesson.startTime)
-            const deadline = subDays(lessonStart, 2)
             const now = new Date()
+            const diffInHours = (lessonStart.getTime() - now.getTime()) / (1000 * 60 * 60)
 
-            // If strictly enforcing 2-day rule for rescheduling too:
-            if (!isBefore(now, deadline)) {
-                // Determine if we allow late reschedule? Usually no.
-                throw new Error("振替はレッスンの2日前まで可能です。")
+            if (diffInHours < 24) {
+                throw new Error("日程変更はレッスンの24時間前まで可能です。")
             }
 
-            // 3. Check Credit Limit (Max 2 per month)
+            // 3. Check Credit Limit (Max 2 per month - placeholder, adjust as needed)
+            // The requirement says "当月中のみ有効", so we check the month of the lesson.
             const year = lessonStart.getFullYear()
             const month = lessonStart.getMonth() + 1
 
@@ -211,6 +210,9 @@ export async function rescheduleLesson(lessonId: string, slotIds: string[]) {
                 }
             })
 
+            // Actually, for rescheduling, we might want to check the REMAINING credits.
+            // If they are rescheduling a regular lesson, they just need "reschedule rights".
+            // Let's assume they have 2 rights per month.
             const currentCount = credit?.count ?? 0
             if (currentCount >= 2) {
                 throw new Error("今月の振替回数上限（2回）に達しています。")
@@ -228,7 +230,7 @@ export async function rescheduleLesson(lessonId: string, slotIds: string[]) {
             const newStart = sortedSlots[0].startTime
             const newEnd = sortedSlots[sortedSlots.length - 1].endTime
 
-            // 5. Update Credit Usage (Reschedule = Cancel + Use)
+            // 5. Update Credit Usage
             await tx.cancellationCredit.upsert({
                 where: {
                     studentId_year_month: {
@@ -256,7 +258,7 @@ export async function rescheduleLesson(lessonId: string, slotIds: string[]) {
                 data: {
                     startTime: newStart,
                     endTime: newEnd,
-                    roomId: sortedSlots[0].roomId, // Update room if needed
+                    roomId: sortedSlots[0].roomId,
                     updatedAt: new Date(),
                 }
             })
@@ -267,14 +269,13 @@ export async function rescheduleLesson(lessonId: string, slotIds: string[]) {
                 data: { isBooked: true },
             })
 
-            // 8. Free old slots (best effort)
+            // 8. Free old slots
             await tx.openSlot.updateMany({
                 where: {
                     startTime: lesson.startTime,
                     endTime: lesson.endTime,
-                    isBooked: true // Only if it was booked as an open slot originally?
-                    // Actually, for fixed lessons, there might not be an OpenSlot record.
-                    // But if there was, we free it.
+                    roomId: lesson.roomId ?? undefined,
+                    isBooked: true
                 },
                 data: { isBooked: false }
             })
@@ -311,7 +312,6 @@ export async function cancelLesson(lessonId: string) {
                 throw new Error("レッスンが見つかりません。")
             }
 
-            // Students can only cancel their own lessons; teachers can cancel any
             if (session.user.role !== "TEACHER" && lesson.studentId !== session.user.id) {
                 throw new Error("このレッスンをキャンセルする権限がありません。")
             }
@@ -320,23 +320,22 @@ export async function cancelLesson(lessonId: string) {
                 throw new Error("このレッスンはすでにキャンセル済みです。")
             }
 
+            const lessonStart = new Date(lesson.startTime)
+            const now = new Date()
+            const diffInHours = (lessonStart.getTime() - now.getTime()) / (1000 * 60 * 60)
+            const isEligibleForCredit = diffInHours >= 24
+
             // 1. Cancel the lesson
             await tx.lesson.update({
                 where: { id: lessonId },
                 data: { status: "CANCELLED" },
             })
 
-            // 2. Grant Credit if eligible (2 days prior)
-            const lessonStart = new Date(lesson.startTime)
-            const deadline = subDays(lessonStart, 2)
-            const now = new Date()
-            const isEligibleForCredit = isBefore(now, deadline)
-
-            if (isEligibleForCredit) {
+            // 2. Grant Credit if eligible (24 hours prior)
+            if (isEligibleForCredit && session.user.role !== "TEACHER") {
                 const year = lessonStart.getFullYear()
                 const month = lessonStart.getMonth() + 1
 
-                // Upsert credit
                 await tx.cancellationCredit.upsert({
                     where: {
                         studentId_year_month: {
@@ -358,11 +357,14 @@ export async function cancelLesson(lessonId: string) {
                 })
             }
 
-            // 3. Free up the open slot (best effort)
+            // 3. Free up the open slot 
+            // Only if it's > 24h OR if the teacher is the one cancelling?
+            // Actually, let's always free the slot so it can be reused, even if student loses credit.
             await tx.openSlot.updateMany({
                 where: {
                     startTime: lesson.startTime,
                     endTime: lesson.endTime,
+                    roomId: lesson.roomId ?? undefined,
                     isBooked: true,
                 },
                 data: { isBooked: false },
@@ -374,6 +376,7 @@ export async function cancelLesson(lessonId: string) {
             sendNotification("CANCEL", {
                 studentId: lesson.studentId,
                 startTime: lesson.startTime,
+                eligibleForCredit: isEligibleForCredit,
                 lessonId,
             })
 

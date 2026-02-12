@@ -23,14 +23,22 @@ async function main() {
 
     // Seed Menus
     const menus = [
-        { name: "自主練 (Practice)", durationMin: 30, price: 0, description: "Practice using the grand piano." },
-        { name: "追加レッスン (Solo)", durationMin: 30, price: 2000, description: "Extra solo lesson." },
-        { name: "追加レッスン (Duet)", durationMin: 30, price: 2000, description: "Extra duet lesson." },
+        { name: "自主練習", durationMin: 30, price: 0, description: "Practice using the piano room." },
+        { name: "自主練習 (45分)", durationMin: 45, price: 0, description: "Practice using the piano room (45 min)." },
+        { name: "自主練習 (60分)", durationMin: 60, price: 0, description: "Practice using the piano room (60 min)." },
+        { name: "ソロの追加レッスン", durationMin: 30, price: 3000, description: "Extra solo lesson." },
+        { name: "ソロの追加レッスン (45分)", durationMin: 45, price: 4500, description: "Extra solo lesson (45 min)." },
+        { name: "ソロの追加レッスン (60分)", durationMin: 60, price: 6000, description: "Extra solo lesson (60 min)." },
+        { name: "連弾の追加レッスン", durationMin: 30, price: 3000, description: "Extra duet lesson." },
+        { name: "連弾の追加レッスン (45分)", durationMin: 45, price: 4500, description: "Extra duet lesson (45 min)." },
+        { name: "連弾の追加レッスン (60分)", durationMin: 60, price: 6000, description: "Extra duet lesson (60 min)." },
     ]
 
     for (const menu of menus) {
-        await prisma.menu.create({
-            data: menu
+        await prisma.menu.upsert({
+            where: { name: menu.name },
+            update: menu,
+            create: menu
         })
     }
     console.log("Menus seeded.")

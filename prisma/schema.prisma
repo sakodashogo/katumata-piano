@@ -16,6 +16,8 @@ enum LessonType {
   REGULAR
   AD_HOC
   PRACTICE
+  SOLO_ADDITIONAL
+  DUET_ADDITIONAL
 }
 
 enum LessonStatus {
@@ -91,11 +93,12 @@ model OpenSlot {
   startTime DateTime
   endTime   DateTime
   isBooked  Boolean  @default(false)
+  isPublic  Boolean  @default(false) // Whether it's visible to students
 }
 
 model Menu {
     id          String   @id @default(cuid())
-    name        String
+    name        String   @unique
     durationMin Int
     price       Int      @default(0)
     description String?

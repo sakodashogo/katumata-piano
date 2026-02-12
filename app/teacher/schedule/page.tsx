@@ -1,6 +1,7 @@
 import { getScheduleData } from "@/app/lib/actions/schedule"
 import { WeeklySchedule } from "@/components/teacher/WeeklySchedule"
 import { startOfWeek, endOfWeek } from "date-fns"
+import { getStudents } from "@/app/lib/actions/student"
 
 import { SyncButton } from "@/components/teacher/SyncButton"
 
@@ -18,8 +19,11 @@ export default async function SchedulePage({
     const end = endOfWeek(date, { weekStartsOn: 1 })
 
     const { data } = await getScheduleData(room, start, end)
+    const { data: studentsData } = await getStudents()
+
     const slots = data?.slots || []
     const lessons = data?.lessons || []
+    const students = studentsData || []
 
     return (
         <div className="space-y-6">
@@ -31,7 +35,13 @@ export default async function SchedulePage({
                 <SyncButton currentDate={date} roomId={room} />
             </div>
 
-            <WeeklySchedule roomId={room} date={date} slots={slots as any[]} lessons={lessons as any[]} />
+            <WeeklySchedule
+                roomId={room}
+                date={date}
+                slots={slots as any[]}
+                lessons={lessons as any[]}
+                students={students as any[]}
+            />
         </div>
     )
 }

@@ -18,8 +18,8 @@ export default async function BookingPage({
 
     const menus = menusData.data || []
 
-    const rescheduleId = params.rescheduleId as string | undefined
-    const menuId = params.menuId as string | undefined
+    const rescheduleId = params.reschedule as string | undefined
+    const menuId = params.menu as string | undefined
 
     return (
         <div className="container max-w-4xl mx-auto py-8">

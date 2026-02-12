@@ -50,8 +50,15 @@ export function LessonActions({ lessonId, menuId }: { lessonId: string; menuId?:
                 open={showCancel}
                 onOpenChange={setShowCancel}
                 title="レッスンをキャンセル"
-                description="このレッスンをキャンセルしてもよろしいですか？キャンセル後、枠は他の生徒に開放されます。"
-                confirmLabel="キャンセルする"
+                description={
+                    <div className="space-y-2">
+                        <p>このレッスンをキャンセルしてもよろしいですか？</p>
+                        <p className="bg-amber-50 p-3 rounded-lg border border-amber-100 text-amber-800 text-xs font-bold ring-4 ring-amber-50/50">
+                            【注意】レッスンの24時間前を過ぎてキャンセルした場合、振替チケットは付与されません。
+                        </p>
+                    </div>
+                }
+                confirmLabel="キャンセルを確定する"
                 onConfirm={handleCancel}
                 destructive
             />
