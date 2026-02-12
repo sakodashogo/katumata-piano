@@ -1,7 +1,7 @@
 "use client"
 
-import { useState, useEffect, useMemo } from "react"
-import { getAvailableSlots, bookLesson, rescheduleLesson, getAvailableSlotsInRange } from "@/app/lib/actions/booking"
+import { useState, useEffect, useCallback } from "react"
+import { bookLesson, getBookableDaysInRange, getBookableStartTimes, rescheduleLesson } from "@/app/lib/actions/booking"
 import { Button } from "@/components/ui/button"
 import {
     Card,
@@ -12,7 +12,7 @@ import {
     CardFooter
 } from "@/components/ui/card"
 import { Calendar } from "@/components/ui/calendar"
-import { format, isSameDay, addMonths, startOfMonth, endOfMonth, isSameMonth } from "date-fns"
+import { format, addMonths, startOfMonth, endOfMonth } from "date-fns"
 import { ja } from "date-fns/locale"
 import {
     Loader2,
@@ -41,7 +41,7 @@ type Menu = {
 }
 
 type Slot = {
-    id: string
+    slotIds: string[]
     startTime: Date
     endTime: Date
     roomId: string
@@ -75,40 +75,50 @@ export function BookingWizard({
 
     // Fetch monthly availability
     useEffect(() => {
+        if (!selectedMenu) return
         const fetchMonthlyAvailability = async () => {
             const start = startOfMonth(currentMonth)
             const end = endOfMonth(currentMonth)
-            const res = await getAvailableSlotsInRange(start.toISOString(), end.toISOString())
+            const res = await getBookableDaysInRange(start.toISOString(), end.toISOString(), selectedMenu.id)
             if (res.success && res.data) {
-                const dates = new Set(res.data.map((s: { startTime: Date }) => format(new Date(s.startTime), "yyyy-MM-dd")))
+                const dates = new Set(res.data as string[])
                 setMonthlyAvailability(dates)
             }
         }
-        fetchMonthlyAvailability()
-    }, [currentMonth])
+        void fetchMonthlyAvailability()
+    }, [currentMonth, selectedMenu])
 
-    // Fetch slots when date or menu changes
-    useEffect(() => {
-        if (selectedDate && selectedMenu) {
-            handleDateSelect(selectedDate)
-        }
-    }, [selectedDate, selectedMenu])
-
-    const handleDateSelect = async (date: Date | undefined) => {
-        setSelectedDate(date)
-        setSelectedSlot(null)
-        if (date) {
+    const fetchSlotsForDate = useCallback(async (date: Date, menuId: string) => {
             setLoading(true)
-            const res = await getAvailableSlots(date.toISOString())
-            if (res.success) {
-                // Filter slots that can accommodate the menu duration?
-                // Currently assuming slots are 30 mins and menus match.
-                // In a more complex system, we'd find contiguous blocks.
-                setAvailableSlots(res.data as any)
+            const res = await getBookableStartTimes(date.toISOString(), menuId)
+            if (res.success && res.data) {
+                setAvailableSlots(res.data as Slot[])
+            } else {
+                setAvailableSlots([])
             }
             setLoading(false)
+    }, [])
+
+    const handleDateSelect = useCallback(async (date: Date | undefined) => {
+        setSelectedDate(date)
+        setSelectedSlot(null)
+        if (date && selectedMenu) {
+            await fetchSlotsForDate(date, selectedMenu.id)
+        } else {
+            setAvailableSlots([])
         }
-    }
+    }, [fetchSlotsForDate, selectedMenu])
+
+    const handleMenuSelect = useCallback(async (menu: Menu) => {
+        setSelectedMenu(menu)
+        setSelectedSlot(null)
+        setMonthlyAvailability(new Set())
+        if (selectedDate) {
+            await fetchSlotsForDate(selectedDate, menu.id)
+        } else {
+            setAvailableSlots([])
+        }
+    }, [fetchSlotsForDate, selectedDate])
 
     const handleBooking = async () => {
         if (!selectedSlot || !selectedMenu) return
@@ -116,9 +126,9 @@ export function BookingWizard({
 
         let res: { success: boolean; error?: string };
         if (rescheduleLessonId) {
-            res = await rescheduleLesson(rescheduleLessonId, [selectedSlot.id])
+            res = await rescheduleLesson(rescheduleLessonId, selectedSlot.slotIds)
         } else {
-            res = await bookLesson([selectedSlot.id], selectedMenu.id, useTicket)
+            res = await bookLesson(selectedSlot.slotIds, selectedMenu.id, useTicket)
         }
 
         if (res.success) {
@@ -260,7 +270,7 @@ export function BookingWizard({
                                                 ? "border-blue-600 bg-blue-50/30 ring-4 ring-blue-50"
                                                 : "border-slate-100 bg-white hover:border-blue-200 shadow-sm hover:shadow-xl"
                                         )}
-                                        onClick={() => setSelectedMenu(menu)}
+                                        onClick={() => void handleMenuSelect(menu)}
                                     >
                                         <CardHeader className="pb-2">
                                             <div className="flex justify-between items-start mb-2">
@@ -406,15 +416,20 @@ export function BookingWizard({
                                         </div>
                                     ) : availableSlots.length > 0 ? (
                                         <div className="grid grid-cols-2 gap-3 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
-                                            {availableSlots.map((slot) => (
+                                            {availableSlots.map((slot) => {
+                                                const isSelected =
+                                                    !!selectedSlot &&
+                                                    new Date(selectedSlot.startTime).getTime() === new Date(slot.startTime).getTime() &&
+                                                    selectedSlot.roomId === slot.roomId
+                                                return (
                                                 <motion.button
-                                                    key={slot.id}
+                                                    key={`${slot.roomId}-${new Date(slot.startTime).toISOString()}`}
                                                     whileHover={{ y: -2 }}
                                                     whileTap={{ scale: 0.95 }}
                                                     onClick={() => setSelectedSlot(slot)}
                                                     className={cn(
                                                         "h-14 rounded-2xl border-2 font-black transition-all flex flex-col items-center justify-center relative",
-                                                        selectedSlot?.id === slot.id
+                                                        isSelected
                                                             ? "bg-blue-600 border-blue-600 text-white shadow-lg shadow-blue-200"
                                                             : "border-slate-100 bg-white hover:border-blue-200 text-slate-700"
                                                     )}
@@ -424,12 +439,13 @@ export function BookingWizard({
                                                     </span>
                                                     <span className={cn(
                                                         "text-[9px] uppercase tracking-tighter opacity-70",
-                                                        selectedSlot?.id === slot.id ? "text-blue-100" : "text-slate-400"
+                                                        isSelected ? "text-blue-100" : "text-slate-400"
                                                     )}>
                                                         Room {slot.roomId}
                                                     </span>
                                                 </motion.button>
-                                            ))}
+                                                )
+                                            })}
                                         </div>
                                     ) : (
                                         <div className="bg-slate-50 rounded-3xl p-8 text-center space-y-3">

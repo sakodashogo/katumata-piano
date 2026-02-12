@@ -1,13 +1,13 @@
 import { auth } from "@/auth"
 import { prisma } from "@/lib/prisma"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { CalendarDays, Clock, Plus } from "lucide-react"
 import Link from "next/link"
 import { format } from "date-fns"
 import { ja } from "date-fns/locale"
-import { LESSON_TYPE_LABELS, LESSON_STATUS_LABELS, LESSON_STATUS_STYLES } from "@/lib/constants"
-import { LessonActions } from "@/components/student/LessonActions"
+import { LESSON_TYPE_LABELS } from "@/lib/constants"
+import { StudentScheduleCalendar } from "@/components/student/StudentScheduleCalendar"
 
 async function getStudentLessons(studentId: string) {
     return await prisma.lesson.findMany({
@@ -24,6 +24,10 @@ export default async function StudentDashboard() {
     const allLessons = await getStudentLessons(session.user.id!)
     const upcomingLessons = allLessons.filter(l => new Date(l.startTime) > new Date() && l.status !== "CANCELLED")
     const historyLessons = allLessons.filter(l => new Date(l.startTime) <= new Date()).reverse()
+    const upcomingRegular = upcomingLessons.filter((lesson) => lesson.type === "REGULAR")
+    const upcomingAdditional = upcomingLessons.filter((lesson) =>
+        lesson.type === "AD_HOC" || lesson.type === "SOLO_ADDITIONAL" || lesson.type === "DUET_ADDITIONAL"
+    )
 
     const nextLesson = upcomingLessons[0]
 
@@ -92,46 +96,24 @@ export default async function StudentDashboard() {
                             <div className="text-3xl font-bold text-slate-900">{historyLessons.length}</div>
                             <div className="text-xs uppercase text-slate-500 font-medium">受講済みレッスン</div>
                         </div>
+                        <div className="space-y-1 text-xs text-slate-600">
+                            <div>次回の固定: {upcomingRegular.length}件</div>
+                            <div>次回の追加: {upcomingAdditional.length}件</div>
+                        </div>
                     </CardContent>
                 </Card>
             </div>
 
-            {/* Upcoming Lessons List */}
-            <div className="space-y-4">
-                <h2 className="text-xl font-bold text-slate-900">予約中のレッスン</h2>
-                {upcomingLessons.length > 0 ? (
-                    <div className="rounded-xl border bg-white divide-y">
-                        {upcomingLessons.map((lesson) => (
-                            <div key={lesson.id} className="p-4 flex items-center justify-between hover:bg-slate-50 transition-colors">
-                                <div className="flex items-center gap-4">
-                                    <div className="bg-slate-100 p-2 rounded-lg text-center min-w-[60px]">
-                                        <div className="text-xs text-slate-500 font-bold">{format(new Date(lesson.startTime), "M月", { locale: ja })}</div>
-                                        <div className="text-xl font-bold text-slate-900">{format(new Date(lesson.startTime), "d")}</div>
-                                    </div>
-                                    <div>
-                                        <div className="flex items-center gap-2">
-                                            <div className="font-medium text-slate-900">{LESSON_TYPE_LABELS[lesson.type] || "レッスン"}</div>
-                                            {lesson.type === "REGULAR" && <span className="bg-indigo-50 text-indigo-700 text-[10px] font-bold px-2 py-0.5 rounded-full border border-indigo-100">固定枠</span>}
-                                            {lesson.type === "AD_HOC" && <span className="bg-amber-50 text-amber-700 text-[10px] font-bold px-2 py-0.5 rounded-full border border-amber-100">追加</span>}
-                                        </div>
-                                        <div className="text-sm text-slate-500">
-                                            {format(new Date(lesson.startTime), "HH:mm")} - {format(new Date(lesson.endTime), "HH:mm")}
-                                        </div>
-                                    </div>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                    <div className={`text-sm font-medium px-3 py-1 rounded-full ${LESSON_STATUS_STYLES[lesson.status] || "text-blue-600 bg-blue-50"}`}>
-                                        {LESSON_STATUS_LABELS[lesson.status] || "予約済み"}
-                                    </div>
-                                    <LessonActions lessonId={lesson.id} menuId={lesson.menuId || undefined} />
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                ) : (
-                    <p className="text-slate-500">予約中のレッスンはありません。</p>
-                )}
-            </div>
+            <StudentScheduleCalendar
+                lessons={upcomingLessons.map((lesson) => ({
+                    id: lesson.id,
+                    startTime: lesson.startTime.toISOString(),
+                    endTime: lesson.endTime.toISOString(),
+                    type: lesson.type,
+                    status: lesson.status,
+                    menuId: lesson.menuId,
+                }))}
+            />
 
             {/* Lesson History List */}
             <div className="space-y-4">

@@ -3,11 +3,11 @@
 import { prisma } from "@/lib/prisma"
 import { auth } from "@/auth"
 import { revalidatePath } from "next/cache"
-import { subDays, isBefore } from "date-fns"
+import { BOOKING_RULES } from "@/lib/constants"
 
 const GAS_WEBHOOK_URL = process.env.GAS_WEBHOOK_URL;
 
-async function sendNotification(type: "BOOKING" | "RESCHEDULE" | "CANCEL", data: any) {
+async function sendNotification(type: "BOOKING" | "RESCHEDULE" | "CANCEL", data: Record<string, unknown>) {
     if (!GAS_WEBHOOK_URL) return;
     try {
         await fetch(GAS_WEBHOOK_URL, {
@@ -26,6 +26,41 @@ export async function getMenus() {
         return { success: true, data: menus }
     } catch (error) {
         return { success: false, error: "Failed to fetch menus" }
+    }
+}
+
+function isAdditionalPaidMenu(name: string, price: number) {
+    if (price <= 0) return false
+    return /追加|ad[\s_-]?hoc/i.test(name)
+}
+
+function isWithinStudentModificationWindow(lessonStart: Date) {
+    const now = new Date()
+    const diffInHours = (lessonStart.getTime() - now.getTime()) / (1000 * 60 * 60)
+    return diffInHours >= BOOKING_RULES.CANCELLATION_HOURS_BEFORE
+}
+
+function getLessonTypeFromMenuName(menuName?: string): "REGULAR" | "AD_HOC" | "PRACTICE" | "SOLO_ADDITIONAL" | "DUET_ADDITIONAL" {
+    if (!menuName) return "REGULAR"
+    const name = menuName.toLowerCase()
+    if (name.includes("自主練") || name.includes("practice")) return "PRACTICE"
+    if (name.includes("連弾") || name.includes("duet")) return "DUET_ADDITIONAL"
+    if (name.includes("ソロ") || name.includes("solo")) return "SOLO_ADDITIONAL"
+    if (name.includes("追加") || name.includes("ad_hoc") || name.includes("ad hoc")) return "AD_HOC"
+    return "REGULAR"
+}
+
+export async function getBookableMenusForStudent() {
+    try {
+        const menus = await prisma.menu.findMany({
+            orderBy: [{ price: "asc" }, { durationMin: "asc" }]
+        })
+
+        const additionalMenus = menus.filter((menu) => isAdditionalPaidMenu(menu.name, menu.price))
+        return { success: true, data: additionalMenus }
+    } catch (error) {
+        console.error(error)
+        return { success: false, error: "Failed to fetch bookable menus" }
     }
 }
 
@@ -101,6 +136,126 @@ export async function getAvailableSlotsInRange(startStr: string, endStr: string)
     }
 }
 
+type BookableStartTime = {
+    startTime: Date
+    endTime: Date
+    roomId: string
+    slotIds: string[]
+}
+
+function buildBookableStartTimes(
+    slots: Array<{ id: string; roomId: string; startTime: Date; endTime: Date }>,
+    durationMin: number
+) {
+    const requiredSlotCount = Math.max(1, Math.ceil(durationMin / 30))
+    const byRoom = new Map<string, Array<{ id: string; roomId: string; startTime: Date; endTime: Date }>>()
+
+    for (const slot of slots) {
+        if (!byRoom.has(slot.roomId)) byRoom.set(slot.roomId, [])
+        byRoom.get(slot.roomId)!.push(slot)
+    }
+
+    const candidates: BookableStartTime[] = []
+
+    for (const [, roomSlots] of byRoom) {
+        roomSlots.sort((a, b) => a.startTime.getTime() - b.startTime.getTime())
+
+        for (let i = 0; i < roomSlots.length; i++) {
+            const chain = [roomSlots[i]]
+            for (let j = i + 1; j < roomSlots.length && chain.length < requiredSlotCount; j++) {
+                const prev = chain[chain.length - 1]
+                const next = roomSlots[j]
+                if (prev.endTime.getTime() === next.startTime.getTime()) {
+                    chain.push(next)
+                } else {
+                    break
+                }
+            }
+
+            if (chain.length === requiredSlotCount) {
+                candidates.push({
+                    startTime: chain[0].startTime,
+                    endTime: chain[chain.length - 1].endTime,
+                    roomId: chain[0].roomId,
+                    slotIds: chain.map((s) => s.id),
+                })
+            }
+        }
+    }
+
+    candidates.sort((a, b) => a.startTime.getTime() - b.startTime.getTime())
+    return candidates
+}
+
+export async function getBookableStartTimes(dateStr: string, menuId: string) {
+    try {
+        const menu = await prisma.menu.findUnique({ where: { id: menuId } })
+        if (!menu) return { success: false, error: "メニューが見つかりません。" }
+
+        const start = new Date(dateStr)
+        start.setHours(0, 0, 0, 0)
+        const end = new Date(dateStr)
+        end.setHours(23, 59, 59, 999)
+
+        const slots = await prisma.openSlot.findMany({
+            where: {
+                isBooked: false,
+                isPublic: true,
+                startTime: { gte: start, lte: end },
+                OR: [{ menuId: null }, { menuId }],
+            },
+            select: {
+                id: true,
+                roomId: true,
+                startTime: true,
+                endTime: true,
+            },
+            orderBy: { startTime: "asc" },
+        })
+
+        const candidates = buildBookableStartTimes(slots, menu.durationMin)
+        return { success: true, data: candidates }
+    } catch (error) {
+        console.error(error)
+        return { success: false, error: "予約可能な時間枠の取得に失敗しました。" }
+    }
+}
+
+export async function getBookableDaysInRange(startStr: string, endStr: string, menuId: string) {
+    try {
+        const menu = await prisma.menu.findUnique({ where: { id: menuId } })
+        if (!menu) return { success: false, error: "メニューが見つかりません。" }
+
+        const start = new Date(startStr)
+        const end = new Date(endStr)
+        const slots = await prisma.openSlot.findMany({
+            where: {
+                isBooked: false,
+                isPublic: true,
+                startTime: { gte: start, lte: end },
+                OR: [{ menuId: null }, { menuId }],
+            },
+            select: {
+                id: true,
+                roomId: true,
+                startTime: true,
+                endTime: true,
+            },
+            orderBy: { startTime: "asc" },
+        })
+
+        const dates = new Set(
+            buildBookableStartTimes(slots, menu.durationMin).map((slot) =>
+                slot.startTime.toISOString().slice(0, 10)
+            )
+        )
+        return { success: true, data: Array.from(dates) }
+    } catch (error) {
+        console.error(error)
+        return { success: false, error: "予約可能日の取得に失敗しました。" }
+    }
+}
+
 export async function bookLesson(slotIds: string[], menuId: string, useCredit: boolean = false) {
     const session = await auth()
     if (!session?.user?.id) return { success: false, error: "Unauthorized" }
@@ -124,15 +279,7 @@ export async function bookLesson(slotIds: string[], menuId: string, useCredit: b
 
             // 3. Look up menu to determine lesson type
             const menu = await tx.menu.findUnique({ where: { id: menuId } })
-            let lessonType: "REGULAR" | "AD_HOC" | "PRACTICE" = "REGULAR"
-            if (menu) {
-                const name = menu.name.toLowerCase()
-                if (name.includes("自主練") || name.includes("practice")) {
-                    lessonType = "PRACTICE"
-                } else if (name.includes("追加") || name.includes("ad_hoc") || name.includes("ad hoc")) {
-                    lessonType = "AD_HOC"
-                }
-            }
+            const lessonType = getLessonTypeFromMenuName(menu?.name)
 
             // 4. Handle Credit Usage
             if (useCredit) {
@@ -176,6 +323,7 @@ export async function bookLesson(slotIds: string[], menuId: string, useCredit: b
                     endTime,
                     status: "BOOKED",
                     type: lessonType,
+                    menuId,
                 },
             })
 
@@ -213,11 +361,8 @@ export async function rescheduleLesson(lessonId: string, slotIds: string[]) {
 
             // 2. Validate Cancellation Rules (24 hours prior)
             const lessonStart = new Date(lesson.startTime)
-            const now = new Date()
-            const diffInHours = (lessonStart.getTime() - now.getTime()) / (1000 * 60 * 60)
-
-            if (diffInHours < 24) {
-                throw new Error("日程変更はレッスンの24時間前まで可能です。")
+            if (!isWithinStudentModificationWindow(lessonStart)) {
+                throw new Error(`日程変更はレッスン開始の${BOOKING_RULES.CANCELLATION_HOURS_BEFORE / 24}日前まで可能です。`)
             }
 
             // 3. Check Credit Limit (Max 2 per month - placeholder, adjust as needed)
@@ -346,9 +491,11 @@ export async function cancelLesson(lessonId: string) {
             }
 
             const lessonStart = new Date(lesson.startTime)
-            const now = new Date()
-            const diffInHours = (lessonStart.getTime() - now.getTime()) / (1000 * 60 * 60)
-            const isEligibleForCredit = diffInHours >= 24
+            const isEligibleForCredit = isWithinStudentModificationWindow(lessonStart)
+
+            if (session.user.role !== "TEACHER" && !isEligibleForCredit) {
+                throw new Error(`キャンセルはレッスン開始の${BOOKING_RULES.CANCELLATION_HOURS_BEFORE / 24}日前まで可能です。`)
+            }
 
             // 1. Cancel the lesson
             await tx.lesson.update({
