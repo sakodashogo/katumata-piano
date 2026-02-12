@@ -17,14 +17,24 @@ type OpenSlot = {
     roomId: string
 }
 
+type Lesson = {
+    id: string
+    startTime: Date
+    endTime: Date
+    status: string
+    roomId: string
+}
+
 export function WeeklySchedule({
     roomId,
     date,
     slots,
+    lessons
 }: {
     roomId: string
     date: Date
     slots: OpenSlot[]
+    lessons: Lesson[]
 }) {
     const router = useRouter()
     const [isPending, startTransition] = useTransition()
@@ -84,6 +94,12 @@ export function WeeklySchedule({
                 </div>
 
                 <div className="flex items-center space-x-4">
+                    <div className="flex items-center text-xs gap-3 mr-4">
+                        <div className="flex items-center gap-1"><div className="w-3 h-3 bg-slate-200 rounded"></div>レッスン</div>
+                        <div className="flex items-center gap-1"><div className="w-3 h-3 bg-blue-500 rounded"></div>空き枠</div>
+                        <div className="flex items-center gap-1"><div className="w-3 h-3 bg-red-100 border border-red-200 rounded"></div>予約済</div>
+                    </div>
+
                     <Button variant="outline" size="sm" onClick={() => navigateWeek('prev')}>
                         <ChevronLeft className="h-4 w-4" />
                     </Button>
@@ -120,26 +136,31 @@ export function WeeklySchedule({
                                 </td>
                                 {days.map((day) => {
                                     const cellDateTime = setMinutes(setHours(day, time.getHours()), time.getMinutes())
+
                                     const slot = slots.find(s => isSameDay(new Date(s.startTime), day) && isSameMinute(new Date(s.startTime), cellDateTime))
+                                    const lesson = lessons.find(l => isSameDay(new Date(l.startTime), day) && isSameMinute(new Date(l.startTime), cellDateTime))
 
                                     const isOpen = !!slot
                                     const isBooked = slot?.isBooked || false
+                                    const isLesson = !!lesson
 
                                     return (
                                         <td key={day.toString()} className="border-r border-slate-100 p-1 last:border-0">
                                             <button
-                                                onClick={() => handleToggle(day, time)}
-                                                disabled={isBooked || isPending}
+                                                onClick={() => !isLesson && handleToggle(day, time)}
+                                                disabled={isBooked || isLesson || isPending}
                                                 className={cn(
                                                     "h-10 w-full rounded-md transition-all duration-200 text-xs font-medium",
-                                                    isBooked
-                                                        ? "bg-red-100 text-red-700 cursor-not-allowed border border-red-200"
-                                                        : isOpen
-                                                            ? "bg-blue-500 hover:bg-blue-600 text-white shadow-sm"
-                                                            : "hover:bg-slate-100 text-transparent hover:text-slate-400"
+                                                    isLesson
+                                                        ? "bg-slate-200 text-slate-500 cursor-not-allowed"
+                                                        : isBooked
+                                                            ? "bg-red-100 text-red-700 cursor-not-allowed border border-red-200"
+                                                            : isOpen
+                                                                ? "bg-blue-500 hover:bg-blue-600 text-white shadow-sm"
+                                                                : "hover:bg-slate-100 text-transparent hover:text-slate-400"
                                                 )}
                                             >
-                                                {isBooked ? "予約済" : isOpen ? "空き" : "+"}
+                                                {isLesson ? "L" : isBooked ? "予約済" : isOpen ? "空き" : "+"}
                                             </button>
                                         </td>
                                     )

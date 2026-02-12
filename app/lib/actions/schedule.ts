@@ -4,21 +4,27 @@ import { prisma } from "@/lib/prisma"
 import { revalidatePath } from "next/cache"
 import { addMinutes } from "date-fns"
 
-export async function getOpenSlots(roomId: string, start: Date, end: Date) {
+export async function getScheduleData(roomId: string, start: Date, end: Date) {
     try {
-        const slots = await prisma.openSlot.findMany({
-            where: {
-                roomId,
-                startTime: {
-                    gte: start,
-                    lt: end,
+        const [slots, lessons] = await Promise.all([
+            prisma.openSlot.findMany({
+                where: {
+                    roomId,
+                    startTime: { gte: start, lt: end },
                 },
-            },
-        })
-        return { success: true, data: slots }
+            }),
+            prisma.lesson.findMany({
+                where: {
+                    roomId,
+                    startTime: { gte: start, lt: end },
+                    status: { not: "CANCELLED" }
+                }
+            })
+        ])
+        return { success: true, data: { slots, lessons } }
     } catch (error) {
-        console.error("Failed to fetch slots:", error)
-        return { success: false, error: "Failed to fetch slots" }
+        console.error("Failed to fetch schedule data:", error)
+        return { success: false, error: "Failed to fetch schedule data" }
     }
 }
 

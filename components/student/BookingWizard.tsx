@@ -7,10 +7,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter }
 import { Calendar } from "@/components/ui/calendar"
 import { format } from "date-fns"
 import { ja } from "date-fns/locale"
-import { Loader2, CheckCircle2 } from "lucide-react"
+import { Loader2, CheckCircle2, Ticket } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useRouter } from "next/navigation"
 import { useToast } from "@/components/ui/toast"
+import { Switch } from "@/components/ui/switch"
+import { Label } from "@/components/ui/label"
 
 type Menu = {
     id: string
@@ -29,11 +31,13 @@ type Slot = {
 export function BookingWizard({
     menus,
     rescheduleLessonId,
-    initialMenuId
+    initialMenuId,
+    credits
 }: {
     menus: Menu[],
     rescheduleLessonId?: string,
-    initialMenuId?: string
+    initialMenuId?: string,
+    credits?: { count: number, used: number, remaining: number } | null
 }) {
     const router = useRouter()
     const { toast } = useToast()
@@ -46,6 +50,7 @@ export function BookingWizard({
     const [selectedSlot, setSelectedSlot] = useState<Slot | null>(null)
     const [loading, setLoading] = useState(false)
     const [bookingSuccess, setBookingSuccess] = useState(false)
+    const [useTicket, setUseTicket] = useState(false)
 
     // Fetch slots when date changes
     const handleDateSelect = async (date: Date | undefined) => {
@@ -69,7 +74,7 @@ export function BookingWizard({
         if (rescheduleLessonId) {
             res = await rescheduleLesson(rescheduleLessonId, [selectedSlot.id])
         } else {
-            res = await bookLesson([selectedSlot.id], selectedMenu.id)
+            res = await bookLesson([selectedSlot.id], selectedMenu.id, useTicket)
         }
 
         if (res.success) {
@@ -108,7 +113,16 @@ export function BookingWizard({
 
             {step === 1 && (
                 <div className="grid gap-4">
-                    <h2 className="text-xl font-bold">メニューを選んでください</h2>
+                    <div className="flex justify-between items-center mb-2">
+                        <h2 className="text-xl font-bold">メニューを選んでください</h2>
+                        {credits && credits.remaining > 0 && !rescheduleLessonId && (
+                            <div className="flex items-center gap-2 bg-green-50 px-3 py-1.5 rounded-full text-sm text-green-700">
+                                <Ticket className="h-4 w-4" />
+                                <span>振替チケット残: {credits.remaining}枚</span>
+                            </div>
+                        )}
+                    </div>
+
                     {menus.map((menu) => (
                         <Card
                             key={menu.id}
@@ -155,7 +169,7 @@ export function BookingWizard({
                                             key={slot.id}
                                             variant={selectedSlot?.id === slot.id ? "primary" : "outline"}
                                             onClick={() => setSelectedSlot(slot)}
-                                            className="w-full"
+                                            className={cn("w-full", selectedSlot?.id === slot.id ? "bg-blue-600 text-white hover:bg-blue-700" : "")}
                                         >
                                             {format(new Date(slot.startTime), "HH:mm")}
                                             {slot.roomId && <span className="ml-1 text-xs opacity-70">({slot.roomId}教室)</span>}
@@ -199,14 +213,48 @@ export function BookingWizard({
                                 <span className="font-medium">{selectedSlot.roomId}教室</span>
                             </div>
                         )}
-                        <div className="flex justify-between border-b pb-2">
+                        <div className="flex justify-between border-b pb-2 items-center">
                             <span className="text-slate-500">料金</span>
-                            <span className="font-medium">¥{selectedMenu?.price.toLocaleString()}</span>
+                            <div className="text-right">
+                                <span className={cn("font-medium", useTicket && "line-through text-slate-400")}>
+                                    ¥{selectedMenu?.price.toLocaleString()}
+                                </span>
+                                {useTicket && (
+                                    <div className="text-green-600 font-bold text-sm">チケット使用 (¥0)</div>
+                                )}
+                            </div>
                         </div>
+
+                        {/* Ticket Option */}
+                        {!rescheduleLessonId && credits && credits.remaining > 0 && (
+                            <div className="flex items-center justify-between bg-green-50 p-3 rounded-lg border border-green-100">
+                                <div className="space-y-0.5">
+                                    <Label htmlFor="ticket-mode" className="text-base font-medium text-green-900">
+                                        振替チケットを使う
+                                    </Label>
+                                    <div className="text-sm text-green-700">
+                                        残り: {credits.remaining}枚
+                                    </div>
+                                </div>
+                                <Switch
+                                    id="ticket-mode"
+                                    checked={useTicket}
+                                    onCheckedChange={setUseTicket}
+                                />
+                            </div>
+                        )}
+
+                        {/* Reschedule Context */}
+                        {rescheduleLessonId && (
+                            <div className="bg-blue-50 p-3 rounded-lg border border-blue-100 text-sm text-blue-800">
+                                日程変更（振替）のため、完了すると振替権利が1回分消費されます。
+                            </div>
+                        )}
+
                     </CardContent>
                     <CardFooter className="flex justify-between">
                         <Button variant="ghost" onClick={() => setStep(2)}>戻る</Button>
-                        <Button onClick={handleBooking} disabled={loading}>
+                        <Button onClick={handleBooking} disabled={loading} className="w-full ml-4">
                             {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                             予約を確定する
                         </Button>

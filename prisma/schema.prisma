@@ -36,6 +36,7 @@ model User {
   lessonsAsStudent Lesson[] @relation("StudentLessons")
   lessonsAsTeacher Lesson[] @relation("TeacherLessons")
   availabilities   Availability[] @relation("StudentAvailability")
+  cancellationCredits CancellationCredit[]
 }
 
 model Lesson {
@@ -56,8 +57,12 @@ model Lesson {
   teacherId String?
   teacher   User?        @relation("TeacherLessons", fields: [teacherId], references: [id])
 
-  createdAt DateTime     @default(now())
-  updatedAt DateTime     @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  menuId    String?
+  menu      Menu?        @relation(fields: [menuId], references: [id])
+  roomId    String?      // 'A' or 'B', useful for fixed lessons too
 }
 
 model OpenSlot {
@@ -74,6 +79,23 @@ model Menu {
     durationMin Int
     price       Int      @default(0)
     description String?
+    lessons     Lesson[]
+}
+
+model CancellationCredit {
+    id        String   @id @default(cuid())
+    studentId String
+    student   User     @relation(fields: [studentId], references: [id])
+    
+    year      Int
+    month     Int
+    count     Int      @default(0) // Number of reschedule rights
+    used      Int      @default(0) // Number used
+    
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    @@unique([studentId, year, month])
 }
 
 model Availability {

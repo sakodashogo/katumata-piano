@@ -3,6 +3,7 @@
 import { prisma } from "@/lib/prisma"
 import { auth } from "@/auth"
 import { revalidatePath } from "next/cache"
+import { subDays, isBefore } from "date-fns"
 
 const GAS_WEBHOOK_URL = process.env.GAS_WEBHOOK_URL;
 
@@ -25,6 +26,28 @@ export async function getMenus() {
         return { success: true, data: menus }
     } catch (error) {
         return { success: false, error: "Failed to fetch menus" }
+    }
+}
+
+export async function getStudentCredits(userId: string) {
+    const today = new Date()
+    const year = today.getFullYear()
+    const month = today.getMonth() + 1 // 1-12
+
+    const credit = await prisma.cancellationCredit.findUnique({
+        where: {
+            studentId_year_month: {
+                studentId: userId,
+                year,
+                month,
+            }
+        }
+    })
+
+    return {
+        count: credit?.count ?? 0,
+        used: credit?.used ?? 0,
+        remaining: (credit?.count ?? 0) - (credit?.used ?? 0)
     }
 }
 
@@ -53,7 +76,7 @@ export async function getAvailableSlots(dateStr: string) {
     }
 }
 
-export async function bookLesson(slotIds: string[], menuId: string) {
+export async function bookLesson(slotIds: string[], menuId: string, useCredit: boolean = false) {
     const session = await auth()
     if (!session?.user?.id) return { success: false, error: "Unauthorized" }
 
@@ -86,7 +109,33 @@ export async function bookLesson(slotIds: string[], menuId: string) {
                 }
             }
 
-            // 4. Look up teacher (first TEACHER user)
+            // 4. Handle Credit Usage
+            if (useCredit) {
+                const today = new Date()
+                const year = today.getFullYear()
+                const month = today.getMonth() + 1
+
+                const credit = await tx.cancellationCredit.findUnique({
+                    where: {
+                        studentId_year_month: {
+                            studentId: session.user.id!,
+                            year,
+                            month,
+                        }
+                    }
+                })
+
+                if (!credit || credit.count - credit.used <= 0) {
+                    throw new Error("振替チケットがありません。")
+                }
+
+                await tx.cancellationCredit.update({
+                    where: { id: credit.id },
+                    data: { used: { increment: 1 } }
+                })
+            }
+
+            // 5. Look up teacher (first TEACHER user)
             const teacher = await tx.user.findFirst({ where: { role: "TEACHER" } })
 
             // 5. Create Lesson
@@ -129,53 +178,103 @@ export async function rescheduleLesson(lessonId: string, slotIds: string[]) {
 
     try {
         return await prisma.$transaction(async (tx) => {
-            // 1. Verify Lesson ownership and status
+            // 1. Fetch Lesson
             const lesson = await tx.lesson.findUnique({
                 where: { id: lessonId },
-                include: { student: true }
             })
-
             if (!lesson || lesson.studentId !== session.user.id) {
                 throw new Error("Lesson not found or unauthorized.")
             }
 
-            // 2. Verify new slots are available
+            // 2. Validate Cancellation Rules (2 days prior)
+            const lessonStart = new Date(lesson.startTime)
+            const deadline = subDays(lessonStart, 2)
+            const now = new Date()
+
+            // If strictly enforcing 2-day rule for rescheduling too:
+            if (!isBefore(now, deadline)) {
+                // Determine if we allow late reschedule? Usually no.
+                throw new Error("振替はレッスンの2日前まで可能です。")
+            }
+
+            // 3. Check Credit Limit (Max 2 per month)
+            const year = lessonStart.getFullYear()
+            const month = lessonStart.getMonth() + 1
+
+            const credit = await tx.cancellationCredit.findUnique({
+                where: {
+                    studentId_year_month: {
+                        studentId: session.user.id!,
+                        year,
+                        month
+                    }
+                }
+            })
+
+            const currentCount = credit?.count ?? 0
+            if (currentCount >= 2) {
+                throw new Error("今月の振替回数上限（2回）に達しています。")
+            }
+
+            // 4. Verify new slots
             const newSlots = await tx.openSlot.findMany({
                 where: { id: { in: slotIds } },
             })
-            if (newSlots.some((s) => s.isBooked)) {
-                throw new Error("Selected slots are no longer available.")
+            if (newSlots.some(s => s.isBooked)) {
+                throw new Error("選択された枠は埋まってしまいました。")
             }
 
-            // 3. Mark new slots as booked
+            const sortedSlots = newSlots.sort((a, b) => a.startTime.getTime() - b.startTime.getTime())
+            const newStart = sortedSlots[0].startTime
+            const newEnd = sortedSlots[sortedSlots.length - 1].endTime
+
+            // 5. Update Credit Usage (Reschedule = Cancel + Use)
+            await tx.cancellationCredit.upsert({
+                where: {
+                    studentId_year_month: {
+                        studentId: session.user.id!,
+                        year,
+                        month
+                    }
+                },
+                update: {
+                    count: { increment: 1 },
+                    used: { increment: 1 }
+                },
+                create: {
+                    studentId: session.user.id!,
+                    year,
+                    month,
+                    count: 1,
+                    used: 1
+                }
+            })
+
+            // 6. Update Lesson
+            await tx.lesson.update({
+                where: { id: lessonId },
+                data: {
+                    startTime: newStart,
+                    endTime: newEnd,
+                    roomId: sortedSlots[0].roomId, // Update room if needed
+                    updatedAt: new Date(),
+                }
+            })
+
+            // 7. Mark new slots booked
             await tx.openSlot.updateMany({
                 where: { id: { in: slotIds } },
                 data: { isBooked: true },
             })
 
-            // 4. Calculate new time
-            const sortedSlots = newSlots.sort((a, b) => a.startTime.getTime() - b.startTime.getTime())
-            const startTime = sortedSlots[0].startTime
-            const endTime = sortedSlots[sortedSlots.length - 1].endTime
-
-            // 5. Update Lesson
-            const updatedLesson = await tx.lesson.update({
-                where: { id: lessonId },
-                data: {
-                    startTime,
-                    endTime,
-                    status: "BOOKED", // Ensure it's active
-                    updatedAt: new Date(),
-                }
-            })
-
-            // 6. Try to free up old slots (Best effort)
-            // find open slots that match the OLD time and mark them as unbooked
+            // 8. Free old slots (best effort)
             await tx.openSlot.updateMany({
                 where: {
                     startTime: lesson.startTime,
                     endTime: lesson.endTime,
-                    roomId: "A", // Defaulting to A for now as we don't have room in Lesson model yet
+                    isBooked: true // Only if it was booked as an open slot originally?
+                    // Actually, for fixed lessons, there might not be an OpenSlot record.
+                    // But if there was, we free it.
                 },
                 data: { isBooked: false }
             })
@@ -186,7 +285,7 @@ export async function rescheduleLesson(lessonId: string, slotIds: string[]) {
             sendNotification("RESCHEDULE", {
                 studentId: session.user.id,
                 oldStartTime: lesson.startTime,
-                newStartTime: startTime,
+                newStartTime: newStart,
                 lessonId
             });
 
@@ -227,7 +326,39 @@ export async function cancelLesson(lessonId: string) {
                 data: { status: "CANCELLED" },
             })
 
-            // 2. Free up the open slot (best effort)
+            // 2. Grant Credit if eligible (2 days prior)
+            const lessonStart = new Date(lesson.startTime)
+            const deadline = subDays(lessonStart, 2)
+            const now = new Date()
+            const isEligibleForCredit = isBefore(now, deadline)
+
+            if (isEligibleForCredit) {
+                const year = lessonStart.getFullYear()
+                const month = lessonStart.getMonth() + 1
+
+                // Upsert credit
+                await tx.cancellationCredit.upsert({
+                    where: {
+                        studentId_year_month: {
+                            studentId: lesson.studentId,
+                            year,
+                            month
+                        }
+                    },
+                    update: {
+                        count: { increment: 1 }
+                    },
+                    create: {
+                        studentId: lesson.studentId,
+                        year,
+                        month,
+                        count: 1,
+                        used: 0
+                    }
+                })
+            }
+
+            // 3. Free up the open slot (best effort)
             await tx.openSlot.updateMany({
                 where: {
                     startTime: lesson.startTime,

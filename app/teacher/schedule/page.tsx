@@ -1,4 +1,4 @@
-import { getOpenSlots } from "@/app/lib/actions/schedule"
+import { getScheduleData } from "@/app/lib/actions/schedule"
 import { WeeklySchedule } from "@/components/teacher/WeeklySchedule"
 import { startOfWeek, endOfWeek } from "date-fns"
 
@@ -17,7 +17,9 @@ export default async function SchedulePage({
     const start = startOfWeek(date, { weekStartsOn: 1 }) // Monday start
     const end = endOfWeek(date, { weekStartsOn: 1 })
 
-    const { data: slots = [] } = await getOpenSlots(room, start, end)
+    const { data } = await getScheduleData(room, start, end)
+    const slots = data?.slots || []
+    const lessons = data?.lessons || []
 
     return (
         <div className="space-y-6">
@@ -29,7 +31,7 @@ export default async function SchedulePage({
                 <SyncButton currentDate={date} roomId={room} />
             </div>
 
-            <WeeklySchedule roomId={room} date={date} slots={slots as any[]} />
+            <WeeklySchedule roomId={room} date={date} slots={slots as any[]} lessons={lessons as any[]} />
         </div>
     )
 }

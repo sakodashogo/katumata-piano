@@ -1,13 +1,22 @@
-import { getMenus } from "@/app/lib/actions/booking"
+import { getMenus, getStudentCredits } from "@/app/lib/actions/booking"
 import { BookingWizard } from "@/components/student/BookingWizard"
+import { auth } from "@/auth"
 
 export default async function BookingPage({
     searchParams,
 }: {
     searchParams: Promise<{ [key: string]: string | string[] | undefined }>
 }) {
+    const session = await auth()
     const params = await searchParams
-    const { data: menus = [] } = await getMenus()
+
+    // Parallel fetch
+    const [menusData, credits] = await Promise.all([
+        getMenus(),
+        session?.user?.id ? getStudentCredits(session.user.id) : null
+    ])
+
+    const menus = menusData.data || []
 
     const rescheduleId = params.rescheduleId as string | undefined
     const menuId = params.menuId as string | undefined
@@ -21,6 +30,7 @@ export default async function BookingPage({
                 menus={menus as any[]}
                 rescheduleLessonId={rescheduleId}
                 initialMenuId={menuId}
+                credits={credits}
             />
         </div>
     )

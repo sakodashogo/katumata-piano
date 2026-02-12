@@ -58,9 +58,20 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
 export function useToast() {
     const context = useContext(ToastContext)
     if (!context) {
-        throw new Error("useToast must be used within a ToastProvider")
+        // This should not happen if properly wrapped, but during SSR/development specific conditions it might verify checks.
+        console.error("useToast must be used within a ToastProvider")
+        return {
+            toasts: [],
+            toast: {
+                success: (msg: string) => console.log("Toast (Success):", msg),
+                error: (msg: string) => console.error("Toast (Error):", msg),
+                info: (msg: string) => console.log("Toast (Info):", msg),
+            },
+            removeToast: () => { },
+        }
     }
     return context
+
 }
 
 const icons: Record<ToastType, React.ReactNode> = {

@@ -9,6 +9,7 @@ import { useState } from "react";
 import { Menu, X } from "lucide-react";
 
 const teacherLinks = [
+    { href: "/teacher", label: "ホーム" },
     { href: "/teacher/students", label: "生徒管理" },
     { href: "/teacher/schedule", label: "スケジュール" },
     { href: "/teacher/availabilities", label: "空き枠管理" },
@@ -27,7 +28,10 @@ export default function DashboardNav() {
     const pathname = usePathname();
     const [mobileOpen, setMobileOpen] = useState(false);
 
-    const isActive = (href: string) => pathname === href || (href !== "/student" && pathname.startsWith(href + "/"))
+    const isActive = (href: string) =>
+        pathname === href ||
+        (href !== "/student" && href !== "/teacher" && pathname.startsWith(href + "/"))
+
 
     const links = user?.role === "TEACHER" ? teacherLinks : studentLinks;
 
