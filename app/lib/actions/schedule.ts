@@ -5,6 +5,12 @@ import { auth } from "@/auth"
 import { revalidatePath } from "next/cache"
 import { addMinutes } from "date-fns"
 
+function revalidateTeacherViews() {
+    revalidatePath("/teacher/schedule")
+    revalidatePath("/teacher/slots")
+    revalidatePath("/teacher/resources")
+}
+
 async function requireTeacher() {
     const session = await auth()
     if (!session?.user || session.user.role !== "TEACHER") {
@@ -152,7 +158,7 @@ export async function toggleOpenSlot(roomId: string, startTimeIso: string) {
             })
         }
 
-        revalidatePath("/teacher/schedule")
+        revalidateTeacherViews()
         return { success: true }
     } catch (error) {
         console.error("Failed to toggle slot:", error)
@@ -174,7 +180,7 @@ export async function bulkUpdateOpenSlots(roomId: string, slots: string[], actio
                 .map((value) => new Date(value))
                 .sort((a, b) => a.getTime() - b.getTime())
             if (candidateStarts.length === 0) {
-                revalidatePath("/teacher/schedule")
+                revalidateTeacherViews()
                 return { success: true }
             }
 
@@ -229,7 +235,7 @@ export async function bulkUpdateOpenSlots(roomId: string, slots: string[], actio
             })
         }
 
-        revalidatePath("/teacher/schedule")
+        revalidateTeacherViews()
         return { success: true }
     } catch (error) {
         console.error("Failed to bulk update slots:", error)
@@ -310,7 +316,7 @@ export async function moveLesson(lessonId: string, newStartTime: Date, newRoomId
             })
         })
 
-        revalidatePath("/teacher/schedule")
+        revalidateTeacherViews()
         return { success: true }
     } catch (error) {
         console.error("Failed to move lesson:", error)
@@ -329,7 +335,7 @@ export async function publishLessons(lessonIds: string[]) {
             where: { id: { in: lessonIds } },
             data: { status: "BOOKED" } // Or whatever "Published" maps to. BOOKED is fine.
         })
-        revalidatePath("/teacher/schedule")
+        revalidateTeacherViews()
         return { success: true }
     } catch (error) {
         console.error("Failed to publish lessons:", error)
@@ -369,7 +375,7 @@ export async function moveOpenSlot(slotId: string, newStartTime: Date, newRoomId
                 roomId: newRoomId
             }
         })
-        revalidatePath("/teacher/schedule")
+        revalidateTeacherViews()
         return { success: true }
     } catch (error) {
         console.error("Failed to move slot:", error)

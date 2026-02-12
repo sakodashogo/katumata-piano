@@ -1,6 +1,6 @@
 import { getOpenSlots } from "@/app/lib/actions/resource"
 import { ResourceManager } from "@/components/teacher/ResourceManager"
-import { startOfMonth, getYear, getMonth } from "date-fns"
+import { getYear, getMonth } from "date-fns"
 
 export default async function ResourcesPage({
     searchParams,
@@ -13,14 +13,14 @@ export default async function ResourcesPage({
     const month = params.month ? parseInt(params.month) : getMonth(now) + 1
 
     const result = await getOpenSlots(year, month)
-    const slots = result.success ? result.data : []
+    const slots = result.success ? (result.data ?? []) : []
 
     return (
         <div className="p-6 max-w-7xl mx-auto space-y-6">
             <div className="flex justify-between items-end">
                 <div>
-                    <h1 className="text-3xl font-bold text-slate-900">リソース管理</h1>
-                    <p className="text-slate-500">ピアノ室 A・B の稼働状況と空き枠の設定を行います。</p>
+                    <h1 className="text-3xl font-bold text-slate-900">リソース可視化</h1>
+                    <p className="text-slate-500">ピアノ室 A・B の稼働状況を日別に確認します。</p>
                 </div>
             </div>
 

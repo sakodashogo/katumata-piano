@@ -7,7 +7,7 @@ import { redirect } from "next/navigation"
 import { format, startOfDay, endOfDay, startOfWeek, endOfWeek, addWeeks } from "date-fns"
 import { ja } from "date-fns/locale"
 import { LESSON_TYPE_LABELS, LESSON_STATUS_LABELS } from "@/lib/constants"
-import { CalendarDays, Users, Clock, BookOpen, CalendarCheck } from "lucide-react"
+import { CalendarDays, Users, Clock, BookOpen, CalendarCheck, ListChecks, Monitor, ClipboardList } from "lucide-react"
 import Link from "next/link"
 
 export default async function TeacherDashboard() {
@@ -185,12 +185,36 @@ export default async function TeacherDashboard() {
             </div>
 
             {/* Quick Links */}
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
                 <Link href="/teacher/schedule" className="block">
                     <Card className="hover:border-blue-300 transition-colors cursor-pointer">
                         <CardContent className="pt-6 text-center">
                             <CalendarDays className="h-8 w-8 mx-auto mb-2 text-blue-600" />
-                            <p className="font-medium">スケジュール管理</p>
+                            <p className="font-medium">週次スケジュール</p>
+                        </CardContent>
+                    </Card>
+                </Link>
+                <Link href="/teacher/slots" className="block">
+                    <Card className="hover:border-blue-300 transition-colors cursor-pointer">
+                        <CardContent className="pt-6 text-center">
+                            <ListChecks className="h-8 w-8 mx-auto mb-2 text-indigo-600" />
+                            <p className="font-medium">空き枠承認</p>
+                        </CardContent>
+                    </Card>
+                </Link>
+                <Link href="/teacher/resources" className="block">
+                    <Card className="hover:border-blue-300 transition-colors cursor-pointer">
+                        <CardContent className="pt-6 text-center">
+                            <Monitor className="h-8 w-8 mx-auto mb-2 text-cyan-600" />
+                            <p className="font-medium">リソース可視化</p>
+                        </CardContent>
+                    </Card>
+                </Link>
+                <Link href="/teacher/availabilities" className="block">
+                    <Card className="hover:border-blue-300 transition-colors cursor-pointer">
+                        <CardContent className="pt-6 text-center">
+                            <ClipboardList className="h-8 w-8 mx-auto mb-2 text-emerald-600" />
+                            <p className="font-medium">生徒の希望</p>
                         </CardContent>
                     </Card>
                 </Link>
@@ -198,7 +222,7 @@ export default async function TeacherDashboard() {
                     <Card className="hover:border-blue-300 transition-colors cursor-pointer">
                         <CardContent className="pt-6 text-center">
                             <CalendarCheck className="h-8 w-8 mx-auto mb-2 text-green-600" />
-                            <p className="font-medium">月間スケジュール作成</p>
+                            <p className="font-medium">月間スケジュール</p>
                         </CardContent>
                     </Card>
                 </Link>
@@ -207,14 +231,6 @@ export default async function TeacherDashboard() {
                         <CardContent className="pt-6 text-center">
                             <Users className="h-8 w-8 mx-auto mb-2 text-purple-600" />
                             <p className="font-medium">生徒管理</p>
-                        </CardContent>
-                    </Card>
-                </Link>
-                <Link href="/settings" className="block">
-                    <Card className="hover:border-blue-300 transition-colors cursor-pointer">
-                        <CardContent className="pt-6 text-center">
-                            <BookOpen className="h-8 w-8 mx-auto mb-2 text-amber-600" />
-                            <p className="font-medium">アカウント設定</p>
                         </CardContent>
                     </Card>
                 </Link>

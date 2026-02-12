@@ -15,13 +15,17 @@ export default async function AvailabilityPage({
     if (!session?.user || session.user.role !== "STUDENT") {
         redirect("/login")
     }
+    const studentId = session.user.id
+    if (!studentId) {
+        redirect("/login")
+    }
 
     const now = new Date()
     // Defaults to current month
     const year = params.year ? parseInt(params.year) : now.getFullYear()
     const month = params.month ? parseInt(params.month) : now.getMonth() + 1
 
-    const result = await getMonthlyAvailability(session.user.id, year, month)
+    const result = await getMonthlyAvailability(studentId, year, month)
     const data = result.success ? result.data : null
 
     return (
@@ -29,7 +33,7 @@ export default async function AvailabilityPage({
             initialData={data}
             year={year}
             month={month}
-            studentId={session.user.id}
+            studentId={studentId}
         />
     )
 }

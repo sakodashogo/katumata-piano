@@ -8,7 +8,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { ChevronLeft, ChevronRight, CalendarCheck } from "lucide-react"
 import { SchedulingCalendar } from "@/components/teacher/SchedulingCalendar"
-import { bulkCreateLessons } from "@/app/lib/actions/planning"
+import { bulkCreateLessons, publishMonthlySchedule } from "@/app/lib/actions/planning"
 import { useToast } from "@/components/ui/toast"
 import { Badge } from "@/components/ui/badge"
 import { HeatmapScheduler } from "@/components/teacher/HeatmapScheduler"
@@ -49,6 +49,7 @@ export function MonthlyScheduler({ students, lessons, year, month }: Props) {
     const [viewMode, setViewMode] = useState<"list" | "heatmap">("list")
     const [suggestions, setSuggestions] = useState<ScheduleSuggestion[]>([])
     const [isGenerating, setIsGenerating] = useState(false)
+    const [isPublishingMonth, setIsPublishingMonth] = useState(false)
 
     // Derived state
     const selectedStudent = students.find(s => s.id === selectedStudentId)
@@ -124,6 +125,21 @@ export function MonthlyScheduler({ students, lessons, year, month }: Props) {
         }
     }
 
+    const handlePublishMonth = async () => {
+        setIsPublishingMonth(true)
+        const result = await publishMonthlySchedule(year, month)
+        if (result.success) {
+            if (result.alreadyPublished) {
+                toast.info(`${year}年${month}月はすでに確定済みです。`)
+            } else {
+                toast.success(`${year}年${month}月のスケジュールを確定しました。`)
+            }
+        } else {
+            toast.error(result.error || "月間スケジュールの確定に失敗しました。")
+        }
+        setIsPublishingMonth(false)
+    }
+
     return (
         <div className="space-y-6">
             <div className="flex justify-between items-center">
@@ -142,18 +158,28 @@ export function MonthlyScheduler({ students, lessons, year, month }: Props) {
 
             <p className="text-sm text-slate-500">この画面から作成するレッスンは Room A に登録されます。</p>
 
-            <div className="flex justify-end">
-                {viewMode === "list" && (
-                    <Button onClick={handleAutoSchedule} disabled={isGenerating}>
-                        <Wand2 className="mr-2 h-4 w-4" />
-                        {isGenerating ? "生成中..." : "自動割り当て提案"}
-                    </Button>
-                )}
-                {viewMode === "heatmap" && (
-                    <Button variant="outline" onClick={() => setViewMode("list")}>
-                        リストに戻る
-                    </Button>
-                )}
+            <div className="flex items-center justify-between gap-3">
+                <Button
+                    onClick={handlePublishMonth}
+                    disabled={isPublishingMonth}
+                    className="bg-emerald-600 text-white hover:bg-emerald-700"
+                >
+                    {isPublishingMonth ? "確定中..." : "月間スケジュールを確定"}
+                </Button>
+
+                <div className="flex justify-end">
+                    {viewMode === "list" && (
+                        <Button onClick={handleAutoSchedule} disabled={isGenerating}>
+                            <Wand2 className="mr-2 h-4 w-4" />
+                            {isGenerating ? "生成中..." : "自動割り当て提案"}
+                        </Button>
+                    )}
+                    {viewMode === "heatmap" && (
+                        <Button variant="outline" onClick={() => setViewMode("list")}>
+                            リストに戻る
+                        </Button>
+                    )}
+                </div>
             </div>
 
             {viewMode === "heatmap" ? (

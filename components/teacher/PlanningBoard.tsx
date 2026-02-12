@@ -5,16 +5,15 @@ import { publishFixedSchedule } from "@/app/lib/actions/planning"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Loader2, User, X } from "lucide-react"
+import { Loader2, User } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { format, addDays, startOfWeek, setHours, setMinutes } from "date-fns"
-import { ja } from "date-fns/locale"
+import { format } from "date-fns"
 import { useToast } from "@/components/ui/toast"
 
 type Student = {
     id: string
     name: string | null
-    availabilities: any[]
+    availabilities: unknown[]
 }
 
 type Assignment = {
@@ -71,7 +70,7 @@ export function PlanningBoard({ students }: { students: Student[] }) {
         }
 
         const newAssignment: Assignment = {
-            id: Math.random().toString(36),
+            id: `${selectedStudent}-${dayOfWeek}-${h}-${m}-${selectedRoom}`,
             dayOfWeek,
             hour: h,
             minute: m,
@@ -87,9 +86,9 @@ export function PlanningBoard({ students }: { students: Student[] }) {
         startTransition(async () => {
             const res = await publishFixedSchedule(targetMonth, assignments)
             if (res.success) {
-                toast({ title: "スケジュールを確定しました", description: `${targetMonth}月のレッスンを作成しました。` })
+                toast.success(`${targetMonth}月のスケジュールを確定しました。`)
             } else {
-                toast({ variant: "destructive", title: "エラー", description: "スケジュールの作成に失敗しました。" })
+                toast.error("スケジュールの作成に失敗しました。")
             }
         })
     }
@@ -180,7 +179,7 @@ export function PlanningBoard({ students }: { students: Student[] }) {
 
                     {/* Body */}
                     <div className="overflow-y-auto flex-1">
-                        {timeSlots.map((time, timeIdx) => (
+                        {timeSlots.map((time) => (
                             <div key={time} className="grid grid-cols-8 border-b last:border-0">
                                 <div className="p-2 text-center text-xs text-slate-400 border-r bg-slate-50/50 flex items-center justify-center">
                                     {time}

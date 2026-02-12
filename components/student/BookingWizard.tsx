@@ -261,6 +261,11 @@ export function BookingWizard({
         visible: { opacity: 1, x: 0 },
         exit: { opacity: 0, x: -50 }
     }
+    const stepLabels: Record<number, string> = {
+        1: "メニュー選択",
+        2: "日時選択",
+        3: "内容確認",
+    }
 
     return (
         <div className="max-w-4xl mx-auto px-4 pb-20">
@@ -282,7 +287,7 @@ export function BookingWizard({
                             {rescheduleLessonId ? "予約の日時を変更" : "レッスンを予約する"}
                         </h1>
                         <p className="text-slate-500 font-medium font-mono text-xs uppercase tracking-widest mt-1">
-                            Step {step} of 3
+                            Step {step} of 3 · {stepLabels[step]}
                         </p>
                     </div>
                 </div>
@@ -309,9 +314,26 @@ export function BookingWizard({
                             : "border-red-200 bg-red-50 text-red-700"
                     )}
                 >
-                    {reschedulePolicy.canReschedule
-                        ? `振替可能期間: ${format(new Date(reschedulePolicy.windowStart), "yyyy/MM/dd")} 〜 ${format(new Date(reschedulePolicy.windowEnd), "yyyy/MM/dd")} / 今月残り ${reschedulePolicy.monthlyRemaining}回`
-                        : reschedulePolicy.reason}
+                    <div className="space-y-1">
+                        <div>
+                            対象レッスン:
+                            {" "}
+                            {format(new Date(reschedulePolicy.lessonStart), "yyyy/MM/dd (E) HH:mm", { locale: ja })}
+                        </div>
+                        <div>
+                            振替可能期間:
+                            {" "}
+                            {format(new Date(reschedulePolicy.windowStart), "yyyy/MM/dd")}
+                            {" "}
+                            〜
+                            {" "}
+                            {format(new Date(reschedulePolicy.windowEnd), "yyyy/MM/dd")}
+                        </div>
+                        <div>今月残り: {reschedulePolicy.monthlyRemaining}回</div>
+                        {!reschedulePolicy.canReschedule && (
+                            <div className="font-bold">{reschedulePolicy.reason}</div>
+                        )}
+                    </div>
                 </div>
             )}
 

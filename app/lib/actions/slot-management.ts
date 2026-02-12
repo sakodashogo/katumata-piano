@@ -12,23 +12,12 @@ import {
     setMinutes,
     addMinutes,
 } from "date-fns"
+import { isStudentBookableMenu } from "@/lib/menu-category"
 
 type RoomTimeRange = {
     roomId: string
     startTime: Date
     endTime: Date
-}
-
-function normalizeMenuName(name: string) {
-    return name.trim().toLowerCase()
-}
-
-function isBookableSlotMenu(name: string) {
-    const normalized = normalizeMenuName(name)
-    if (normalized.includes("自主練") || normalized.includes("practice")) return true
-    if (normalized.includes("solo")) return true
-    if (normalized.includes("duet")) return true
-    return normalized.includes("追加") && (normalized.includes("ソロ") || normalized.includes("連弾"))
 }
 
 function hasTimeOverlap(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date) {
@@ -50,7 +39,9 @@ export async function getMenusForSlots() {
         const menus = await prisma.menu.findMany({
             orderBy: [{ price: "asc" }, { durationMin: "asc" }],
         })
-        const filteredMenus = menus.filter((menu) => isBookableSlotMenu(menu.name))
+        const filteredMenus = menus.filter((menu) =>
+            isStudentBookableMenu(menu as { name?: string | null; category?: unknown })
+        )
         return { success: true as const, data: filteredMenus }
     } catch {
         return { success: false as const, error: "Failed to fetch menus" }

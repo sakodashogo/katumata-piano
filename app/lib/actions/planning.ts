@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma"
 import { auth } from "@/auth"
 import { revalidatePath } from "next/cache"
 import { addDays, startOfMonth, endOfMonth, getDay, setHours, setMinutes } from "date-fns"
+import { notifyEvent } from "@/lib/notifications"
 
 export async function getPlanningData() {
     const session = await auth()
@@ -134,6 +135,44 @@ export type LessonDraft = {
     menuId?: string
     price?: number
     type?: "REGULAR" | "AD_HOC" | "PRACTICE"
+}
+
+export async function publishMonthlySchedule(year: number, month: number) {
+    const session = await auth()
+    if (!session?.user || session.user.role !== "TEACHER") {
+        return { success: false as const, error: "Unauthorized" }
+    }
+    if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) {
+        return { success: false as const, error: "Invalid month range" }
+    }
+
+    try {
+        const now = new Date()
+        const publicationId = `pub_${year}_${month}_${Date.now()}`
+        const inserted = await prisma.$executeRaw`
+            INSERT INTO "MonthlySchedulePublication"
+                ("id", "year", "month", "publishedAt", "publishedBy", "createdAt", "updatedAt")
+            VALUES
+                (${publicationId}, ${year}, ${month}, ${now}, ${session.user.id ?? null}, ${now}, ${now})
+            ON CONFLICT ("year", "month") DO NOTHING
+        `
+
+        if (Number(inserted) === 0) {
+            return { success: true as const, alreadyPublished: true as const }
+        }
+
+        revalidatePath("/teacher/schedule/monthly")
+        void notifyEvent("MONTHLY_SCHEDULE_FINALIZED", {
+            year,
+            month,
+            publishedBy: session.user.id ?? null,
+            publishedAt: now.toISOString(),
+        })
+        return { success: true as const, alreadyPublished: false as const }
+    } catch (error) {
+        console.error("Failed to publish monthly schedule:", error)
+        return { success: false as const, error: "Failed to publish monthly schedule" }
+    }
 }
 
 export async function bulkCreateLessons(lessons: LessonDraft[]) {

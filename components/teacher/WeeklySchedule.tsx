@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useTransition, useEffect, useMemo } from "react"
+import { useCallback, useEffect, useState, useTransition } from "react"
 import { bulkUpdateOpenSlots } from "@/app/lib/actions/schedule"
 import { cn } from "@/lib/utils"
 import { addDays, format, isSameDay, startOfWeek, addMinutes, setHours, setMinutes, isSameMinute } from "date-fns"
@@ -11,12 +11,8 @@ import {
     ChevronLeft,
     ChevronRight,
     Loader2,
-    Eraser,
-    PenLine,
     UserPlus,
     CalendarPlus,
-    CheckCircle2,
-    XCircle
 } from "lucide-react"
 import { useRouter } from "next/navigation"
 import { useToast } from "@/components/ui/toast"
@@ -146,7 +142,7 @@ export function WeeklySchedule({
         setPendingChanges(newPending)
     }
 
-    const handleMouseUp = async () => {
+    const handleMouseUp = useCallback(async () => {
         if (!isPainting) return
         setIsPainting(false)
 
@@ -163,15 +159,15 @@ export function WeeklySchedule({
                 setPendingChanges(new Set())
             }
         })
-    }
+    }, [isPainting, paintMode, pendingChanges, roomId, router, startTransition, toast])
 
     useEffect(() => {
         const handleGlobalMouseUp = () => {
-            if (isPainting) handleMouseUp()
+            if (isPainting) void handleMouseUp()
         }
         window.addEventListener('mouseup', handleGlobalMouseUp)
         return () => window.removeEventListener('mouseup', handleGlobalMouseUp)
-    }, [isPainting, pendingChanges, paintMode])
+    }, [handleMouseUp, isPainting])
 
     const navigateWeek = (direction: 'prev' | 'next') => {
         const newDate = addDays(date, direction === 'next' ? 7 : -7)
@@ -206,7 +202,8 @@ export function WeeklySchedule({
                 setBookingDialogOpen(false)
                 router.refresh()
             } else {
-                toast.error(res.error || "予約に失敗しました")
+                const errorMessage = "error" in res ? res.error : undefined
+                toast.error(errorMessage || "予約に失敗しました")
             }
         })
     }

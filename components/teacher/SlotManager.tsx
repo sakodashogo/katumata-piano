@@ -90,6 +90,28 @@ export function SlotManager({ year, month, menus, draftSlots, allSlots }: Props)
                 </div>
             </div>
 
+            <div className="grid gap-2 rounded-lg border bg-white p-3 md:grid-cols-3">
+                {[
+                    { id: "create", label: "1. 一括作成", description: "公開前の下書き枠を作る" },
+                    { id: "drafts", label: "2. 編集・確認", description: "メニュー/時間を調整して確認" },
+                    { id: "timeline", label: "3. 公開状況確認", description: "公開済みと予約済みを確認" },
+                ].map((step) => {
+                    const isActive = activeTab === step.id
+                    return (
+                        <div
+                            key={step.id}
+                            className={cn(
+                                "rounded-md border px-3 py-2 text-xs",
+                                isActive ? "border-blue-300 bg-blue-50 text-blue-900" : "border-slate-200 bg-slate-50 text-slate-600"
+                            )}
+                        >
+                            <div className="font-bold">{step.label}</div>
+                            <div className="mt-0.5">{step.description}</div>
+                        </div>
+                    )
+                })}
+            </div>
+
             {/* Tab Content */}
             {activeTab === "create" && (
                 <BatchCreationForm year={year} month={month} menus={menus} />

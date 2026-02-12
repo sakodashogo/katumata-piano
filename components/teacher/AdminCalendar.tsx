@@ -1,7 +1,6 @@
 "use client"
 
 import { useState, useEffect, useMemo, useRef } from "react"
-import { DndContext, DragEndEvent, DragOverlay, useSensor, useSensors, MouseSensor, TouchSensor, DragStartEvent, useDraggable, useDroppable } from "@dnd-kit/core"
 import { format, startOfWeek, endOfWeek, eachDayOfInterval, addDays, isSameDay, setHours, setMinutes, addMinutes } from "date-fns"
 import { ja } from "date-fns/locale"
 import { cn } from "@/lib/utils"
@@ -10,7 +9,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { ChevronLeft, ChevronRight, Save, RotateCcw } from "lucide-react"
 import { useToast } from "@/components/ui/toast"
 import { LESSON_TYPE_LABELS, ROOMS } from "@/lib/constants"
-import { bulkUpdateOpenSlots, moveLesson, moveOpenSlot } from "@/app/lib/actions/schedule"
+import { bulkUpdateOpenSlots } from "@/app/lib/actions/schedule"
 import { useRouter } from "next/navigation"
 
 // Types
@@ -55,7 +54,6 @@ const HOURS = Array.from({ length: 13 }, (_, i) => i + 9) // 09:00 - 21:00
 const MINUTES = [0, 30]
 type RoomFilter = "all" | "A" | "B"
 type PaintMode = "add" | "remove"
-type SelectionMode = "path" | "rect"
 type SlotDraftAction = "add" | "remove"
 
 type PaintCell = {
@@ -74,10 +72,8 @@ export function AdminCalendar({ initialDate = new Date(), slots: initialSlots, l
     // State
     const [currentDate, setCurrentDate] = useState(initialDate)
     const [isEditMode, setIsEditMode] = useState(false)
-    const [activeId, setActiveId] = useState<string | null>(null)
     const [localSlots, setLocalSlots] = useState<OpenSlot[]>(initialSlots)
     const [localLessons, setLocalLessons] = useState<Lesson[]>(initialLessons)
-    const [pendingMoveChanges, setPendingMoveChanges] = useState<Map<string, { type: 'move', to: { start: Date, room: string } }>>(new Map())
     const [slotDraftMap, setSlotDraftMap] = useState<Map<string, SlotDraftAction>>(new Map())
     const [isSubmitting, setIsSubmitting] = useState(false)
     const [studentFilter, setStudentFilter] = useState("")
@@ -85,23 +81,14 @@ export function AdminCalendar({ initialDate = new Date(), slots: initialSlots, l
     const [lessonTypeFilter, setLessonTypeFilter] = useState("all")
     const [isPainting, setIsPainting] = useState(false)
     const [paintMode, setPaintMode] = useState<PaintMode>("add")
-    const [selectionMode, setSelectionMode] = useState<SelectionMode>("path")
     const [paintedCellKeys, setPaintedCellKeys] = useState<Set<string>>(new Set())
     const [paintStartCell, setPaintStartCell] = useState<PaintCell | null>(null)
 
-    // Sync props to state unless drag changes are pending
+    // Sync props to state on server refresh
     useEffect(() => {
-        if (pendingMoveChanges.size === 0) {
-            setLocalSlots(initialSlots)
-            setLocalLessons(initialLessons)
-        }
-    }, [initialSlots, initialLessons, pendingMoveChanges.size])
-
-    // Sensors
-    const sensors = useSensors(
-        useSensor(MouseSensor, { activationConstraint: { distance: 10 } }),
-        useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 5 } })
-    )
+        setLocalSlots(initialSlots)
+        setLocalLessons(initialLessons)
+    }, [initialSlots, initialLessons])
 
     // Calendar Grid
     const weekStart = startOfWeek(currentDate, { weekStartsOn: 1 })
@@ -320,7 +307,7 @@ export function AdminCalendar({ initialDate = new Date(), slots: initialSlots, l
         return keys
     }
 
-    const startPaint = (cell: PaintCell, useRectSelection: boolean) => {
+    const startPaint = (cell: PaintCell) => {
         if (!isEditMode || isSubmitting) return
 
         const effective = getEffectiveItemsByCellKey(cell.key, slotDraftMap)
@@ -328,24 +315,12 @@ export function AdminCalendar({ initialDate = new Date(), slots: initialSlots, l
 
         setIsPainting(true)
         setPaintMode(effective.slot ? "remove" : "add")
-        setSelectionMode(useRectSelection ? "rect" : "path")
         setPaintStartCell(cell)
         setPaintedCellKeys(new Set([cell.key]))
     }
 
     const updatePaint = (cell: PaintCell) => {
         if (!isPainting) return
-
-        if (selectionMode === "path") {
-            if (!isEditableCellKey(cell.key, slotDraftMap)) return
-            setPaintedCellKeys(prev => {
-                if (prev.has(cell.key)) return prev
-                const next = new Set(prev)
-                next.add(cell.key)
-                return next
-            })
-            return
-        }
 
         if (!paintStartCell) return
         setPaintedCellKeys(getRectCellKeys(paintStartCell, cell))
@@ -364,69 +339,9 @@ export function AdminCalendar({ initialDate = new Date(), slots: initialSlots, l
     }
 
     // Handlers
-    const handleDragStart = (event: DragStartEvent) => {
-        if (!isEditMode) return
-        clearPaintingState()
-        setActiveId(event.active.id as string)
-    }
-
-    const handleDragEnd = (event: DragEndEvent) => {
-        setActiveId(null)
-        const { active, over } = event
-
-        if (!over || !isEditMode) return
-
-        const activeIdStr = active.id as string
-        const [type, id] = activeIdStr.split(":") // "lesson:123" or "slot:456"
-        const overId = over.id as string // "cell:A:1234567890"
-
-        if (!overId.startsWith("cell:")) return
-
-        const parts = overId.split(":")
-        const roomId = parts[1]
-        const timeStr = parts[2]
-        const newStartTime = new Date(parseInt(timeStr))
-
-        // Update Local State
-        if (type === "lesson") {
-            setLocalLessons(prev => prev.map(l => {
-                if (l.id === id) {
-                    const oldStart = new Date(l.startTime).getTime()
-                    const oldEnd = new Date(l.endTime).getTime()
-                    const duration = oldEnd - oldStart
-                    return {
-                        ...l,
-                        roomId,
-                        startTime: newStartTime,
-                        endTime: new Date(newStartTime.getTime() + duration)
-                    }
-                }
-                return l
-            }))
-        } else if (type === "slot") {
-            setLocalSlots(prev => prev.map(s => {
-                if (s.id === id) {
-                    return {
-                        ...s,
-                        roomId,
-                        startTime: newStartTime,
-                        endTime: addMinutes(newStartTime, 30)
-                    }
-                }
-                return s
-            }))
-        }
-
-        // Track Change
-        setPendingMoveChanges(prev => {
-            const newMap = new Map(prev)
-            newMap.set(activeIdStr, { type: 'move', to: { start: newStartTime, room: roomId } })
-            return newMap
-        })
-    }
 
     const handleSaveChanges = async () => {
-        const totalPending = pendingMoveChanges.size + slotDraftMap.size
+        const totalPending = slotDraftMap.size
         if (totalPending === 0) return
         if (!confirm(`${totalPending}件の変更を保存しますか？`)) return
 
@@ -435,27 +350,9 @@ export function AdminCalendar({ initialDate = new Date(), slots: initialSlots, l
         let skippedCount = 0
         let failureCount = 0
         let firstError = ""
-        const nextMoveChanges = new Map(pendingMoveChanges)
         const nextSlotDraftMap = new Map(slotDraftMap)
 
         try {
-            for (const [key, change] of Array.from(pendingMoveChanges.entries())) {
-                const [type, id] = key.split(":")
-                let res
-                if (type === "lesson") {
-                    res = await moveLesson(id, change.to.start, change.to.room)
-                } else {
-                    res = await moveOpenSlot(id, change.to.start, change.to.room)
-                }
-                if (res.success) {
-                    appliedCount++
-                    nextMoveChanges.delete(key)
-                } else {
-                    failureCount++
-                    if (!firstError && res.error) firstError = res.error
-                }
-            }
-
             const grouped = new Map<string, { add: string[], remove: string[], addKeys: string[], removeKeys: string[] }>()
             for (const [cellKey, action] of Array.from(slotDraftMap.entries())) {
                 const base = getBaseItemsByCellKey(cellKey)
@@ -501,7 +398,6 @@ export function AdminCalendar({ initialDate = new Date(), slots: initialSlots, l
                 }
             }
 
-            setPendingMoveChanges(nextMoveChanges)
             setSlotDraftMap(nextSlotDraftMap)
 
             if (failureCount === 0 && skippedCount === 0) {
@@ -515,7 +411,7 @@ export function AdminCalendar({ initialDate = new Date(), slots: initialSlots, l
             if (appliedCount > 0) {
                 router.refresh()
             }
-            if (nextMoveChanges.size === 0 && nextSlotDraftMap.size === 0) {
+            if (nextSlotDraftMap.size === 0) {
                 setIsEditMode(false)
             }
         } catch (e) {
@@ -530,7 +426,6 @@ export function AdminCalendar({ initialDate = new Date(), slots: initialSlots, l
         if (confirm("全ての変更を取り消しますか？")) {
             setLocalSlots(initialSlots)
             setLocalLessons(initialLessons)
-            setPendingMoveChanges(new Map())
             setSlotDraftMap(new Map())
             clearPaintingState()
         }
@@ -579,14 +474,8 @@ export function AdminCalendar({ initialDate = new Date(), slots: initialSlots, l
         label: string
     }) => {
         const time = setMinutes(setHours(day, hour), minute).getTime()
-        const id = `cell:${roomId}:${time}`
         const cellKey = getCellKey(roomId, time)
         const gridCol = colIndex * 2 + (roomId === ROOMS.B.id ? 1 : 0)
-
-        const { setNodeRef, isOver } = useDroppable({
-            id,
-            disabled: !editMode
-        })
 
         const hasItem = items.slot || items.lesson
         const isPendingPaint = isPainting && paintedCellKeys.has(cellKey)
@@ -596,24 +485,23 @@ export function AdminCalendar({ initialDate = new Date(), slots: initialSlots, l
 
         return (
             <div
-                ref={setNodeRef}
                 data-cell-key={cellKey}
                 data-row={rowIndex}
                 data-col={colIndex}
                 data-room={roomId}
                 onMouseDown={(e) => {
                     if (e.button !== 0) return
-                    startPaint({ row: rowIndex, col: colIndex, roomId, gridCol, key: cellKey }, e.shiftKey)
+                    e.preventDefault()
+                    startPaint({ row: rowIndex, col: colIndex, roomId, gridCol, key: cellKey })
                 }}
                 onMouseEnter={() => {
                     updatePaint({ row: rowIndex, col: colIndex, roomId, gridCol, key: cellKey })
                 }}
                 onTouchStart={() => {
-                    startPaint({ row: rowIndex, col: colIndex, roomId, gridCol, key: cellKey }, false)
+                    startPaint({ row: rowIndex, col: colIndex, roomId, gridCol, key: cellKey })
                 }}
                 className={cn(
-                    "rounded min-h-[30px] flex items-center justify-center relative transition-colors text-xs",
-                    isOver ? "bg-blue-100 ring-2 ring-blue-400 z-10" : "",
+                    "rounded min-h-[30px] flex items-center justify-center relative transition-colors text-xs select-none",
                     editMode ? "cursor-pointer" : "cursor-default",
                     editMode && !hasItem ? "hover:bg-slate-100" : "",
                     editMode && hasItem ? "hover:brightness-95" : "",
@@ -636,29 +524,17 @@ export function AdminCalendar({ initialDate = new Date(), slots: initialSlots, l
                 )}
 
                 {items.slot && !items.isDraftAdded && (
-                    <DraggableItem item={items.slot} type="slot" isEditMode={editMode} />
+                    <CellItem item={items.slot} type="slot" />
                 )}
 
                 {items.lesson && (
-                    <DraggableItem item={items.lesson} type="lesson" isEditMode={editMode} />
+                    <CellItem item={items.lesson} type="lesson" />
                 )}
             </div>
         )
     }
 
-    // Draggable Item Component
-    const DraggableItem = ({ item, type, isEditMode: editMode }: { item: OpenSlot | Lesson, type: "slot" | "lesson", isEditMode: boolean }) => {
-        const id = `${type}:${item.id}`
-        const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
-            id,
-            disabled: !editMode
-        })
-
-        const style = transform ? {
-            transform: `translate3d(${transform.x}px, ${transform.y}px, 0)`,
-            zIndex: 999
-        } : undefined
-
+    const CellItem = ({ item, type }: { item: OpenSlot | Lesson, type: "slot" | "lesson" }) => {
         let bgClass = "bg-slate-100"
         let borderClass = "border-slate-200"
         let content = null
@@ -691,22 +567,12 @@ export function AdminCalendar({ initialDate = new Date(), slots: initialSlots, l
             }
         }
 
-        if (isDragging) {
-            return <div ref={setNodeRef} className="opacity-30 w-full h-full bg-slate-400 rounded" />
-        }
-
         return (
             <div
-                ref={setNodeRef}
-                data-draggable-item="true"
-                style={style}
-                {...attributes}
-                {...listeners}
                 className={cn(
                     "w-full h-full rounded border shadow-sm absolute inset-0 transition-opacity flex flex-col items-center justify-center p-0.5",
                     bgClass,
-                    borderClass,
-                    editMode ? "cursor-grab active:cursor-grabbing hover:shadow-md" : "cursor-default"
+                    borderClass
                 )}
             >
                 {content}
@@ -714,81 +580,75 @@ export function AdminCalendar({ initialDate = new Date(), slots: initialSlots, l
         )
     }
 
-    const pendingCount = pendingMoveChanges.size + slotDraftMap.size
+    const pendingCount = slotDraftMap.size
 
     return (
-        <DndContext
-            sensors={sensors}
-            onDragStart={handleDragStart}
-            onDragEnd={handleDragEnd}
-        >
-            <div className="space-y-4">
-                {/* Toolbar */}
-                <div className="flex items-center justify-between bg-white p-4 rounded-lg shadow-sm border sticky top-0 z-20">
-                    <div className="flex items-center gap-4">
-                        <div className="flex items-center rounded-md border bg-slate-50">
-                            <Button variant="ghost" className="w-8 h-8 p-0" onClick={() => setCurrentDate(d => addDays(d, -7))}>
-                                <ChevronLeft className="h-4 w-4" />
-                            </Button>
-                            <span className="px-4 font-bold text-lg min-w-[140px] text-center">
-                                {format(weekStart, "M/d", { locale: ja })} - {format(weekEnd, "M/d", { locale: ja })}
-                            </span>
-                            <Button variant="ghost" className="w-8 h-8 p-0" onClick={() => setCurrentDate(d => addDays(d, 7))}>
-                                <ChevronRight className="h-4 w-4" />
-                            </Button>
+        <div className="space-y-4">
+            {/* Toolbar */}
+            <div className="flex items-center justify-between bg-white p-4 rounded-lg shadow-sm border sticky top-0 z-20">
+                <div className="flex items-center gap-4">
+                    <div className="flex items-center rounded-md border bg-slate-50">
+                        <Button variant="ghost" className="w-8 h-8 p-0" onClick={() => setCurrentDate(d => addDays(d, -7))}>
+                            <ChevronLeft className="h-4 w-4" />
+                        </Button>
+                        <span className="px-4 font-bold text-lg min-w-[140px] text-center">
+                            {format(weekStart, "M/d", { locale: ja })} - {format(weekEnd, "M/d", { locale: ja })}
+                        </span>
+                        <Button variant="ghost" className="w-8 h-8 p-0" onClick={() => setCurrentDate(d => addDays(d, 7))}>
+                            <ChevronRight className="h-4 w-4" />
+                        </Button>
+                    </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 mr-4 bg-slate-50 px-3 py-1.5 rounded-full border">
+                        <span className="text-sm font-medium text-slate-600">編集モード</span>
+                        <div
+                            className={cn("w-10 h-6 rounded-full p-1 cursor-pointer transition-colors duration-200 ease-in-out", isEditMode ? "bg-blue-600" : "bg-slate-300")}
+                            onClick={() => {
+                                if (isEditMode && pendingCount > 0) {
+                                    if (!confirm("変更を破棄してモードを終了しますか？")) return
+                                    handleUndoAll()
+                                }
+                                setIsEditMode(!isEditMode)
+                            }}
+                        >
+                            <div className={cn("w-4 h-4 bg-white rounded-full shadow-sm transition-transform duration-200 ease-in-out", isEditMode ? "translate-x-4" : "")} />
                         </div>
                     </div>
 
-                    <div className="flex items-center gap-2">
-                        <div className="flex items-center gap-2 mr-4 bg-slate-50 px-3 py-1.5 rounded-full border">
-                            <span className="text-sm font-medium text-slate-600">編集モード</span>
-                            <div
-                                className={cn("w-10 h-6 rounded-full p-1 cursor-pointer transition-colors duration-200 ease-in-out", isEditMode ? "bg-blue-600" : "bg-slate-300")}
-                                onClick={() => {
-                                    if (isEditMode && pendingCount > 0) {
-                                        if (!confirm("変更を破棄してモードを終了しますか？")) return
-                                        handleUndoAll()
-                                    }
-                                    setIsEditMode(!isEditMode)
-                                }}
+                    {pendingCount > 0 && (
+                        <>
+                            <Button variant="outline" size="sm" onClick={handleUndoAll}>
+                                <RotateCcw className="h-4 w-4 mr-2" /> 元に戻す
+                            </Button>
+                            <Button
+                                className="bg-blue-600 text-white hover:bg-blue-700"
+                                size="sm"
+                                onClick={handleSaveChanges}
+                                disabled={isSubmitting}
                             >
-                                <div className={cn("w-4 h-4 bg-white rounded-full shadow-sm transition-transform duration-200 ease-in-out", isEditMode ? "translate-x-4" : "")} />
-                            </div>
-                        </div>
-
-                        {pendingCount > 0 && (
-                            <>
-                                <Button variant="outline" size="sm" onClick={handleUndoAll}>
-                                    <RotateCcw className="h-4 w-4 mr-2" /> 元に戻す
-                                </Button>
-                                <Button
-                                    className="bg-blue-600 text-white hover:bg-blue-700"
-                                    size="sm"
-                                    onClick={handleSaveChanges}
-                                    disabled={isSubmitting}
-                                >
-                                    <Save className="h-4 w-4 mr-2" /> 保存 ({pendingCount})
-                                </Button>
-                            </>
-                        )}
-                    </div>
+                                <Save className="h-4 w-4 mr-2" /> 保存 ({pendingCount})
+                            </Button>
+                        </>
+                    )}
                 </div>
+            </div>
 
-                <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-white p-3 text-xs font-medium text-slate-600">
-                    <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-1 text-blue-700">空き枠（公開）</span>
-                    <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-1 text-amber-700">空き枠（下書き）</span>
-                    <span className="inline-flex items-center gap-1 rounded-full bg-green-50 px-2 py-1 text-green-700">予約済み</span>
-                    <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-1 text-amber-800">振替待ち</span>
-                    <span className="inline-flex items-center gap-1 rounded-full bg-blue-100 px-2 py-1 text-blue-800">通常ドラッグ: 通過セル選択</span>
-                    <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-1 text-slate-700">Shift+ドラッグ: 矩形選択</span>
-                    <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-1 text-rose-700">保存で確定</span>
-                </div>
+            <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-white p-3 text-xs font-medium text-slate-600">
+                <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-1 text-blue-700">空き枠（公開）</span>
+                <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-1 text-amber-700">空き枠（下書き）</span>
+                <span className="inline-flex items-center gap-1 rounded-full bg-green-50 px-2 py-1 text-green-700">予約済み</span>
+                <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-1 text-amber-800">振替待ち</span>
+                <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-1 text-slate-700">ドラッグ: 矩形選択</span>
+                <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-1 text-rose-700">保存で確定</span>
+            </div>
 
                 {/* Calendar */}
                 <ScrollArea className="h-[calc(100vh-200px)] border rounded-md bg-white">
                     <div
                         ref={gridRef}
-                        className="min-w-[1000px] p-4"
+                        className="min-w-[1000px] p-4 select-none"
                         onMouseLeave={commitPaint}
                         onMouseMove={(e) => {
                             if (!isPainting) return
@@ -847,112 +707,103 @@ export function AdminCalendar({ initialDate = new Date(), slots: initialSlots, l
                     </div>
                 </ScrollArea>
 
-                <div className="rounded-lg border bg-white">
-                    <div className="flex flex-col gap-3 border-b p-4 md:flex-row md:items-end md:justify-between">
-                        <div>
-                            <h2 className="text-base font-bold text-slate-900">統合リスト</h2>
-                            <p className="text-xs text-slate-500">生徒名・部屋・レッスン種別で絞り込みできます</p>
-                        </div>
-                        <div className="text-xs font-semibold text-slate-500">
-                            {filteredListItems.length}件表示 / 全{weeklyListItems.length}件
-                        </div>
+            <div className="rounded-lg border bg-white">
+                <div className="flex flex-col gap-3 border-b p-4 md:flex-row md:items-end md:justify-between">
+                    <div>
+                        <h2 className="text-base font-bold text-slate-900">統合リスト</h2>
+                        <p className="text-xs text-slate-500">生徒名・部屋・レッスン種別で絞り込みできます</p>
                     </div>
-
-                    <div className="grid gap-3 border-b p-4 md:grid-cols-3">
-                        <div className="space-y-1">
-                            <label className="text-xs font-semibold text-slate-500">生徒名</label>
-                            <input
-                                value={studentFilter}
-                                onChange={(e) => setStudentFilter(e.target.value)}
-                                placeholder="例: 田中"
-                                className="h-9 w-full rounded-md border px-3 text-sm"
-                            />
-                        </div>
-                        <div className="space-y-1">
-                            <label className="text-xs font-semibold text-slate-500">部屋</label>
-                            <select
-                                value={roomFilter}
-                                onChange={(e) => setRoomFilter(e.target.value as RoomFilter)}
-                                className="h-9 w-full rounded-md border px-3 text-sm"
-                            >
-                                <option value="all">すべて</option>
-                                <option value="A">Room A</option>
-                                <option value="B">Room B</option>
-                            </select>
-                        </div>
-                        <div className="space-y-1">
-                            <label className="text-xs font-semibold text-slate-500">種別</label>
-                            <select
-                                value={lessonTypeFilter}
-                                onChange={(e) => setLessonTypeFilter(e.target.value)}
-                                className="h-9 w-full rounded-md border px-3 text-sm"
-                            >
-                                <option value="all">すべて</option>
-                                <option value="OPEN_SLOT">空き枠</option>
-                                {lessonTypeOptions.map((type) => (
-                                    <option key={type} value={type}>
-                                        {LESSON_TYPE_LABELS[type] || type}
-                                    </option>
-                                ))}
-                            </select>
-                        </div>
-                    </div>
-
-                    <div className="max-h-[360px] overflow-auto">
-                        <table className="w-full min-w-[760px] text-sm">
-                            <thead className="sticky top-0 bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
-                                <tr>
-                                    <th className="px-3 py-2 text-left">日付</th>
-                                    <th className="px-3 py-2 text-left">時間</th>
-                                    <th className="px-3 py-2 text-left">部屋</th>
-                                    <th className="px-3 py-2 text-left">種別</th>
-                                    <th className="px-3 py-2 text-left">生徒</th>
-                                    <th className="px-3 py-2 text-left">ステータス</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {filteredListItems.length === 0 && (
-                                    <tr>
-                                        <td colSpan={6} className="px-3 py-8 text-center text-sm text-slate-500">
-                                            条件に一致する予定がありません。
-                                        </td>
-                                    </tr>
-                                )}
-                                {filteredListItems.map((item) => (
-                                    <tr key={item.id} className="border-t">
-                                        <td className="px-3 py-2 text-slate-700">
-                                            {format(item.startTime, "M/d (E)", { locale: ja })}
-                                        </td>
-                                        <td className="px-3 py-2 font-medium text-slate-800">
-                                            {format(item.startTime, "HH:mm")} - {format(item.endTime, "HH:mm")}
-                                        </td>
-                                        <td className="px-3 py-2 text-slate-700">Room {item.roomId}</td>
-                                        <td className="px-3 py-2 text-slate-700">
-                                            {item.lessonType === "OPEN_SLOT"
-                                                ? "空き枠"
-                                                : (LESSON_TYPE_LABELS[item.lessonType] || item.lessonType)}
-                                        </td>
-                                        <td className="px-3 py-2 text-slate-700">{item.studentName || "-"}</td>
-                                        <td className="px-3 py-2">
-                                            <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold ${item.statusClass}`}>
-                                                {item.statusLabel}
-                                            </span>
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
+                    <div className="text-xs font-semibold text-slate-500">
+                        {filteredListItems.length}件表示 / 全{weeklyListItems.length}件
                     </div>
                 </div>
 
-                <DragOverlay>
-                    {activeId ? (
-                        <div className="bg-blue-600 text-white px-3 py-2 text-xs rounded shadow-2xl opacity-90 font-bold border border-blue-400">
-                            移動中...
-                        </div>
-                    ) : null}
-                </DragOverlay>
+                <div className="grid gap-3 border-b p-4 md:grid-cols-3">
+                    <div className="space-y-1">
+                        <label className="text-xs font-semibold text-slate-500">生徒名</label>
+                        <input
+                            value={studentFilter}
+                            onChange={(e) => setStudentFilter(e.target.value)}
+                            placeholder="例: 田中"
+                            className="h-9 w-full rounded-md border px-3 text-sm"
+                        />
+                    </div>
+                    <div className="space-y-1">
+                        <label className="text-xs font-semibold text-slate-500">部屋</label>
+                        <select
+                            value={roomFilter}
+                            onChange={(e) => setRoomFilter(e.target.value as RoomFilter)}
+                            className="h-9 w-full rounded-md border px-3 text-sm"
+                        >
+                            <option value="all">すべて</option>
+                            <option value="A">Room A</option>
+                            <option value="B">Room B</option>
+                        </select>
+                    </div>
+                    <div className="space-y-1">
+                        <label className="text-xs font-semibold text-slate-500">種別</label>
+                        <select
+                            value={lessonTypeFilter}
+                            onChange={(e) => setLessonTypeFilter(e.target.value)}
+                            className="h-9 w-full rounded-md border px-3 text-sm"
+                        >
+                            <option value="all">すべて</option>
+                            <option value="OPEN_SLOT">空き枠</option>
+                            {lessonTypeOptions.map((type) => (
+                                <option key={type} value={type}>
+                                    {LESSON_TYPE_LABELS[type] || type}
+                                </option>
+                            ))}
+                        </select>
+                    </div>
+                </div>
+
+                <div className="max-h-[360px] overflow-auto">
+                    <table className="w-full min-w-[760px] text-sm">
+                        <thead className="sticky top-0 bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                            <tr>
+                                <th className="px-3 py-2 text-left">日付</th>
+                                <th className="px-3 py-2 text-left">時間</th>
+                                <th className="px-3 py-2 text-left">部屋</th>
+                                <th className="px-3 py-2 text-left">種別</th>
+                                <th className="px-3 py-2 text-left">生徒</th>
+                                <th className="px-3 py-2 text-left">ステータス</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {filteredListItems.length === 0 && (
+                                <tr>
+                                    <td colSpan={6} className="px-3 py-8 text-center text-sm text-slate-500">
+                                        条件に一致する予定がありません。
+                                    </td>
+                                </tr>
+                            )}
+                            {filteredListItems.map((item) => (
+                                <tr key={item.id} className="border-t">
+                                    <td className="px-3 py-2 text-slate-700">
+                                        {format(item.startTime, "M/d (E)", { locale: ja })}
+                                    </td>
+                                    <td className="px-3 py-2 font-medium text-slate-800">
+                                        {format(item.startTime, "HH:mm")} - {format(item.endTime, "HH:mm")}
+                                    </td>
+                                    <td className="px-3 py-2 text-slate-700">Room {item.roomId}</td>
+                                    <td className="px-3 py-2 text-slate-700">
+                                        {item.lessonType === "OPEN_SLOT"
+                                            ? "空き枠"
+                                            : (LESSON_TYPE_LABELS[item.lessonType] || item.lessonType)}
+                                    </td>
+                                    <td className="px-3 py-2 text-slate-700">{item.studentName || "-"}</td>
+                                    <td className="px-3 py-2">
+                                        <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold ${item.statusClass}`}>
+                                            {item.statusLabel}
+                                        </span>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
             </div>
-        </DndContext>
+        </div>
     )
 }

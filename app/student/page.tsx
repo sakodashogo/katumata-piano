@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { CalendarDays, Clock, Plus } from "lucide-react"
 import Link from "next/link"
-import { format } from "date-fns"
+import { endOfMonth, format, startOfMonth } from "date-fns"
 import { ja } from "date-fns/locale"
 import { LESSON_TYPE_LABELS } from "@/lib/constants"
 import { StudentScheduleCalendar } from "@/components/student/StudentScheduleCalendar"
@@ -19,15 +19,21 @@ async function getStudentLessons(studentId: string) {
 
 export default async function StudentDashboard() {
     const session = await auth()
-    if (!session?.user) return null
+    if (!session?.user?.id) return null
 
-    const allLessons = await getStudentLessons(session.user.id!)
+    const allLessons = await getStudentLessons(session.user.id)
     const upcomingLessons = allLessons.filter(l => new Date(l.startTime) > new Date() && l.status !== "CANCELLED")
     const historyLessons = allLessons.filter(l => new Date(l.startTime) <= new Date()).reverse()
     const upcomingRegular = upcomingLessons.filter((lesson) => lesson.type === "REGULAR")
     const upcomingAdditional = upcomingLessons.filter((lesson) =>
         lesson.type === "AD_HOC" || lesson.type === "SOLO_ADDITIONAL" || lesson.type === "DUET_ADDITIONAL"
     )
+    const currentMonthStart = startOfMonth(new Date())
+    const currentMonthEnd = endOfMonth(new Date())
+    const monthlyRegularLessons = upcomingRegular.filter((lesson) => {
+        const lessonDate = new Date(lesson.startTime)
+        return lessonDate >= currentMonthStart && lessonDate <= currentMonthEnd
+    })
 
     const nextLesson = upcomingLessons[0]
 
@@ -99,6 +105,54 @@ export default async function StudentDashboard() {
                         <div className="space-y-1 text-xs text-slate-600">
                             <div>次回の固定: {upcomingRegular.length}件</div>
                             <div>次回の追加: {upcomingAdditional.length}件</div>
+                        </div>
+                    </CardContent>
+                </Card>
+            </div>
+
+            <div className="grid gap-6 md:grid-cols-2">
+                <Card>
+                    <CardHeader>
+                        <CardTitle>今月の固定レッスン</CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                        {monthlyRegularLessons.length === 0 ? (
+                            <p className="text-sm text-slate-500">今月の固定レッスンはまだありません。</p>
+                        ) : (
+                            monthlyRegularLessons.map((lesson) => (
+                                <div key={lesson.id} className="flex items-center justify-between rounded-lg border px-3 py-2">
+                                    <div className="text-sm font-medium text-slate-800">
+                                        {format(new Date(lesson.startTime), "M/d (E) HH:mm", { locale: ja })}
+                                    </div>
+                                    <div className="text-xs text-slate-500">
+                                        {format(new Date(lesson.endTime), "HH:mm")}まで
+                                    </div>
+                                </div>
+                            ))
+                        )}
+                    </CardContent>
+                </Card>
+
+                <Card>
+                    <CardHeader>
+                        <CardTitle>予約・変更ショートカット</CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                        <p className="text-sm text-slate-500">
+                            追加予約や空き状況更新はここからすぐに操作できます。日時変更・キャンセルはカレンダー内の各レッスンから行えます。
+                        </p>
+                        <div className="flex flex-wrap gap-2">
+                            <Link href="/student/book">
+                                <Button>
+                                    <Plus className="mr-2 h-4 w-4" />
+                                    追加予約
+                                </Button>
+                            </Link>
+                            <Link href="/student/availability">
+                                <Button variant="outline">
+                                    空き状況を更新
+                                </Button>
+                            </Link>
                         </div>
                     </CardContent>
                 </Card>

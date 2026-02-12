@@ -5,21 +5,8 @@ import { auth } from "@/auth"
 import { revalidatePath } from "next/cache"
 import { BOOKING_RULES } from "@/lib/constants"
 import { Prisma } from "@prisma/client"
-
-const GAS_WEBHOOK_URL = process.env.GAS_WEBHOOK_URL;
-
-async function sendNotification(type: "BOOKING" | "RESCHEDULE" | "CANCEL", data: Record<string, unknown>) {
-    if (!GAS_WEBHOOK_URL) return;
-    try {
-        await fetch(GAS_WEBHOOK_URL, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ type, ...data }),
-        });
-    } catch (e) {
-        console.error("Failed to send notification:", e);
-    }
-}
+import { isStudentBookableMenu, toLessonTypeFromMenu } from "@/lib/menu-category"
+import { notifyEvent } from "@/lib/notifications"
 
 export async function getMenus() {
     try {
@@ -28,31 +15,6 @@ export async function getMenus() {
     } catch {
         return { success: false, error: "Failed to fetch menus" }
     }
-}
-
-function normalizeMenuName(name: string) {
-    return name.trim().toLowerCase()
-}
-
-function isPracticeMenuName(name: string) {
-    const normalized = normalizeMenuName(name)
-    return normalized.includes("自主練") || normalized.includes("practice")
-}
-
-function isSoloAdditionalMenuName(name: string) {
-    const normalized = normalizeMenuName(name)
-    if (normalized.includes("solo")) return true
-    return normalized.includes("ソロ") && normalized.includes("追加")
-}
-
-function isDuetAdditionalMenuName(name: string) {
-    const normalized = normalizeMenuName(name)
-    if (normalized.includes("duet")) return true
-    return normalized.includes("連弾") && normalized.includes("追加")
-}
-
-function isStudentBookableMenu(name: string) {
-    return isPracticeMenuName(name) || isSoloAdditionalMenuName(name) || isDuetAdditionalMenuName(name)
 }
 
 function isWithinStudentModificationWindow(lessonStart: Date) {
@@ -139,23 +101,15 @@ async function assertNoReservationConflict(
     }
 }
 
-function getLessonTypeFromMenuName(menuName?: string): "REGULAR" | "AD_HOC" | "PRACTICE" | "SOLO_ADDITIONAL" | "DUET_ADDITIONAL" {
-    if (!menuName) return "REGULAR"
-    if (isPracticeMenuName(menuName)) return "PRACTICE"
-    if (isDuetAdditionalMenuName(menuName)) return "DUET_ADDITIONAL"
-    if (isSoloAdditionalMenuName(menuName)) return "SOLO_ADDITIONAL"
-    const name = normalizeMenuName(menuName)
-    if (name.includes("追加") || name.includes("ad_hoc") || name.includes("ad hoc")) return "AD_HOC"
-    return "REGULAR"
-}
-
 export async function getBookableMenusForStudent() {
     try {
         const menus = await prisma.menu.findMany({
             orderBy: [{ price: "asc" }, { durationMin: "asc" }]
         })
 
-        const studentBookableMenus = menus.filter((menu) => isStudentBookableMenu(menu.name))
+        const studentBookableMenus = menus.filter((menu) =>
+            isStudentBookableMenu(menu as { name?: string | null; category?: unknown })
+        )
         return { success: true, data: studentBookableMenus }
     } catch (error) {
         console.error(error)
@@ -471,7 +425,9 @@ export async function bookLesson(slotIds: string[], menuId: string, useCredit: b
 
             // 3. Look up menu to determine lesson type
             const menu = await tx.menu.findUnique({ where: { id: menuId } })
-            const lessonType = getLessonTypeFromMenuName(menu?.name)
+            const lessonType = menu
+                ? toLessonTypeFromMenu(menu as { name?: string | null; category?: unknown })
+                : "REGULAR"
 
             // 4. Handle Credit Usage
             if (useCredit) {
@@ -524,11 +480,13 @@ export async function bookLesson(slotIds: string[], menuId: string, useCredit: b
             revalidatePath("/teacher/schedule")
 
             // Send Notification (Fire and forget)
-            sendNotification("BOOKING", {
+            void notifyEvent("BOOKING_COMPLETED", {
                 studentId: session.user.id,
                 startTime: slotInfo.startTime,
-                menuId
-            });
+                endTime: slotInfo.endTime,
+                roomId: slotInfo.roomId,
+                menuId,
+            })
 
             return { success: true }
         }, { isolationLevel: "Serializable" })
@@ -667,12 +625,14 @@ export async function rescheduleLesson(lessonId: string, slotIds: string[]) {
             revalidatePath("/student")
             revalidatePath("/teacher/schedule")
 
-            sendNotification("RESCHEDULE", {
+            void notifyEvent("RESCHEDULE_COMPLETED", {
                 studentId: session.user.id,
                 oldStartTime: lesson.startTime,
                 newStartTime: newStart,
+                newEndTime: newEnd,
+                roomId: slotInfo.roomId,
                 lessonId
-            });
+            })
 
             return { success: true }
         }, { isolationLevel: "Serializable" })
@@ -761,11 +721,12 @@ export async function cancelLesson(lessonId: string) {
             revalidatePath("/student")
             revalidatePath("/teacher/schedule")
 
-            sendNotification("CANCEL", {
+            void notifyEvent("LESSON_CANCELLED", {
                 studentId: lesson.studentId,
                 startTime: lesson.startTime,
                 eligibleForCredit: isEligibleForCredit,
                 lessonId,
+                cancelledByRole: session.user.role,
             })
 
             return { success: true }

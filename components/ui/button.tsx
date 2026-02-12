@@ -12,11 +12,13 @@ const buttonVariants = cva(
                 secondary: "bg-slate-100 text-slate-900 hover:bg-slate-200",
                 outline: "border-2 border-slate-200 bg-transparent hover:bg-slate-50 text-slate-900",
                 ghost: "bg-transparent hover:bg-slate-100 text-slate-600 hover:text-slate-900",
+                link: "h-auto px-0 py-0 bg-transparent text-slate-600 underline-offset-4 hover:underline",
             },
             size: {
                 sm: "h-9 px-4 text-sm",
                 md: "h-11 px-6 text-base",
                 lg: "h-14 px-8 text-lg",
+                icon: "h-9 w-9 p-0",
             },
         },
         defaultVariants: {

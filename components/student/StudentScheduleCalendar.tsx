@@ -39,6 +39,7 @@ export function StudentScheduleCalendar({ lessons }: { lessons: LessonItem[] }) 
         <Card>
             <CardHeader>
                 <CardTitle>予約カレンダー</CardTitle>
+                <p className="text-xs text-slate-500">日時変更・キャンセルは各レッスンカード下のボタンから操作できます。</p>
                 <div className="flex gap-4 text-xs text-slate-500">
                     <span className="inline-flex items-center gap-1">
                         <span className="h-2 w-2 rounded-full bg-blue-500" />
