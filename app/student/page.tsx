@@ -109,7 +109,11 @@ export default async function StudentDashboard() {
                                         <div className="text-xl font-bold text-slate-900">{format(new Date(lesson.startTime), "d")}</div>
                                     </div>
                                     <div>
-                                        <div className="font-medium text-slate-900">{LESSON_TYPE_LABELS[lesson.type] || "レッスン"}</div>
+                                        <div className="flex items-center gap-2">
+                                            <div className="font-medium text-slate-900">{LESSON_TYPE_LABELS[lesson.type] || "レッスン"}</div>
+                                            {lesson.type === "REGULAR" && <span className="bg-indigo-50 text-indigo-700 text-[10px] font-bold px-2 py-0.5 rounded-full border border-indigo-100">固定枠</span>}
+                                            {lesson.type === "AD_HOC" && <span className="bg-amber-50 text-amber-700 text-[10px] font-bold px-2 py-0.5 rounded-full border border-amber-100">追加</span>}
+                                        </div>
                                         <div className="text-sm text-slate-500">
                                             {format(new Date(lesson.startTime), "HH:mm")} - {format(new Date(lesson.endTime), "HH:mm")}
                                         </div>
@@ -119,7 +123,7 @@ export default async function StudentDashboard() {
                                     <div className={`text-sm font-medium px-3 py-1 rounded-full ${LESSON_STATUS_STYLES[lesson.status] || "text-blue-600 bg-blue-50"}`}>
                                         {LESSON_STATUS_LABELS[lesson.status] || "予約済み"}
                                     </div>
-                                    <LessonActions lessonId={lesson.id} />
+                                    <LessonActions lessonId={lesson.id} menuId={lesson.menuId || undefined} />
                                 </div>
                             </div>
                         ))}

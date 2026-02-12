@@ -24,6 +24,7 @@ enum LessonStatus {
   BOOKED
   COMPLETED
   CANCELLED
+  DRAFT
 }
 
 model User {
@@ -88,21 +89,25 @@ model Lesson {
 }
 
 model OpenSlot {
-  id        String   @id @default(cuid())
-  roomId    String   // 'A' or 'B'
-  startTime DateTime
-  endTime   DateTime
-  isBooked  Boolean  @default(false)
-  isPublic  Boolean  @default(false) // Whether it's visible to students
+  id          String   @id @default(cuid())
+  roomId      String   // 'A' or 'B'
+  startTime   DateTime
+  endTime     DateTime
+  isBooked    Boolean  @default(false)
+  isPublic    Boolean  @default(false) // Whether it's visible to students
+  menuId      String?
+  menu        Menu?    @relation(fields: [menuId], references: [id])
+  durationMin Int      @default(30)
 }
 
 model Menu {
-    id          String   @id @default(cuid())
-    name        String   @unique
+    id          String     @id @default(cuid())
+    name        String     @unique
     durationMin Int
-    price       Int      @default(0)
+    price       Int        @default(0)
     description String?
     lessons     Lesson[]
+    openSlots   OpenSlot[]
 }
 
 model CancellationCredit {

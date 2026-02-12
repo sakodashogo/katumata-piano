@@ -1,7 +1,7 @@
 "use client"
 
-import { useState, useEffect } from "react"
-import { getAvailableSlots, bookLesson, rescheduleLesson } from "@/app/lib/actions/booking"
+import { useState, useEffect, useMemo } from "react"
+import { getAvailableSlots, bookLesson, rescheduleLesson, getAvailableSlotsInRange } from "@/app/lib/actions/booking"
 import { Button } from "@/components/ui/button"
 import {
     Card,
@@ -12,7 +12,7 @@ import {
     CardFooter
 } from "@/components/ui/card"
 import { Calendar } from "@/components/ui/calendar"
-import { format, isSameDay, addMonths } from "date-fns"
+import { format, isSameDay, addMonths, startOfMonth, endOfMonth, isSameMonth } from "date-fns"
 import { ja } from "date-fns/locale"
 import {
     Loader2,
@@ -70,6 +70,22 @@ export function BookingWizard({
     const [loading, setLoading] = useState(false)
     const [bookingSuccess, setBookingSuccess] = useState(false)
     const [useTicket, setUseTicket] = useState(false)
+    const [monthlyAvailability, setMonthlyAvailability] = useState<Set<string>>(new Set())
+    const [currentMonth, setCurrentMonth] = useState<Date>(new Date())
+
+    // Fetch monthly availability
+    useEffect(() => {
+        const fetchMonthlyAvailability = async () => {
+            const start = startOfMonth(currentMonth)
+            const end = endOfMonth(currentMonth)
+            const res = await getAvailableSlotsInRange(start.toISOString(), end.toISOString())
+            if (res.success && res.data) {
+                const dates = new Set(res.data.map((s: { startTime: Date }) => format(new Date(s.startTime), "yyyy-MM-dd")))
+                setMonthlyAvailability(dates)
+            }
+        }
+        fetchMonthlyAvailability()
+    }, [currentMonth])
 
     // Fetch slots when date or menu changes
     useEffect(() => {
@@ -177,8 +193,7 @@ export function BookingWizard({
                     {step > 1 && (
                         <Button
                             variant="ghost"
-                            size="icon"
-                            className="rounded-full h-10 w-10 bg-white shadow-sm border"
+                            className="rounded-full h-10 w-10 p-0 bg-white shadow-sm border"
                             onClick={() => setStep(prev => prev - 1)}
                             disabled={!!initialMenuId && step === 2}
                         >
@@ -319,9 +334,17 @@ export function BookingWizard({
                                         mode="single"
                                         selected={selectedDate}
                                         onSelect={handleDateSelect}
+                                        month={currentMonth}
+                                        onMonthChange={setCurrentMonth}
                                         locale={ja}
                                         className="rounded-3xl border-none shadow-none p-0 student-booking-calendar w-full"
                                         disabled={(date) => date < new Date() || date > addMonths(new Date(), 2)}
+                                        modifiers={{
+                                            hasSlots: (date) => monthlyAvailability.has(format(date, "yyyy-MM-dd"))
+                                        }}
+                                        modifiersClassNames={{
+                                            hasSlots: "has-slots"
+                                        }}
                                     />
                                     <style jsx global>{`
                                         .student-booking-calendar .rdp {
@@ -339,6 +362,22 @@ export function BookingWizard({
                                         .student-booking-calendar .rdp-day {
                                             border-radius: 1rem;
                                             font-weight: 700;
+                                        }
+                                        .student-booking-calendar .has-slots:not(.rdp-day_selected) {
+                                            position: relative;
+                                            background-color: #eff6ff;
+                                            color: #2563eb;
+                                        }
+                                        .student-booking-calendar .has-slots:not(.rdp-day_selected)::after {
+                                            content: '';
+                                            position: absolute;
+                                            bottom: 6px;
+                                            left: 50%;
+                                            transform: translateX(-50%);
+                                            width: 4px;
+                                            height: 4px;
+                                            border-radius: 50%;
+                                            background-color: #2563eb;
                                         }
                                         .student-booking-calendar .rdp-button:hover:not(.rdp-day_selected) {
                                             background-color: #f1f5f9;

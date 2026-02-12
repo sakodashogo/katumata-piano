@@ -19,6 +19,7 @@ export async function getOpenSlots(year: number, month: number) {
                     lte: end,
                 }
             },
+            include: { menu: true },
             orderBy: { startTime: 'asc' }
         })
         return { success: true, data: slots }
@@ -27,7 +28,7 @@ export async function getOpenSlots(year: number, month: number) {
     }
 }
 
-export async function createOpenSlot(data: { roomId: string, startTime: Date, endTime: Date }) {
+export async function createOpenSlot(data: { roomId: string, startTime: Date, endTime: Date, menuId?: string, durationMin?: number }) {
     const session = await auth()
     if (session?.user?.role !== "TEACHER") return { success: false, error: "Unauthorized" }
 
@@ -38,6 +39,8 @@ export async function createOpenSlot(data: { roomId: string, startTime: Date, en
                 startTime: data.startTime,
                 endTime: data.endTime,
                 isPublic: false,
+                ...(data.menuId && { menuId: data.menuId }),
+                ...(data.durationMin && { durationMin: data.durationMin }),
             }
         })
         revalidatePath('/teacher/resources')
@@ -47,7 +50,7 @@ export async function createOpenSlot(data: { roomId: string, startTime: Date, en
     }
 }
 
-export async function updateOpenSlot(id: string, data: { roomId?: string, startTime?: Date, endTime?: Date, isPublic?: boolean }) {
+export async function updateOpenSlot(id: string, data: { roomId?: string, startTime?: Date, endTime?: Date, isPublic?: boolean, menuId?: string | null, durationMin?: number }) {
     const session = await auth()
     if (session?.user?.role !== "TEACHER") return { success: false, error: "Unauthorized" }
 
@@ -88,6 +91,7 @@ export async function publishOpenSlots(ids: string[]) {
             data: { isPublic: true }
         })
         revalidatePath('/teacher/resources')
+        revalidatePath('/teacher/slots')
         revalidatePath('/student/book') // Revalidate student booking page
         return { success: true }
     } catch (error) {

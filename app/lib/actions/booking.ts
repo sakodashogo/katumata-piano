@@ -63,12 +63,37 @@ export async function getAvailableSlots(dateStr: string) {
         const slots = await prisma.openSlot.findMany({
             where: {
                 isBooked: false,
+                isPublic: true,
                 startTime: {
                     gte: start,
                     lte: end,
                 },
             },
             orderBy: { startTime: "asc" },
+        })
+        return { success: true, data: slots }
+    } catch (error) {
+        return { success: false, error: "Failed to fetch slots" }
+    }
+}
+
+export async function getAvailableSlotsInRange(startStr: string, endStr: string) {
+    try {
+        const start = new Date(startStr)
+        const end = new Date(endStr)
+
+        const slots = await prisma.openSlot.findMany({
+            where: {
+                isBooked: false,
+                isPublic: true,
+                startTime: {
+                    gte: start,
+                    lte: end,
+                },
+            },
+            select: {
+                startTime: true
+            }
         })
         return { success: true, data: slots }
     } catch (error) {

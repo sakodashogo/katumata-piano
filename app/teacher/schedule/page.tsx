@@ -1,8 +1,7 @@
 import { getScheduleData } from "@/app/lib/actions/schedule"
-import { WeeklySchedule } from "@/components/teacher/WeeklySchedule"
+import { AdminCalendar } from "@/components/teacher/AdminCalendar"
 import { startOfWeek, endOfWeek } from "date-fns"
 import { getStudents } from "@/app/lib/actions/student"
-
 import { SyncButton } from "@/components/teacher/SyncButton"
 
 export default async function SchedulePage({
@@ -18,29 +17,38 @@ export default async function SchedulePage({
     const start = startOfWeek(date, { weekStartsOn: 1 }) // Monday start
     const end = endOfWeek(date, { weekStartsOn: 1 })
 
-    const { data } = await getScheduleData(room, start, end)
-    const { data: studentsData } = await getStudents()
+    const { data } = await getScheduleData(undefined, start, end)
 
-    const slots = data?.slots || []
-    const lessons = data?.lessons || []
-    const students = studentsData || []
+    // Explicitly cast or validate to match AdminCalendar props
+    const slots = (data?.slots || []).map((s: any) => ({
+        ...s,
+        startTime: new Date(s.startTime),
+        endTime: new Date(s.endTime)
+    }))
+
+    const lessons = (data?.lessons || []).map(l => ({
+        ...l,
+        startTime: new Date(l.startTime),
+        endTime: new Date(l.endTime)
+    }))
 
     return (
         <div className="space-y-6">
             <div className="flex justify-between items-center">
                 <div>
                     <h1 className="text-2xl font-bold text-slate-900">スケジュール管理</h1>
-                    <p className="text-slate-500">{room}教室 の空き枠管理</p>
+                    <p className="text-slate-500">教室全体の空き枠・レッスン管理</p>
                 </div>
-                <SyncButton currentDate={date} roomId={room} />
+                <div className="flex gap-2">
+                    <SyncButton currentDate={date} roomId="A" />
+                    <SyncButton currentDate={date} roomId="B" />
+                </div>
             </div>
 
-            <WeeklySchedule
-                roomId={room}
-                date={date}
-                slots={slots as any[]}
-                lessons={lessons as any[]}
-                students={students as any[]}
+            <AdminCalendar
+                initialDate={date}
+                slots={slots}
+                lessons={lessons}
             />
         </div>
     )

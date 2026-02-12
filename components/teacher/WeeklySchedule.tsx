@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils"
 import { addDays, format, isSameDay, startOfWeek, addMinutes, setHours, setMinutes, isSameMinute } from "date-fns"
 import { ja } from "date-fns/locale"
 import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
 import {
     ChevronLeft,
     ChevronRight,
