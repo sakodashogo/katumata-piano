@@ -8,7 +8,6 @@ import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { ROOMS } from "@/lib/constants"
-import { SupportShiftManager } from "@/components/teacher/SupportShiftManager"
 import {
     ArrowRight,
     Calendar as CalendarIcon,
@@ -62,12 +61,11 @@ type Props = {
         student?: { name: string | null } | null
     }>
     supportShifts: SupportShift[]
-    supportStaff: Array<{ id: string; name: string; active: boolean }>
     year: number
     month: number
 }
 
-export function ResourceManager({ initialSlots, initialLessons, supportShifts, supportStaff, year, month }: Props) {
+export function ResourceManager({ initialSlots, initialLessons, supportShifts, year, month }: Props) {
     const slots = useMemo<OpenSlot[]>(
         () =>
             initialSlots.map((slot) => ({
@@ -140,17 +138,6 @@ export function ResourceManager({ initialSlots, initialLessons, supportShifts, s
 
     return (
         <div className="space-y-6">
-            <SupportShiftManager
-                staff={supportStaff}
-                shifts={shifts.map((shift) => ({
-                    id: shift.id,
-                    staffId: shift.staff?.id || "",
-                    startTime: new Date(shift.startTime).toISOString(),
-                    endTime: new Date(shift.endTime).toISOString(),
-                    staff: shift.staff || null,
-                }))}
-            />
-
             <div className="grid grid-cols-1 gap-8 lg:grid-cols-[320px_1fr]">
             <div className="space-y-6">
                 <div className="rounded-xl border bg-white p-4 shadow-sm">

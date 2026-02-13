@@ -13,6 +13,7 @@ const teacherLinks = [
     { href: "/teacher/students", label: "生徒管理" },
     { href: "/teacher/schedule", label: "週次スケジュール" },
     { href: "/teacher/slots", label: "空き枠承認" },
+    { href: "/teacher/support", label: "サポート講師シフト" },
     { href: "/teacher/resources", label: "リソース可視化" },
     { href: "/teacher/availabilities", label: "生徒の希望" },
     { href: "/teacher/schedule/monthly", label: "月間スケジュール" },

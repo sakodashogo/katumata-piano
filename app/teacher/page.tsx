@@ -7,7 +7,7 @@ import { redirect } from "next/navigation"
 import { format, startOfDay, endOfDay, startOfWeek, endOfWeek, addWeeks } from "date-fns"
 import { ja } from "date-fns/locale"
 import { LESSON_TYPE_LABELS, LESSON_STATUS_LABELS } from "@/lib/constants"
-import { CalendarDays, Users, Clock, BookOpen, CalendarCheck, ListChecks, Monitor, ClipboardList } from "lucide-react"
+import { CalendarDays, Users, Clock, BookOpen, CalendarCheck, ListChecks, Monitor, ClipboardList, UserRoundCog } from "lucide-react"
 import Link from "next/link"
 
 export default async function TeacherDashboard() {
@@ -185,7 +185,7 @@ export default async function TeacherDashboard() {
             </div>
 
             {/* Quick Links */}
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-4">
                 <Link href="/teacher/schedule" className="block">
                     <Card className="hover:border-blue-300 transition-colors cursor-pointer">
                         <CardContent className="pt-6 text-center">
@@ -207,6 +207,14 @@ export default async function TeacherDashboard() {
                         <CardContent className="pt-6 text-center">
                             <Monitor className="h-8 w-8 mx-auto mb-2 text-cyan-600" />
                             <p className="font-medium">リソース可視化</p>
+                        </CardContent>
+                    </Card>
+                </Link>
+                <Link href="/teacher/support" className="block">
+                    <Card className="hover:border-blue-300 transition-colors cursor-pointer">
+                        <CardContent className="pt-6 text-center">
+                            <UserRoundCog className="h-8 w-8 mx-auto mb-2 text-sky-600" />
+                            <p className="font-medium">サポート講師シフト</p>
                         </CardContent>
                     </Card>
                 </Link>

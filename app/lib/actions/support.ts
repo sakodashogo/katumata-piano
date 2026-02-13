@@ -32,8 +32,17 @@ function getSupportShiftDelegate() {
             update: DelegateMethod
             create: DelegateMethod
             delete: DelegateMethod
+            deleteMany: DelegateMethod
         }
     }).supportShift
+}
+
+function revalidateSupportViews() {
+    revalidatePath("/teacher/support")
+    revalidatePath("/teacher/resources")
+    revalidatePath("/teacher/schedule")
+    revalidatePath("/teacher/schedule/monthly")
+    revalidatePath("/student/book")
 }
 
 async function requireTeacher() {
@@ -85,7 +94,7 @@ export async function createSupportStaff(name: string) {
         const created = await supportStaff.create({
             data: { name: trimmed, active: true },
         }) as { id: string; name: string; active: boolean }
-        revalidatePath("/teacher/resources")
+        revalidateSupportViews()
         return { success: true as const, data: created }
     } catch (error) {
         if (isMissingRelationError(error)) {
@@ -108,10 +117,7 @@ export async function setSupportStaffActive(id: string, active: boolean) {
             where: { id },
             data: { active },
         })
-        revalidatePath("/teacher/resources")
-        revalidatePath("/teacher/schedule")
-        revalidatePath("/teacher/schedule/monthly")
-        revalidatePath("/student/book")
+        revalidateSupportViews()
         return { success: true as const }
     } catch (error) {
         if (isMissingRelationError(error)) {
@@ -204,10 +210,7 @@ export async function upsertSupportShift(input: {
                 data: { staffId: input.staffId, startTime, endTime },
             })
 
-        revalidatePath("/teacher/resources")
-        revalidatePath("/teacher/schedule")
-        revalidatePath("/teacher/schedule/monthly")
-        revalidatePath("/student/book")
+        revalidateSupportViews()
         return { success: true as const, data }
     } catch (error) {
         if (isMissingRelationError(error)) {
@@ -271,10 +274,7 @@ export async function createMonthlySupportShifts(input: {
             created++
         }
 
-        revalidatePath("/teacher/resources")
-        revalidatePath("/teacher/schedule")
-        revalidatePath("/teacher/schedule/monthly")
-        revalidatePath("/student/book")
+        revalidateSupportViews()
         return { success: true as const, created, skipped }
     } catch (error) {
         if (isMissingRelationError(error)) {
@@ -294,15 +294,142 @@ export async function deleteSupportShift(id: string) {
             return { success: false as const, error: "DB未更新のため削除できません。" }
         }
         await supportShift.delete({ where: { id } })
-        revalidatePath("/teacher/resources")
-        revalidatePath("/teacher/schedule")
-        revalidatePath("/teacher/schedule/monthly")
-        revalidatePath("/student/book")
+        revalidateSupportViews()
         return { success: true as const }
     } catch (error) {
         if (isMissingRelationError(error)) {
             return { success: false as const, error: "DB未更新のため削除できません。" }
         }
         return { success: false as const, error: "削除に失敗しました。" }
+    }
+}
+
+type ReplaceSupportShiftsInput = {
+    staffId: string
+    rangeStartIso: string
+    rangeEndIso: string
+    slotStartIsos: string[]
+}
+
+type ShiftInterval = { startTime: Date; endTime: Date }
+
+function mergeIntervals(intervals: ShiftInterval[]) {
+    if (intervals.length === 0) return []
+    const sorted = [...intervals].sort((a, b) => a.startTime.getTime() - b.startTime.getTime())
+    const merged: ShiftInterval[] = []
+    for (const interval of sorted) {
+        if (interval.endTime <= interval.startTime) continue
+        const last = merged[merged.length - 1]
+        if (!last) {
+            merged.push(interval)
+            continue
+        }
+        if (interval.startTime <= last.endTime) {
+            if (interval.endTime > last.endTime) {
+                last.endTime = interval.endTime
+            }
+        } else {
+            merged.push(interval)
+        }
+    }
+    return merged
+}
+
+export async function replaceSupportShiftsForStaffInRange(input: ReplaceSupportShiftsInput) {
+    const session = await requireTeacher()
+    if (!session) return { success: false as const, error: "Unauthorized" }
+
+    try {
+        const rangeStart = new Date(input.rangeStartIso)
+        const rangeEnd = new Date(input.rangeEndIso)
+        if (
+            Number.isNaN(rangeStart.getTime()) ||
+            Number.isNaN(rangeEnd.getTime()) ||
+            rangeEnd <= rangeStart
+        ) {
+            return { success: false as const, error: "対象期間が不正です。" }
+        }
+
+        const supportShift = getSupportShiftDelegate()
+        if (
+            !supportShift ||
+            typeof supportShift.findMany !== "function" ||
+            typeof supportShift.create !== "function" ||
+            typeof supportShift.deleteMany !== "function"
+        ) {
+            return { success: false as const, error: "DB未更新のためシフト保存できません。マイグレーション適用後に再実行してください。" }
+        }
+
+        const existing = await supportShift.findMany({
+            where: {
+                staffId: input.staffId,
+                startTime: { lt: rangeEnd },
+                endTime: { gt: rangeStart },
+            },
+            orderBy: { startTime: "asc" },
+            select: { id: true, startTime: true, endTime: true },
+        }) as Array<{ id: string; startTime: Date; endTime: Date }>
+
+        const keepIntervals: ShiftInterval[] = []
+        for (const shift of existing) {
+            if (shift.startTime < rangeStart) {
+                keepIntervals.push({
+                    startTime: shift.startTime,
+                    endTime: shift.endTime < rangeStart ? shift.endTime : rangeStart,
+                })
+            }
+            if (shift.endTime > rangeEnd) {
+                keepIntervals.push({
+                    startTime: shift.startTime > rangeEnd ? shift.startTime : rangeEnd,
+                    endTime: shift.endTime,
+                })
+            }
+        }
+
+        const normalizedSlotStarts = Array.from(
+            new Set(
+                input.slotStartIsos
+                    .map((value) => new Date(value))
+                    .filter((date) => !Number.isNaN(date.getTime()))
+                    .filter((date) => date >= rangeStart && date < rangeEnd)
+                    .map((date) => date.toISOString())
+            )
+        )
+            .map((value) => new Date(value))
+            .sort((a, b) => a.getTime() - b.getTime())
+
+        const generatedIntervals = mergeIntervals(
+            normalizedSlotStarts.map((startTime) => ({
+                startTime,
+                endTime: new Date(startTime.getTime() + 30 * 60 * 1000),
+            }))
+        )
+
+        const finalIntervals = mergeIntervals([...keepIntervals, ...generatedIntervals])
+
+        if (existing.length > 0) {
+            const overlapIds = existing.map((shift) => shift.id)
+            await supportShift.deleteMany({
+                where: { id: { in: overlapIds } },
+            })
+        }
+
+        for (const interval of finalIntervals) {
+            await supportShift.create({
+                data: {
+                    staffId: input.staffId,
+                    startTime: interval.startTime,
+                    endTime: interval.endTime,
+                },
+            })
+        }
+
+        revalidateSupportViews()
+        return { success: true as const, count: finalIntervals.length }
+    } catch (error) {
+        if (isMissingRelationError(error)) {
+            return { success: false as const, error: "DB未更新のためシフト保存できません。マイグレーション適用後に再実行してください。" }
+        }
+        return { success: false as const, error: "週次シフト保存に失敗しました。" }
     }
 }

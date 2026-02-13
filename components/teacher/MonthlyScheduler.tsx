@@ -1,23 +1,22 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import { addMonths, format } from "date-fns"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
-import { ChevronLeft, ChevronRight, CalendarCheck, Wand2 } from "lucide-react"
-import { SchedulingCalendar } from "@/components/teacher/SchedulingCalendar"
+import { ChevronLeft, ChevronRight, Sparkles, Save, Upload } from "lucide-react"
+import { MonthlySlotGridEditor } from "@/components/teacher/MonthlySlotGridEditor"
 import {
-    appendStudentMonthlyLesson,
-    bulkCreateLessons,
     publishMonthlySchedule,
     replaceStudentMonthlyLessons,
 } from "@/app/lib/actions/planning"
-import { generateSuggestedSchedule, ScheduleSuggestion } from "@/app/lib/actions/schedule-maker"
+import {
+    generateSuggestedSchedule,
+    ScheduleSuggestion,
+    LockedAssignment,
+} from "@/app/lib/actions/schedule-maker"
 import { useToast } from "@/components/ui/toast"
-import { HeatmapScheduler } from "@/components/teacher/HeatmapScheduler"
 
 type Student = {
     id: string
@@ -40,18 +39,57 @@ type Lesson = {
     type?: "REGULAR" | "AD_HOC" | "PRACTICE" | "SOLO_ADDITIONAL" | "DUET_ADDITIONAL"
 }
 
+type Shift = {
+    id: string
+    startTime: string | Date
+    endTime: string | Date
+}
+
+type DraftLesson = {
+    startTime: Date
+    endTime: Date
+    roomId: string
+    type?: "REGULAR" | "AD_HOC" | "PRACTICE" | "SOLO_ADDITIONAL" | "DUET_ADDITIONAL"
+}
+
 type Props = {
     students: Student[]
     lessons: Lesson[]
+    supportShifts?: Shift[]
     year: number
     month: number
     isPublished?: boolean
     publishedAt?: string | Date | null
 }
 
+function toDraftKey(lesson: DraftLesson) {
+    return `${lesson.startTime.toISOString()}__${lesson.endTime.toISOString()}__${lesson.roomId}__${lesson.type || "REGULAR"}`
+}
+
+function normalizeLessonToDraft(lesson: Lesson): DraftLesson {
+    return {
+        startTime: new Date(lesson.startTime),
+        endTime: new Date(lesson.endTime),
+        roomId: lesson.roomId || "A",
+        type: lesson.type || "REGULAR",
+    }
+}
+
+function isSameDraftSet(a: DraftLesson[], b: DraftLesson[]) {
+    if (a.length !== b.length) return false
+    const setA = new Set(a.map(toDraftKey))
+    const setB = new Set(b.map(toDraftKey))
+    if (setA.size !== setB.size) return false
+    for (const key of setA) {
+        if (!setB.has(key)) return false
+    }
+    return true
+}
+
 export function MonthlyScheduler({
     students,
     lessons,
+    supportShifts = [],
     year,
     month,
     isPublished = false,
@@ -60,182 +98,325 @@ export function MonthlyScheduler({
     const router = useRouter()
     const { toast } = useToast()
 
-    const [selectedStudentId, setSelectedStudentId] = useState<string | null>(null)
-    const [viewMode, setViewMode] = useState<"list" | "heatmap">("list")
-    const [suggestions, setSuggestions] = useState<ScheduleSuggestion[]>([])
-    const [isGenerating, setIsGenerating] = useState(false)
+    const [studentQuery, setStudentQuery] = useState("")
+    const [selectedStudentId, setSelectedStudentId] = useState(students[0]?.id ?? "")
+    const [draftByStudent, setDraftByStudent] = useState<Record<string, DraftLesson[]>>({})
+    const [dirtyStudentIds, setDirtyStudentIds] = useState<Set<string>>(new Set())
+    const [isSavingSelected, setIsSavingSelected] = useState(false)
+    const [isSavingAll, setIsSavingAll] = useState(false)
     const [isPublishingMonth, setIsPublishingMonth] = useState(false)
-    const [manualStudentId, setManualStudentId] = useState(students[0]?.id ?? "")
-    const [manualDate, setManualDate] = useState("")
-    const [manualTime, setManualTime] = useState("14:00")
-    const [manualDuration, setManualDuration] = useState(30)
-    const [manualRoomId, setManualRoomId] = useState<"A" | "B">("A")
-    const [manualType, setManualType] = useState<"REGULAR" | "PRACTICE" | "SOLO_ADDITIONAL" | "DUET_ADDITIONAL">("REGULAR")
-    const [isAppending, setIsAppending] = useState(false)
+    const [isAutoMode, setIsAutoMode] = useState(false)
+    const [isGeneratingSuggestions, setIsGeneratingSuggestions] = useState(false)
+    const [suggestions, setSuggestions] = useState<ScheduleSuggestion[]>([])
+    const autoDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-    const selectedStudent = students.find((student) => student.id === selectedStudentId)
+    const [baseLessons, setBaseLessons] = useState<Lesson[]>(lessons)
+    useEffect(() => {
+        setBaseLessons(lessons)
+        setDraftByStudent({})
+        setDirtyStudentIds(new Set())
+    }, [lessons, month, year])
 
-    const draftLessons = useMemo(
-        () => lessons.filter((lesson) => lesson.status === "DRAFT"),
-        [lessons]
+    useEffect(() => {
+        if (students.length === 0) return
+        if (!selectedStudentId || !students.some((student) => student.id === selectedStudentId)) {
+            setSelectedStudentId(students[0].id)
+        }
+    }, [selectedStudentId, students])
+
+    const studentById = useMemo(() => new Map(students.map((student) => [student.id, student])), [students])
+
+    const filteredStudents = useMemo(() => {
+        const keyword = studentQuery.trim().toLowerCase()
+        if (!keyword) return students
+        return students.filter((student) => {
+            const name = (student.name || "").toLowerCase()
+            const email = student.email.toLowerCase()
+            return name.includes(keyword) || email.includes(keyword)
+        })
+    }, [studentQuery, students])
+
+    const effectiveLessons = useMemo(() => {
+        const draftStudentIds = new Set(Object.keys(draftByStudent))
+        const persisted = baseLessons.filter((lesson) => !draftStudentIds.has(lesson.studentId))
+        const draftRows: Lesson[] = Object.entries(draftByStudent).flatMap(([studentId, studentLessons], index) =>
+            studentLessons.map((lesson, lessonIndex) => ({
+                id: `draft-${studentId}-${index}-${lessonIndex}-${lesson.startTime.getTime()}`,
+                studentId,
+                startTime: lesson.startTime,
+                endTime: lesson.endTime,
+                roomId: lesson.roomId,
+                status: "DRAFT",
+                type: lesson.type || "REGULAR",
+            }))
+        )
+        return [...persisted, ...draftRows]
+    }, [baseLessons, draftByStudent])
+
+    const selectedStudent = studentById.get(selectedStudentId) || null
+    const selectedStudentBaseline = useMemo(
+        () => baseLessons.filter((lesson) => lesson.studentId === selectedStudentId).map(normalizeLessonToDraft),
+        [baseLessons, selectedStudentId]
     )
 
-    const getStudentLessonCount = (studentId: string) =>
-        lessons.filter((lesson) => lesson.studentId === studentId).length
+    const currentSelectedDraft = draftByStudent[selectedStudentId] || selectedStudentBaseline
+
+    const draftLessonsCountByStudent = useMemo(() => {
+        const map = new Map<string, number>()
+        for (const lesson of effectiveLessons) {
+            map.set(lesson.studentId, (map.get(lesson.studentId) || 0) + 1)
+        }
+        return map
+    }, [effectiveLessons])
+
+    const lockedAssignments = useMemo<LockedAssignment[]>(
+        () =>
+            Object.entries(draftByStudent).flatMap(([studentId, draftLessons]) =>
+                draftLessons.map((lesson) => ({
+                    studentId,
+                    roomId: lesson.roomId,
+                    startTime: lesson.startTime,
+                    endTime: lesson.endTime,
+                    type: lesson.type,
+                }))
+            ),
+        [draftByStudent]
+    )
+
+    const runSuggestionGeneration = useCallback(async (locks: LockedAssignment[]) => {
+        setIsGeneratingSuggestions(true)
+        try {
+            const result = await generateSuggestedSchedule(year, month, { lockedAssignments: locks })
+            if (!result.success || !result.suggestions) {
+                setSuggestions([])
+                toast.error(result.error || "提案の作成に失敗しました。")
+                return
+            }
+            setSuggestions(result.suggestions)
+        } catch {
+            setSuggestions([])
+            toast.error("提案の作成中にエラーが発生しました。")
+        } finally {
+            setIsGeneratingSuggestions(false)
+        }
+    }, [month, toast, year])
+
+    useEffect(() => {
+        if (!isAutoMode) return
+        if (autoDebounceRef.current) {
+            clearTimeout(autoDebounceRef.current)
+        }
+        autoDebounceRef.current = setTimeout(() => {
+            void runSuggestionGeneration(lockedAssignments)
+        }, 450)
+        return () => {
+            if (autoDebounceRef.current) {
+                clearTimeout(autoDebounceRef.current)
+            }
+        }
+    }, [isAutoMode, lockedAssignments, runSuggestionGeneration])
 
     const handleMonthChange = (offset: number) => {
-        const d = addMonths(new Date(year, month - 1), offset)
+        const date = addMonths(new Date(year, month - 1), offset)
         const params = new URLSearchParams()
-        params.set("year", d.getFullYear().toString())
-        params.set("month", (d.getMonth() + 1).toString())
+        params.set("year", date.getFullYear().toString())
+        params.set("month", (date.getMonth() + 1).toString())
         router.push(`/teacher/schedule/monthly?${params.toString()}`)
     }
 
-    const handleSaveStudentLessons = async (newLessons: Array<{
-        startTime: Date
-        endTime: Date
-        roomId: string
-        type?: "REGULAR" | "AD_HOC" | "PRACTICE" | "SOLO_ADDITIONAL" | "DUET_ADDITIONAL"
-    }>) => {
-        if (!selectedStudentId) return false
-
-        const result = await replaceStudentMonthlyLessons({
-            studentId: selectedStudentId,
-            year,
-            month,
-            lessons: newLessons,
-        })
-
-        if (result.success) {
-            toast.success(`${selectedStudent?.name || "生徒"}の月間予定を保存しました。`)
-            router.refresh()
-            return true
-        }
-
-        toast.error(result.error || "保存に失敗しました。")
-        return false
-    }
-
-    const handleAutoSchedule = async () => {
-        setIsGenerating(true)
-        try {
-            const result = await generateSuggestedSchedule(year, month)
-            if (result.success && result.suggestions) {
-                setSuggestions(result.suggestions)
-                setViewMode("heatmap")
-                toast.success(`${result.suggestions.length}件の提案を作成しました。`)
+    const handleDraftChangeForSelected = (updated: DraftLesson[]) => {
+        if (!selectedStudentId) return
+        const baseline = baseLessons
+            .filter((lesson) => lesson.studentId === selectedStudentId)
+            .map(normalizeLessonToDraft)
+        setDraftByStudent((prev) => {
+            const next = { ...prev }
+            if (isSameDraftSet(updated, baseline)) {
+                delete next[selectedStudentId]
             } else {
-                toast.error(result.error || "提案の作成に失敗しました。")
+                next[selectedStudentId] = updated
             }
-        } catch {
-            toast.error("エラーが発生しました。")
-        } finally {
-            setIsGenerating(false)
-        }
-    }
-
-    const handleConfirmSuggestions = async (selectedSuggestions: ScheduleSuggestion[]) => {
-        const drafts = selectedSuggestions.map((suggestion) => ({
-            studentId: suggestion.studentId,
-            startTime: suggestion.slot.startTime,
-            endTime: suggestion.slot.endTime,
-            roomId: suggestion.slot.roomId,
-            type: "REGULAR" as const,
-            status: "DRAFT" as const,
-        }))
-
-        const result = await bulkCreateLessons(drafts)
-        if (result.success) {
-            toast.success(`${drafts.length}件の提案を下書き保存しました。`)
-            setViewMode("list")
-            router.refresh()
-        } else {
-            toast.error(result.error || "作成に失敗しました。")
-        }
-    }
-
-    const handleAppendManualLesson = async () => {
-        if (!manualStudentId || !manualDate || !manualTime) {
-            toast.error("生徒・日付・時間を入力してください。")
-            return
-        }
-
-        setIsAppending(true)
-        const [hour, minute] = manualTime.split(":").map(Number)
-        const start = new Date(`${manualDate}T00:00:00`)
-        start.setHours(hour, minute, 0, 0)
-        const end = new Date(start.getTime() + manualDuration * 60 * 1000)
-
-        const result = await appendStudentMonthlyLesson({
-            studentId: manualStudentId,
-            startTime: start,
-            endTime: end,
-            roomId: manualRoomId,
-            type: manualType,
-            status: isPublished ? "BOOKED" : "DRAFT",
+            return next
         })
-        setIsAppending(false)
-
-        if (!result.success) {
-            toast.error(result.error || "手動追加に失敗しました。")
-            return
-        }
-        toast.success("手動で予定を追加しました。")
-        router.refresh()
+        setDirtyStudentIds((prev) => {
+            const next = new Set(prev)
+            if (isSameDraftSet(updated, baseline)) next.delete(selectedStudentId)
+            else next.add(selectedStudentId)
+            return next
+        })
     }
 
-    const handleClearStudentLessons = async (studentId: string, studentName?: string | null) => {
+    const saveStudentDraft = async (studentId: string, draftLessons: DraftLesson[]) => {
         const result = await replaceStudentMonthlyLessons({
             studentId,
             year,
             month,
-            lessons: [],
+            lessons: draftLessons,
         })
         if (!result.success) {
-            toast.error(result.error || "予定のクリアに失敗しました。")
+            return { success: false as const, error: result.error || "保存に失敗しました。" }
+        }
+        return { success: true as const }
+    }
+
+    const commitSavedDraftToBase = (studentId: string, draftLessons: DraftLesson[]) => {
+        setBaseLessons((prev) => {
+            const kept = prev.filter((lesson) => lesson.studentId !== studentId)
+            const nextRows: Lesson[] = draftLessons.map((lesson, index) => ({
+                id: `local-${studentId}-${index}-${lesson.startTime.getTime()}`,
+                studentId,
+                startTime: lesson.startTime,
+                endTime: lesson.endTime,
+                roomId: lesson.roomId,
+                status: isPublished ? "BOOKED" : "DRAFT",
+                type: lesson.type || "REGULAR",
+            }))
+            return [...kept, ...nextRows].sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime())
+        })
+    }
+
+    const handleSaveSelected = async () => {
+        if (!selectedStudentId) return
+        const draftLessons = currentSelectedDraft
+        setIsSavingSelected(true)
+        const result = await saveStudentDraft(selectedStudentId, draftLessons)
+        setIsSavingSelected(false)
+        if (!result.success) {
+            toast.error(result.error)
             return
         }
-        toast.success(`${studentName || "生徒"}の予定をクリアしました。`)
-        router.refresh()
+        commitSavedDraftToBase(selectedStudentId, draftLessons)
+        setDraftByStudent((prev) => {
+            const next = { ...prev }
+            delete next[selectedStudentId]
+            return next
+        })
+        setDirtyStudentIds((prev) => {
+            const next = new Set(prev)
+            next.delete(selectedStudentId)
+            return next
+        })
+        toast.success(`${selectedStudent?.name || "生徒"}の予定を保存しました。`)
+    }
+
+    const handleSaveAllDirty = async () => {
+        const dirtyIds = Array.from(dirtyStudentIds)
+        if (dirtyIds.length === 0) return
+        setIsSavingAll(true)
+        let successCount = 0
+        let failedCount = 0
+        let firstError = ""
+        for (const studentId of dirtyIds) {
+            const draftLessons = draftByStudent[studentId] ?? baseLessons
+                .filter((lesson) => lesson.studentId === studentId)
+                .map(normalizeLessonToDraft)
+            const result = await saveStudentDraft(studentId, draftLessons)
+            if (!result.success) {
+                failedCount += 1
+                if (!firstError) firstError = result.error
+                continue
+            }
+            successCount += 1
+            commitSavedDraftToBase(studentId, draftLessons)
+            setDraftByStudent((prev) => {
+                const next = { ...prev }
+                delete next[studentId]
+                return next
+            })
+            setDirtyStudentIds((prev) => {
+                const next = new Set(prev)
+                next.delete(studentId)
+                return next
+            })
+        }
+        setIsSavingAll(false)
+        if (failedCount === 0) {
+            toast.success(`${successCount}人分の予定を保存しました。`)
+        } else {
+            toast.error(firstError || `${failedCount}人分の保存に失敗しました。`)
+        }
     }
 
     const handlePublishMonth = async () => {
         setIsPublishingMonth(true)
         const result = await publishMonthlySchedule(year, month)
-        if (result.success) {
-            if (result.alreadyPublished) {
-                toast.info(`${year}年${month}月は確定済みでした。下書き変更分を再反映しました。`)
-            } else {
-                toast.success(`${year}年${month}月の下書きを公開しました。`)
-            }
-            router.refresh()
-        } else {
-            toast.error(result.error || "月間スケジュールの公開に失敗しました。")
-        }
         setIsPublishingMonth(false)
+        if (!result.success) {
+            toast.error(result.error || "公開に失敗しました。")
+            return
+        }
+        if (result.alreadyPublished) {
+            toast.info(`${year}年${month}月は確定済みです。変更を再反映しました。`)
+        } else {
+            toast.success(`${year}年${month}月の下書きを公開しました。`)
+        }
+        router.refresh()
     }
 
-    return (
-        <div className="space-y-6">
-            <div className="flex justify-between items-center">
-                <Button variant="outline" onClick={() => handleMonthChange(-1)}>
-                    <ChevronLeft className="mr-2 h-4 w-4" />
-                    前月
-                </Button>
-                <h2 className="text-xl font-bold">{year}年 {month}月</h2>
-                <Button variant="outline" onClick={() => handleMonthChange(1)}>
-                    次月
-                    <ChevronRight className="ml-2 h-4 w-4" />
-                </Button>
-            </div>
+    const handleApplyRecommendedToDrafts = () => {
+        const recommended = suggestions.filter((suggestion) => suggestion.isRecommended && !suggestion.conflict)
+        const byStudent: Record<string, DraftLesson[]> = {}
+        for (const suggestion of recommended) {
+            const studentId = suggestion.studentId
+            if (!studentById.has(studentId)) continue
+            if (!byStudent[studentId]) byStudent[studentId] = []
+            byStudent[studentId].push({
+                startTime: new Date(suggestion.slot.startTime),
+                endTime: new Date(suggestion.slot.endTime),
+                roomId: suggestion.slot.roomId,
+                type: "REGULAR",
+            })
+        }
+        const mergedDrafts: Record<string, DraftLesson[]> = { ...draftByStudent }
+        for (const student of students) {
+            const baseline = baseLessons.filter((lesson) => lesson.studentId === student.id).map(normalizeLessonToDraft)
+            const nextDraft = byStudent[student.id] || baseline
+            if (isSameDraftSet(nextDraft, baseline)) {
+                delete mergedDrafts[student.id]
+            } else {
+                mergedDrafts[student.id] = nextDraft
+            }
+        }
+        setDraftByStudent(mergedDrafts)
+        setDirtyStudentIds(new Set(Object.keys(mergedDrafts)))
+        toast.success("提案内容を編集下書きに反映しました。")
+    }
 
-            <div className="rounded-lg border bg-slate-50 px-4 py-3 text-sm text-slate-700 space-y-2">
+    const suggestionCountByStudent = useMemo(() => {
+        const map = new Map<string, number>()
+        for (const suggestion of suggestions) {
+            if (!suggestion.isRecommended || suggestion.conflict) continue
+            map.set(suggestion.studentId, (map.get(suggestion.studentId) || 0) + 1)
+        }
+        return map
+    }, [suggestions])
+
+    const draftLessons = useMemo(
+        () => effectiveLessons.filter((lesson) => lesson.status === "DRAFT"),
+        [effectiveLessons]
+    )
+
+    return (
+        <div className="flex h-[calc(100vh-120px)] flex-col gap-4">
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-white p-3">
+                <div className="flex items-center gap-2">
+                    <Button variant="outline" onClick={() => handleMonthChange(-1)}>
+                        <ChevronLeft className="mr-2 h-4 w-4" />
+                        前月
+                    </Button>
+                    <h2 className="text-lg font-bold">{year}年 {month}月</h2>
+                    <Button variant="outline" onClick={() => handleMonthChange(1)}>
+                        次月
+                        <ChevronRight className="ml-2 h-4 w-4" />
+                    </Button>
+                </div>
+
                 <div className="flex flex-wrap items-center gap-2">
                     <Badge variant="outline" className="bg-amber-50 border-amber-200 text-amber-700">
                         下書き {draftLessons.length}件
                     </Badge>
                     <Badge variant="outline">
-                        公開済み {lessons.filter((lesson) => lesson.status === "BOOKED").length}件
+                        公開済み {effectiveLessons.filter((lesson) => lesson.status === "BOOKED").length}件
                     </Badge>
                     {isPublished && (
                         <Badge variant="secondary">
@@ -243,213 +424,144 @@ export function MonthlyScheduler({
                         </Badge>
                     )}
                 </div>
-                <p>
-                    生徒ごとに下書き保存し、最後に月単位で公開します。既存予定は自動提案時に固定枠として扱われます。
-                </p>
             </div>
 
-            <Card>
-                <CardContent className="space-y-3 p-4">
-                    <div className="text-sm font-semibold text-slate-800">全生徒一括調整（手動追加）</div>
-                    <div className="grid gap-2 md:grid-cols-7">
-                        <select
-                            value={manualStudentId}
-                            onChange={(e) => setManualStudentId(e.target.value)}
-                            className="h-9 rounded border px-2 text-sm"
-                        >
-                            {students.map((student) => (
-                                <option key={student.id} value={student.id}>
-                                    {student.name || student.email}
-                                </option>
-                            ))}
-                        </select>
-                        <input
-                            type="date"
-                            value={manualDate}
-                            onChange={(e) => setManualDate(e.target.value)}
-                            className="h-9 rounded border px-2 text-sm"
-                        />
-                        <input
-                            type="time"
-                            value={manualTime}
-                            onChange={(e) => setManualTime(e.target.value)}
-                            className="h-9 rounded border px-2 text-sm"
-                        />
-                        <select
-                            value={String(manualDuration)}
-                            onChange={(e) => setManualDuration(Number(e.target.value))}
-                            className="h-9 rounded border px-2 text-sm"
-                        >
-                            <option value="30">30分</option>
-                            <option value="45">45分</option>
-                            <option value="60">60分</option>
-                        </select>
-                        <select
-                            value={manualRoomId}
-                            onChange={(e) => setManualRoomId(e.target.value === "B" ? "B" : "A")}
-                            className="h-9 rounded border px-2 text-sm"
-                        >
-                            <option value="A">第1レッスン室</option>
-                            <option value="B">第2レッスン室</option>
-                        </select>
-                        <select
-                            value={manualType}
-                            onChange={(e) => setManualType(e.target.value as "REGULAR" | "PRACTICE" | "SOLO_ADDITIONAL" | "DUET_ADDITIONAL")}
-                            className="h-9 rounded border px-2 text-sm"
-                        >
-                            <option value="REGULAR">通常</option>
-                            <option value="PRACTICE">自主練</option>
-                            <option value="SOLO_ADDITIONAL">ソロ</option>
-                            <option value="DUET_ADDITIONAL">連弾</option>
-                        </select>
-                        <Button onClick={handleAppendManualLesson} disabled={isAppending}>
-                            {isAppending ? "追加中..." : "手動追加"}
-                        </Button>
-                    </div>
-                </CardContent>
-            </Card>
-
-            <div className="flex items-center justify-between gap-3">
-                <Button
-                    onClick={handlePublishMonth}
-                    disabled={isPublishingMonth || draftLessons.length === 0}
-                    className="bg-emerald-600 text-white hover:bg-emerald-700"
-                >
-                    {isPublishingMonth ? "公開中..." : "下書きを公開"}
-                </Button>
-
-                <div className="flex justify-end">
-                    {viewMode === "list" && (
-                        <Button onClick={handleAutoSchedule} disabled={isGenerating}>
-                            <Wand2 className="mr-2 h-4 w-4" />
-                            {isGenerating ? "生成中..." : "自動割り当て提案"}
-                        </Button>
-                    )}
-                    {viewMode === "heatmap" && (
-                        <Button variant="outline" onClick={() => setViewMode("list")}>
-                            リストに戻る
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-white p-3">
+                <div className="flex items-center gap-2">
+                    <Button
+                        variant={isAutoMode ? "primary" : "outline"}
+                        onClick={() => setIsAutoMode((prev) => !prev)}
+                    >
+                        <Sparkles className="mr-2 h-4 w-4" />
+                        {isAutoMode ? "自動提案モード ON" : "自動割り当て提案"}
+                    </Button>
+                    {isAutoMode && (
+                        <Button variant="outline" onClick={handleApplyRecommendedToDrafts} disabled={suggestions.length === 0}>
+                            提案を下書きに反映
                         </Button>
                     )}
                 </div>
+                <div className="flex items-center gap-2">
+                    <Button
+                        variant="outline"
+                        onClick={handleSaveSelected}
+                        disabled={isSavingSelected || !dirtyStudentIds.has(selectedStudentId)}
+                    >
+                        <Save className="mr-2 h-4 w-4" />
+                        {isSavingSelected ? "保存中..." : "選択生徒を保存"}
+                    </Button>
+                    <Button
+                        variant="outline"
+                        onClick={handleSaveAllDirty}
+                        disabled={isSavingAll || dirtyStudentIds.size === 0}
+                    >
+                        <Upload className="mr-2 h-4 w-4" />
+                        {isSavingAll ? "保存中..." : `変更済み一括保存 (${dirtyStudentIds.size})`}
+                    </Button>
+                    <Button
+                        onClick={handlePublishMonth}
+                        disabled={isPublishingMonth || draftLessons.length === 0}
+                        className="bg-emerald-600 text-white hover:bg-emerald-700"
+                    >
+                        {isPublishingMonth ? "公開中..." : "下書きを公開"}
+                    </Button>
+                </div>
             </div>
 
-            {viewMode === "heatmap" ? (
-                <HeatmapScheduler
-                    suggestions={suggestions}
-                    students={students}
-                    year={year}
-                    month={month}
-                    onConfirm={handleConfirmSuggestions}
-                    onCancel={() => setViewMode("list")}
-                />
-            ) : (
-                <Card>
-                    <CardContent className="p-0">
-                        <Table>
-                            <TableHeader>
-                                <TableRow>
-                                    <TableHead>生徒名</TableHead>
-                                    <TableHead>希望提出</TableHead>
-                                    <TableHead>予定数 / 契約</TableHead>
-                                    <TableHead>不足回数</TableHead>
-                                    <TableHead>既存予定</TableHead>
-                                    <TableHead className="text-right">操作</TableHead>
-                                </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                                {students.map((student) => {
-                                    const hasAvailability = !!student.availability
-                                    const lessonCount = getStudentLessonCount(student.id)
-                                    const remainingCount = Math.max(student.defaultLessonCount - lessonCount, 0)
+            <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[320px_1fr]">
+                <aside className="flex min-h-0 flex-col rounded-lg border bg-white">
+                    <div className="border-b p-3">
+                        <div className="text-sm font-semibold text-slate-900">生徒選択</div>
+                        <input
+                            value={studentQuery}
+                            onChange={(event) => setStudentQuery(event.target.value)}
+                            placeholder="生徒名 / メール検索"
+                            className="mt-2 h-9 w-full rounded border px-2 text-sm"
+                        />
+                    </div>
+                    <div className="min-h-0 flex-1 overflow-auto p-2">
+                        {filteredStudents.map((student) => {
+                            const lessonCount = draftLessonsCountByStudent.get(student.id) || 0
+                            const suggestionCount = suggestionCountByStudent.get(student.id) || 0
+                            const isDirty = dirtyStudentIds.has(student.id)
+                            const isActive = student.id === selectedStudentId
+                            return (
+                                <button
+                                    key={student.id}
+                                    onClick={() => setSelectedStudentId(student.id)}
+                                    className={`
+                                        mb-2 w-full rounded border px-3 py-2 text-left transition-colors
+                                        ${isActive ? "border-blue-300 bg-blue-50" : "border-slate-200 bg-white hover:bg-slate-50"}
+                                    `}
+                                >
+                                    <div className="flex items-center justify-between gap-2">
+                                        <div className="truncate text-sm font-semibold text-slate-800">
+                                            {student.name || student.email}
+                                        </div>
+                                        {isDirty && <Badge variant="outline" className="text-[10px]">未保存</Badge>}
+                                    </div>
+                                    <div className="mt-1 flex items-center gap-2 text-xs text-slate-500">
+                                        <span>{lessonCount} / {student.defaultLessonCount}回</span>
+                                        {isAutoMode && suggestionCount > 0 && (
+                                            <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-emerald-700">
+                                                提案 {suggestionCount}
+                                            </span>
+                                        )}
+                                    </div>
+                                </button>
+                            )
+                        })}
+                        {filteredStudents.length === 0 && (
+                            <p className="px-2 py-4 text-sm text-slate-500">該当する生徒が見つかりません。</p>
+                        )}
+                    </div>
+                </aside>
 
-                                    return (
-                                        <TableRow key={student.id}>
-                                            <TableCell className="font-medium">{student.name}</TableCell>
-                                            <TableCell>
-                                                {hasAvailability ? (
-                                                    <Badge variant="outline" className="text-green-600 border-green-200 bg-green-50">
-                                                        提出済
-                                                    </Badge>
-                                                ) : (
-                                                    <span className="text-muted-foreground text-sm">-</span>
-                                                )}
-                                            </TableCell>
-                                            <TableCell>
-                                                <Badge variant={lessonCount > 0 ? "secondary" : "outline"}>
-                                                    {lessonCount} / {student.defaultLessonCount}回
-                                                </Badge>
-                                            </TableCell>
-                                            <TableCell>
-                                                <Badge
-                                                    variant={remainingCount > 0 ? "outline" : "secondary"}
-                                                    className={remainingCount > 0 ? "text-amber-700 border-amber-200 bg-amber-50" : ""}
-                                                >
-                                                    {remainingCount}回
-                                                </Badge>
-                                            </TableCell>
-                                            <TableCell className="max-w-[360px]">
-                                                <div className="flex flex-wrap gap-1">
-                                                    {lessons
-                                                        .filter((lesson) => lesson.studentId === student.id)
-                                                        .slice(0, 6)
-                                                        .map((lesson) => (
-                                                            <Badge key={lesson.id} variant="outline" className="text-[10px]">
-                                                                {format(new Date(lesson.startTime), "M/d HH:mm")} {lesson.roomId || "A"}
-                                                            </Badge>
-                                                        ))}
-                                                    {lessons.filter((lesson) => lesson.studentId === student.id).length > 6 && (
-                                                        <Badge variant="outline" className="text-[10px]">
-                                                            +{lessons.filter((lesson) => lesson.studentId === student.id).length - 6}
-                                                        </Badge>
-                                                    )}
-                                                </div>
-                                            </TableCell>
-                                            <TableCell className="text-right">
-                                                <div className="flex justify-end gap-2">
-                                                    <Button
-                                                        size="sm"
-                                                        variant="outline"
-                                                        onClick={() => handleClearStudentLessons(student.id, student.name)}
-                                                    >
-                                                        予定を全削除
-                                                    </Button>
-                                                    <Button
-                                                        size="sm"
-                                                        onClick={() => setSelectedStudentId(student.id)}
-                                                    >
-                                                        <CalendarCheck className="mr-2 h-4 w-4" />
-                                                        予定を編集
-                                                    </Button>
-                                                </div>
-                                            </TableCell>
-                                        </TableRow>
-                                    )
-                                })}
-                            </TableBody>
-                        </Table>
-                    </CardContent>
-                </Card>
-            )}
-
-            {selectedStudent && (
-                <SchedulingCalendar
-                    studentId={selectedStudent.id}
-                    studentName={selectedStudent.name || "生徒"}
-                    availableSlots={Array.isArray(selectedStudent.availability?.availableSlots) ? selectedStudent.availability!.availableSlots.map(String) : []}
-                    unavailableSlots={Array.isArray(selectedStudent.availability?.unavailableSlots) ? selectedStudent.availability!.unavailableSlots.map(String) : []}
-                    existingLessons={lessons
-                        .filter((lesson) => !!lesson)
-                        .map((lesson) => ({
-                            ...lesson,
-                            isEditable: lesson.studentId === selectedStudentId,
-                        }))}
-                    year={year}
-                    month={month}
-                    onSave={handleSaveStudentLessons}
-                    isOpen={!!selectedStudentId}
-                    onClose={() => setSelectedStudentId(null)}
-                />
-            )}
+                <section className="min-h-0 rounded-lg border bg-slate-50 p-3">
+                    {!selectedStudent ? (
+                        <div className="flex h-full items-center justify-center text-sm text-slate-500">
+                            生徒を選択してください。
+                        </div>
+                    ) : (
+                        <div className="flex h-full flex-col gap-3">
+                            {isAutoMode && (
+                                <div className="rounded border bg-white px-3 py-2 text-xs text-slate-600">
+                                    <div className="font-semibold text-slate-800">自動提案モード</div>
+                                    <div className="mt-1">
+                                        手動編集内容を固定条件にして提案を再計算します。
+                                        {isGeneratingSuggestions ? " 再計算中..." : ` 推奨候補: ${suggestions.filter((s) => s.isRecommended && !s.conflict).length}件`}
+                                    </div>
+                                </div>
+                            )}
+                            <div className="min-h-0 flex-1">
+                                <MonthlySlotGridEditor
+                                    studentId={selectedStudent.id}
+                                    studentName={selectedStudent.name || selectedStudent.email}
+                                    availableSlots={
+                                        Array.isArray(selectedStudent.availability?.availableSlots)
+                                            ? selectedStudent.availability!.availableSlots.map(String)
+                                            : []
+                                    }
+                                    unavailableSlots={
+                                        Array.isArray(selectedStudent.availability?.unavailableSlots)
+                                            ? selectedStudent.availability!.unavailableSlots.map(String)
+                                            : []
+                                    }
+                                    existingLessons={effectiveLessons.map((lesson) => ({
+                                        ...lesson,
+                                        isEditable: lesson.studentId === selectedStudent.id,
+                                    }))}
+                                    supportShifts={supportShifts}
+                                    year={year}
+                                    month={month}
+                                    onDraftChange={handleDraftChangeForSelected}
+                                    showSaveControls={false}
+                                />
+                            </div>
+                        </div>
+                    )}
+                </section>
+            </div>
         </div>
     )
 }

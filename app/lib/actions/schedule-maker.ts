@@ -22,6 +22,14 @@ export type ScheduleSuggestion = {
     isRecommended: boolean // New field for optimization result
 }
 
+export type LockedAssignment = {
+    studentId: string
+    startTime: string | Date
+    endTime: string | Date
+    roomId: string
+    type?: "REGULAR" | "AD_HOC" | "PRACTICE" | "SOLO_ADDITIONAL" | "DUET_ADDITIONAL"
+}
+
 // Teacher Working Hours: Mon-Sat 14:00 - 20:00
 const WORKING_HOUR_START = 14
 const WORKING_HOUR_END = 20
@@ -56,7 +64,11 @@ function generateTeacherSlots(year: number, month: number) {
     return slots
 }
 
-export async function generateSuggestedSchedule(year: number, month: number) {
+export async function generateSuggestedSchedule(
+    year: number,
+    month: number,
+    options?: { lockedAssignments?: LockedAssignment[] }
+) {
     const session = await auth()
     if (!session?.user || session.user.role !== "TEACHER") {
         return { success: false, error: "Unauthorized" }
@@ -91,6 +103,43 @@ export async function generateSuggestedSchedule(year: number, month: number) {
     ])
     const typedSupportShifts = supportShifts as Array<{ startTime: Date; endTime: Date }>
 
+    const existingExactKey = new Set(
+        existingLessons.map((lesson) => `${lesson.studentId}__${lesson.startTime.getTime()}__${lesson.roomId || "A"}`)
+    )
+    const lockedAssignments = (options?.lockedAssignments || [])
+        .map((locked) => ({
+            studentId: locked.studentId,
+            roomId: locked.roomId === "B" ? "B" : "A",
+            startTime: new Date(locked.startTime),
+            endTime: new Date(locked.endTime),
+        }))
+        .filter((locked) =>
+            !Number.isNaN(locked.startTime.getTime()) &&
+            !Number.isNaN(locked.endTime.getTime()) &&
+            locked.endTime > locked.startTime &&
+            locked.startTime >= start &&
+            locked.startTime <= end
+        )
+        .filter((locked) => !existingExactKey.has(`${locked.studentId}__${locked.startTime.getTime()}__${locked.roomId}`))
+
+    const lockedSuggestions: ScheduleSuggestion[] = lockedAssignments.map((locked) => ({
+        id: `locked-${locked.studentId}-${locked.roomId}-${locked.startTime.getTime()}`,
+        slot: {
+            startTime: locked.startTime,
+            endTime: locked.endTime,
+            dayOfWeek: format(locked.startTime, "EEEE").toLowerCase(),
+            roomId: locked.roomId,
+        },
+        studentId: locked.studentId,
+        matchReason: "Manual Lock",
+        conflict: false,
+        isRecommended: true,
+    }))
+
+    const lockedSlotKeys = new Set(
+        lockedAssignments.map((locked) => `${locked.startTime.getTime()}__${locked.roomId}`)
+    )
+
     // 2. Generate All Possible Teacher Slots
     const teacherSlotsA = generateTeacherSlots(year, month)
     const teacherSlotsB = teacherSlotsA.filter((slot) =>
@@ -105,7 +154,7 @@ export async function generateSuggestedSchedule(year: number, month: number) {
     const isSlotTaken = (slotStart: Date, roomId: string) => {
         return existingLessons.some(l =>
             l.startTime.getTime() === slotStart.getTime() && (l.roomId || "A") === roomId
-        )
+        ) || lockedSlotKeys.has(`${slotStart.getTime()}__${roomId}`)
     }
 
     // Checking Availability with Time Ranges
@@ -194,6 +243,19 @@ export async function generateSuggestedSchedule(year: number, month: number) {
         weekCounts.set(week, (weekCounts.get(week) || 0) + 1)
     }
 
+    for (const locked of lockedAssignments) {
+        occupiedSlots.add(`${locked.startTime.getTime()}__${locked.roomId}`)
+        const day = locked.startTime.getDate()
+        if (!studentDailyCounts.has(locked.studentId)) studentDailyCounts.set(locked.studentId, new Set())
+        studentDailyCounts.get(locked.studentId)?.add(day)
+        studentMonthCounts.set(locked.studentId, (studentMonthCounts.get(locked.studentId) || 0) + 1)
+
+        const week = getWeekNumber(locked.startTime)
+        if (!studentWeeklyCounts.has(locked.studentId)) studentWeeklyCounts.set(locked.studentId, new Map())
+        const weekCounts = studentWeeklyCounts.get(locked.studentId)!
+        weekCounts.set(week, (weekCounts.get(week) || 0) + 1)
+    }
+
     const getMode = (values: number[]) => {
         const counts = new Map<number, number>()
         for (const value of values) {
@@ -224,6 +286,9 @@ export async function generateSuggestedSchedule(year: number, month: number) {
     const initialOccupied = new Set<string>()
     for (const lesson of existingLessons) {
         initialOccupied.add(`${lesson.startTime.getTime()}__${lesson.roomId || "A"}`)
+    }
+    for (const locked of lockedAssignments) {
+        initialOccupied.add(`${locked.startTime.getTime()}__${locked.roomId}`)
     }
     const isAdjacentToInitial = (time: number, roomId: string) =>
         initialOccupied.has(`${time - 30 * 60000}__${roomId}`) || initialOccupied.has(`${time + 30 * 60000}__${roomId}`)
@@ -343,10 +408,12 @@ export async function generateSuggestedSchedule(year: number, month: number) {
     }
 
     // Update suggestions with "Conflict" and "Recommended" status
-    const suggestionsWithStatus = allSuggestions.map(s => {
+    const combinedSuggestions = [...lockedSuggestions, ...allSuggestions]
+    const lockedIds = new Set(lockedSuggestions.map((suggestion) => suggestion.id))
+    const suggestionsWithStatus = combinedSuggestions.map(s => {
         // Conflict = Is this slot claimed by ANY recommendation (other than self)?
         // Or simpler: Conflict = Multiple students want this slot
-        const othersInSlot = allSuggestions.filter((o) =>
+        const othersInSlot = combinedSuggestions.filter((o) =>
             o.slot.startTime.getTime() === s.slot.startTime.getTime() &&
             o.slot.roomId === s.slot.roomId
         )
@@ -355,7 +422,7 @@ export async function generateSuggestedSchedule(year: number, month: number) {
         return {
             ...s,
             conflict: isConflict,
-            isRecommended: finalRecommendations.has(s.id)
+            isRecommended: lockedIds.has(s.id) || finalRecommendations.has(s.id)
         }
     })
 

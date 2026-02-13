@@ -5,7 +5,7 @@ import { auth } from "@/auth"
 import { revalidatePath } from "next/cache"
 import { addDays, startOfMonth, endOfMonth, getDay, setHours, setMinutes } from "date-fns"
 import { notifyEvent } from "@/lib/notifications"
-import { hasSupportShiftInRange } from "@/lib/support-shifts"
+import { getSupportShiftsInRangeSafe, hasSupportShiftInRange } from "@/lib/support-shifts"
 
 function getMonthBounds(year: number, month: number) {
     const start = new Date(year, month - 1, 1, 0, 0, 0, 0)
@@ -40,7 +40,7 @@ export async function getMonthlyPlanningData(year: number, month: number) {
 
     const { start, end } = getMonthBounds(year, month)
 
-    const [students, lessons, publicationRows] = await Promise.all([
+    const [students, lessons, supportShifts, publicationRows] = await Promise.all([
         prisma.user.findMany({
             where: { role: "STUDENT" },
             include: {
@@ -58,6 +58,7 @@ export async function getMonthlyPlanningData(year: number, month: number) {
             },
             orderBy: { startTime: "asc" },
         }),
+        getSupportShiftsInRangeSafe(start, end),
         prisma.$queryRaw<Array<{ id: string; publishedAt: Date }>>`
             SELECT "id", "publishedAt"
             FROM "MonthlySchedulePublication"
@@ -76,6 +77,7 @@ export async function getMonthlyPlanningData(year: number, month: number) {
                 defaultLessonCount: s.defaultLessonCount
             })),
             lessons,
+            supportShifts,
             isPublished: !!publication,
             publishedAt: publication?.publishedAt ?? null,
         }
@@ -418,10 +420,10 @@ export async function replaceStudentMonthlyLessons(input: ReplaceMonthlyLessonsI
                     throw new Error("同じ生徒の予定が重複しています。")
                 }
 
-                if (lesson.roomId === "B") {
+                if (lesson.roomId === "B" && lesson.type !== "PRACTICE") {
                     const hasSupport = await hasSupportShiftInRange(lesson.startTime, lesson.endTime)
                     if (!hasSupport) {
-                        throw new Error("第2レッスン室でレッスンを保存するにはサポート講師の在席シフトが必要です。")
+                        throw new Error("第2レッスン室で通常レッスンを保存するにはサポート講師の在席シフトが必要です。")
                     }
                 }
             }

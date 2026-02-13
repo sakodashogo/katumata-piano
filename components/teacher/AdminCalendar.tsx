@@ -528,7 +528,7 @@ export function AdminCalendar({
                     isPendingPaint && paintMode === "remove" ? "ring-2 ring-rose-400 bg-rose-100/70" : "",
                     showDraftPreview ? "ring-1 ring-blue-400 bg-blue-100/60" : "",
                     showRemovedPreview ? "ring-1 ring-rose-300 bg-rose-50/80" : "",
-                    roomBWithoutSupport && !hasItem ? "bg-slate-100/70 border border-dashed border-slate-300" : "",
+                    roomBWithoutSupport && !hasItem ? "bg-slate-200/70 border border-dashed border-slate-400" : "",
                     items.lesson ? (items.lesson.status === "DRAFT" ? "bg-amber-50" : "bg-green-50") :
                         items.slot ? (items.slot.isBooked ? "bg-slate-100" : (items.slot.isPublic ? "bg-blue-50" : "bg-amber-50")) :
                             "border border-dashed border-slate-100"
@@ -674,7 +674,7 @@ export function AdminCalendar({
                 <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-1 text-amber-700">空き枠（下書き）</span>
                 <span className="inline-flex items-center gap-1 rounded-full bg-green-50 px-2 py-1 text-green-700">予約済み</span>
                 <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-1 text-amber-800">振替待ち</span>
-                <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-1 text-slate-700">RoomB サポート不在帯: 自主練想定</span>
+                <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-1 text-slate-700">RoomB サポート不在帯: 自主練のみ想定</span>
                 <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-1 text-slate-700">ドラッグ: 矩形選択</span>
                 <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-1 text-rose-700">保存で確定</span>
             </div>
