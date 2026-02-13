@@ -4,9 +4,21 @@ import { z } from "zod"
 import { prisma } from "@/lib/prisma"
 import bcrypt from "bcryptjs"
 
+function normalizeEmail(email: string) {
+    return email.trim().toLowerCase()
+}
+
 async function getUser(email: string) {
     try {
-        const user = await prisma.user.findUnique({ where: { email } })
+        const normalizedEmail = normalizeEmail(email)
+        const user = await prisma.user.findFirst({
+            where: {
+                email: {
+                    equals: normalizedEmail,
+                    mode: "insensitive",
+                },
+            },
+        })
         return user
     } catch (error) {
         console.error('Failed to fetch user:', error)
@@ -15,15 +27,27 @@ async function getUser(email: string) {
 }
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
+    trustHost: true,
     providers: [
         Credentials({
+            credentials: {
+                email: { label: "Email", type: "email" },
+                password: { label: "Password", type: "password" },
+            },
             async authorize(credentials) {
                 const parsedCredentials = z
-                    .object({ email: z.string().email(), password: z.string().min(6) })
+                    .object({
+                        email: z.preprocess(
+                            (value) => typeof value === "string" ? value.trim() : value,
+                            z.string().email()
+                        ),
+                        password: z.string().min(6),
+                    })
                     .safeParse(credentials)
 
                 if (parsedCredentials.success) {
-                    const { email, password } = parsedCredentials.data
+                    const { password } = parsedCredentials.data
+                    const email = normalizeEmail(parsedCredentials.data.email)
                     console.log("Authorize called for:", email)
                     const user = await getUser(email)
                     if (!user) {

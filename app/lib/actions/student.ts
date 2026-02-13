@@ -9,9 +9,16 @@ import { z } from "zod"
 
 const StudentSchema = z.object({
     name: z.string().min(1, "Name is required"),
-    email: z.string().email("Invalid email address"),
+    email: z.preprocess(
+        (value) => typeof value === "string" ? value.trim() : value,
+        z.string().email("Invalid email address")
+    ),
     defaultLessonCount: z.coerce.number().min(1).default(4),
 })
+
+function normalizeEmail(email: string) {
+    return email.trim().toLowerCase()
+}
 
 async function requireTeacher() {
     const session = await auth()
@@ -57,7 +64,8 @@ export async function createStudent(formData: FormData) {
         return { success: false, error: "Invalid fields" }
     }
 
-    const { name, email } = validatedFields.data
+    const { name } = validatedFields.data
+    const email = normalizeEmail(validatedFields.data.email)
     const hashedPassword = await bcrypt.hash("piano123", 10) // Default temporary password
 
     try {
@@ -137,7 +145,7 @@ export async function updateStudent(id: string, formData: FormData) {
             where: { id },
             data: {
                 name: validatedFields.data.name,
-                email: validatedFields.data.email,
+                email: normalizeEmail(validatedFields.data.email),
                 defaultLessonCount: validatedFields.data.defaultLessonCount,
             },
         })
