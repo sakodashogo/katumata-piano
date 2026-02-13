@@ -436,52 +436,55 @@ function installPrismaMocks(fixture: ScenarioFixture) {
             orderBy?: Array<{ studentId?: "asc" | "desc"; startTime?: "asc" | "desc" }>
         }
         const isPreviousQuery = !!args.select?.studentId && !!args.select?.startTime
-        const source = isPreviousQuery ? fixture.previousMonthLessons : fixture.existingLessons
-
-        let filtered = [...source]
         const gte = args.where?.startTime?.gte
         const lte = args.where?.startTime?.lte
-        if (gte) {
-            filtered = filtered.filter((row) => row.startTime >= gte)
-        }
-        if (lte) {
-            filtered = filtered.filter((row) => row.startTime <= lte)
-        }
-
         const notIn = args.where?.studentId?.notIn || []
-        if (notIn.length > 0) {
-            filtered = filtered.filter((row) => !notIn.includes(row.studentId))
-        }
+        const orderBy = Array.isArray(args.orderBy) ? args.orderBy : []
 
-        if (Array.isArray(args.orderBy) && args.orderBy.length > 0) {
-            filtered.sort((left, right) => {
-                for (const order of args.orderBy || []) {
-                    if (order.studentId) {
-                        if (left.studentId !== right.studentId) {
-                            return order.studentId === "asc"
-                                ? left.studentId.localeCompare(right.studentId)
-                                : right.studentId.localeCompare(left.studentId)
+        const applyFilters = <T extends { studentId: string; startTime: Date }>(source: T[]) => {
+            let filtered = [...source]
+            if (gte) {
+                filtered = filtered.filter((row) => row.startTime >= gte)
+            }
+            if (lte) {
+                filtered = filtered.filter((row) => row.startTime <= lte)
+            }
+            if (notIn.length > 0) {
+                filtered = filtered.filter((row) => !notIn.includes(row.studentId))
+            }
+            if (orderBy.length > 0) {
+                filtered.sort((left, right) => {
+                    for (const order of orderBy) {
+                        if (order.studentId) {
+                            if (left.studentId !== right.studentId) {
+                                return order.studentId === "asc"
+                                    ? left.studentId.localeCompare(right.studentId)
+                                    : right.studentId.localeCompare(left.studentId)
+                            }
+                        }
+                        if (order.startTime) {
+                            if (left.startTime.getTime() !== right.startTime.getTime()) {
+                                return order.startTime === "asc"
+                                    ? left.startTime.getTime() - right.startTime.getTime()
+                                    : right.startTime.getTime() - left.startTime.getTime()
+                            }
                         }
                     }
-                    if (order.startTime) {
-                        if (left.startTime.getTime() !== right.startTime.getTime()) {
-                            return order.startTime === "asc"
-                                ? left.startTime.getTime() - right.startTime.getTime()
-                                : right.startTime.getTime() - left.startTime.getTime()
-                        }
-                    }
-                }
-                return 0
-            })
+                    return 0
+                })
+            }
+            return filtered
         }
 
         if (isPreviousQuery) {
+            const filtered = applyFilters(fixture.previousMonthLessons)
             return filtered.map((row) => ({
                 studentId: row.studentId,
                 startTime: row.startTime,
             }))
         }
 
+        const filtered = applyFilters(fixture.existingLessons)
         return filtered.map((row) => ({
             studentId: row.studentId,
             startTime: row.startTime,
@@ -728,8 +731,9 @@ async function runTargetedFallbackRescueCase() {
 }
 
 async function main() {
-    process.env.NODE_ENV = "test"
-    process.env.SCHEDULE_MAKER_DEBUG_BYPASS_AUTH = "1"
+    const env = process.env as Record<string, string | undefined>
+    env.NODE_ENV = "test"
+    env.SCHEDULE_MAKER_DEBUG_BYPASS_AUTH = "1"
 
     const targeted = await runTargetedFallbackRescueCase()
     const single = await runSingleEightStress(300)
