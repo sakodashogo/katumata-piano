@@ -5,8 +5,9 @@ import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { format, addDays, startOfWeek, setHours, setMinutes, startOfDay } from "date-fns"
 import { ja } from "date-fns/locale"
-import { Loader2, ChevronLeft, ChevronRight, PenLine } from "lucide-react"
+import { Loader2, ChevronLeft, ChevronRight, PenLine, Copy } from "lucide-react"
 import { getStudentColorClasses } from "@/lib/student-color"
+import { useToast } from "@/components/ui/toast"
 
 type Lesson = {
     id: string
@@ -26,6 +27,8 @@ type DraftLesson = {
     roomId: string
     type?: "REGULAR" | "AD_HOC" | "PRACTICE" | "SOLO_ADDITIONAL" | "DUET_ADDITIONAL"
 }
+
+type DraftLessonType = "REGULAR" | "AD_HOC" | "PRACTICE" | "SOLO_ADDITIONAL" | "DUET_ADDITIONAL"
 
 type CellPos = { row: number; gridCol: number }
 
@@ -86,6 +89,7 @@ export function MonthlySlotGridEditor({
     showSaveControls = true,
     className,
 }: Props) {
+    const { toast } = useToast()
     const monthStart = new Date(year, month - 1, 1)
     const [weekStart, setWeekStart] = React.useState(() =>
         startOfWeek(monthStart, { weekStartsOn: 1 })
@@ -182,7 +186,7 @@ export function MonthlySlotGridEditor({
     )
 
     const [draftSlots, setDraftSlots] = React.useState<Set<string>>(new Set(Array.from(editableLessonsByIso.keys())))
-    const [draftTypes, setDraftTypes] = React.useState<Map<string, "REGULAR" | "AD_HOC" | "PRACTICE" | "SOLO_ADDITIONAL" | "DUET_ADDITIONAL">>(new Map(editableLessonsByIso))
+    const [draftTypes, setDraftTypes] = React.useState<Map<string, DraftLessonType>>(new Map(editableLessonsByIso))
     const [draftRooms, setDraftRooms] = React.useState<Map<string, "A" | "B">>(new Map(editableRoomByIso))
     const draftSlotsRef = React.useRef(draftSlots)
     draftSlotsRef.current = draftSlots
@@ -242,7 +246,7 @@ export function MonthlySlotGridEditor({
         return parsedSupportShifts.some((shift) => shift.startTime < end && shift.endTime > start)
     }, [parsedSupportShifts])
 
-    const isBlockedBySupport = React.useCallback((iso: string, roomId: "A" | "B", lessonType: "REGULAR" | "PRACTICE" | "SOLO_ADDITIONAL" | "DUET_ADDITIONAL" = selectedLessonType) => {
+    const isBlockedBySupport = React.useCallback((iso: string, roomId: "A" | "B", lessonType: DraftLessonType = selectedLessonType) => {
         if (roomId !== "B") return false
         if (lessonType === "PRACTICE") return false
         return !hasSupportAt(iso)
@@ -461,6 +465,95 @@ export function MonthlySlotGridEditor({
         clearRangeDrafts(start, end, `${year}年${month}月の`)
     }, [clearRangeDrafts, month, year])
 
+    const handleReplicateWeekToOtherWeeks = React.useCallback(() => {
+        if (readOnly) return
+
+        const sourceWeekStart = startOfDay(days[0])
+        const sourceWeekEnd = addDays(sourceWeekStart, 7)
+        const monthStartAt = new Date(year, month - 1, 1, 0, 0, 0, 0)
+        const monthEndAt = new Date(year, month, 1, 0, 0, 0, 0)
+        const sourceLessons = Array.from(draftSlotsRef.current)
+            .filter((iso) => {
+                const date = new Date(iso)
+                const time = date.getTime()
+                if (Number.isNaN(time)) return false
+                return time >= sourceWeekStart.getTime() && time < sourceWeekEnd.getTime()
+            })
+            .map((iso) => ({
+                iso,
+                roomId: (draftRoomsRef.current.get(iso) || "A") as "A" | "B",
+                type: (draftTypesRef.current.get(iso) || "REGULAR") as DraftLessonType,
+            }))
+
+        if (sourceLessons.length === 0) {
+            toast.info("この週に複製元となるレッスンがありません。")
+            return
+        }
+
+        if (!window.confirm(`${studentName}のこの週の配置を、この月の他の週にも配置しますか？`)) return
+
+        const nextSlots = new Set(draftSlotsRef.current)
+        const nextTypes = new Map(draftTypesRef.current)
+        const nextRooms = new Map(draftRoomsRef.current)
+        let addedCount = 0
+        let skippedDuplicate = 0
+        let skippedBooked = 0
+        let skippedSupport = 0
+
+        const tryAdd = (target: Date, roomId: "A" | "B", type: DraftLessonType) => {
+            const targetMs = target.getTime()
+            if (Number.isNaN(targetMs)) return
+            if (targetMs < monthStartAt.getTime() || targetMs >= monthEndAt.getTime()) return
+            const targetIso = target.toISOString()
+            if (nextSlots.has(targetIso)) {
+                skippedDuplicate += 1
+                return
+            }
+            if (isBooked(targetIso, roomId)) {
+                skippedBooked += 1
+                return
+            }
+            if (isBlockedBySupport(targetIso, roomId, type)) {
+                skippedSupport += 1
+                return
+            }
+            nextSlots.add(targetIso)
+            nextTypes.set(targetIso, type)
+            nextRooms.set(targetIso, roomId)
+            addedCount += 1
+        }
+
+        for (const source of sourceLessons) {
+            const sourceDate = new Date(source.iso)
+            if (Number.isNaN(sourceDate.getTime())) continue
+
+            for (
+                let forward = addDays(sourceDate, 7);
+                forward.getTime() < monthEndAt.getTime();
+                forward = addDays(forward, 7)
+            ) {
+                tryAdd(forward, source.roomId, source.type)
+            }
+            for (
+                let backward = addDays(sourceDate, -7);
+                backward.getTime() >= monthStartAt.getTime();
+                backward = addDays(backward, -7)
+            ) {
+                tryAdd(backward, source.roomId, source.type)
+            }
+        }
+
+        if (addedCount === 0) {
+            toast.info("他週へ複製できるコマがありませんでした。")
+            return
+        }
+
+        setDraftSlots(nextSlots)
+        setDraftTypes(nextTypes)
+        setDraftRooms(nextRooms)
+        toast.success(`他週へ${addedCount}件配置しました（重複${skippedDuplicate} / 予約済み${skippedBooked} / サポート不在${skippedSupport}）。`)
+    }, [days, isBlockedBySupport, isBooked, month, readOnly, studentName, toast, year])
+
     const handleSave = async () => {
         if (!onSave) return
         setIsSaving(true)
@@ -505,6 +598,10 @@ export function MonthlySlotGridEditor({
                         <>
                             <Button variant="outline" size="sm" className="h-7 px-2 text-[11px]" onClick={handleClearCurrentWeek}>
                                 この週を削除
+                            </Button>
+                            <Button variant="outline" size="sm" className="h-7 px-2 text-[11px]" onClick={handleReplicateWeekToOtherWeeks}>
+                                <Copy className="mr-1 h-3 w-3" />
+                                この週を他の週にも配置
                             </Button>
                             <Button variant="outline" size="sm" className="h-7 px-2 text-[11px]" onClick={handleClearMonth}>
                                 この月を削除

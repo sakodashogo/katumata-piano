@@ -6,6 +6,9 @@ import { addDays, format, getDay, setHours, setMinutes } from "date-fns"
 import { getSupportShiftsInRangeSafe } from "@/lib/support-shifts"
 
 // Types
+type LessonTypeValue = "REGULAR" | "AD_HOC" | "PRACTICE" | "SOLO_ADDITIONAL" | "DUET_ADDITIONAL" | null | undefined
+type SuggestionLessonType = Exclude<LessonTypeValue, null | undefined>
+
 export type ScheduleSuggestion = {
     id: string // Unique ID for keying
     slot: {
@@ -15,9 +18,26 @@ export type ScheduleSuggestion = {
         roomId: string
     }
     studentId: string
+    type: SuggestionLessonType
     matchReason: string // "Preferred Day"
     conflict: boolean
     isRecommended: boolean // New field for optimization result
+}
+
+export type ScheduleSuggestionDiagnosticReasonCode =
+    | "TARGET_MET"
+    | "DAILY_CAP_LIMIT"
+    | "NO_CANDIDATE"
+    | "SCHEDULE_CONFLICT"
+
+export type ScheduleSuggestionDiagnostic = {
+    studentId: string
+    targetRegularCount: number
+    currentRegularCount: number
+    maxPossibleRegularCount: number
+    shortage: number
+    reasonCode: ScheduleSuggestionDiagnosticReasonCode
+    reasonText: string
 }
 
 export type LockedAssignment = {
@@ -127,6 +147,14 @@ function getWeeklyCap(defaultLessonCount: number, weekCountInMonth: number) {
     return Math.max(1, Math.ceil(defaultLessonCount / Math.max(weekCountInMonth, 1)))
 }
 
+function normalizeLessonType(type: LessonTypeValue) {
+    return type ?? "REGULAR"
+}
+
+function isContractCountType(type: LessonTypeValue) {
+    return normalizeLessonType(type) === "REGULAR"
+}
+
 function hasIntervalOverlap(intervals: Interval[] | undefined, start: number, end: number) {
     if (!intervals || intervals.length === 0) return false
     return intervals.some((interval) => interval.start < end && interval.end > start)
@@ -137,6 +165,11 @@ function addInterval(intervalMap: Map<string, Interval[]>, roomId: string, start
     list.push({ start, end })
     list.sort((a, b) => a.start - b.start)
     intervalMap.set(roomId, list)
+}
+
+function addGlobalInterval(intervals: Interval[], start: number, end: number) {
+    intervals.push({ start, end })
+    intervals.sort((a, b) => a.start - b.start)
 }
 
 function getContiguity(intervals: Interval[] | undefined, start: number, end: number) {
@@ -236,6 +269,7 @@ export async function generateSuggestedSchedule(
             roomId: locked.roomId === "B" ? "B" : "A",
             startTime: new Date(locked.startTime),
             endTime: new Date(locked.endTime),
+            type: normalizeLessonType(locked.type),
         }))
         .filter((locked) =>
             !Number.isNaN(locked.startTime.getTime()) &&
@@ -255,6 +289,7 @@ export async function generateSuggestedSchedule(
             roomId: locked.roomId,
         },
         studentId: locked.studentId,
+        type: locked.type,
         matchReason: "Manual Lock",
         conflict: false,
         isRecommended: true,
@@ -270,6 +305,7 @@ export async function generateSuggestedSchedule(
         typedSupportShifts.some((shift) => shift.startTime < slot.endTime && shift.endTime > slot.startTime)
     ).map((slot) => ({ ...slot, roomId: "B" }))
     const teacherSlots = [...teacherSlotsA, ...teacherSlotsB]
+    const supportSlotStartSet = new Set(teacherSlotsB.map((slot) => slot.startTime.getTime()))
 
     // 3. Matching Logic
     const allSuggestions: ScheduleSuggestion[] = []
@@ -310,11 +346,24 @@ export async function generateSuggestedSchedule(
         return false
     }
 
+    const existingContractCountByStudent = new Map<string, number>()
+    for (const lesson of existingLessons) {
+        if (!isContractCountType(lesson.type)) continue
+        existingContractCountByStudent.set(lesson.studentId, (existingContractCountByStudent.get(lesson.studentId) || 0) + 1)
+    }
+
+    const lockedContractCountByStudent = new Map<string, number>()
+    for (const locked of lockedAssignments) {
+        if (!isContractCountType(locked.type)) continue
+        lockedContractCountByStudent.set(locked.studentId, (lockedContractCountByStudent.get(locked.studentId) || 0) + 1)
+    }
+
     // Generate Candidates
     for (const student of students) {
         const targetCount = student.defaultLessonCount || 4
-        // Calculate remaining needed (taking existing into account)
-        const currentCount = existingLessons.filter(l => l.studentId === student.id).length
+        const currentCount =
+            (existingContractCountByStudent.get(student.id) || 0) +
+            (lockedContractCountByStudent.get(student.id) || 0)
 
         if (currentCount >= targetCount) continue
 
@@ -327,6 +376,7 @@ export async function generateSuggestedSchedule(
                     id: `${student.id}-${slot.roomId}-${slot.startTime.getTime()}`,
                     slot,
                     studentId: student.id,
+                    type: "REGULAR",
                     matchReason: "Matched",
                     conflict: false, // Will calculate later
                     isRecommended: false // Will calculate later
@@ -335,11 +385,19 @@ export async function generateSuggestedSchedule(
         }
     }
 
-    // 4. CSP Solver (Hard constraints -> Primary heuristic -> Secondary heuristic)
+    // 4. Optimizer (Pass 1: A/B pairing -> Pass 2: weekly cap on -> Pass 3: weekly cap relaxed)
     const studentById = new Map(students.map((student) => [student.id, student]))
-    const studentScarcity = new Map<string, number>()
+    const studentScarcity = new Map<string, number>() // lower means fewer candidate days
+    const candidateDaySetByStudent = new Map<string, Set<string>>()
     for (const suggestion of allSuggestions) {
-        studentScarcity.set(suggestion.studentId, (studentScarcity.get(suggestion.studentId) || 0) + 1)
+        const dateKey = getDateKey(suggestion.slot.startTime)
+        if (!candidateDaySetByStudent.has(suggestion.studentId)) {
+            candidateDaySetByStudent.set(suggestion.studentId, new Set())
+        }
+        candidateDaySetByStudent.get(suggestion.studentId)?.add(dateKey)
+    }
+    for (const student of students) {
+        studentScarcity.set(student.id, candidateDaySetByStudent.get(student.id)?.size || 0)
     }
 
     const weekIndexSet = new Set<number>()
@@ -352,32 +410,37 @@ export async function generateSuggestedSchedule(
     const studentMonthCounts = new Map<string, number>()
     const studentWeeklyCounts = new Map<string, Map<number, number>>()
     const roomIntervals = new Map<string, Interval[]>()
+    const globalIntervals: Interval[] = []
 
     for (const lesson of existingLessons) {
         const roomId = lesson.roomId || "A"
         addInterval(roomIntervals, roomId, lesson.startTime.getTime(), lesson.endTime.getTime())
+        addGlobalInterval(globalIntervals, lesson.startTime.getTime(), lesson.endTime.getTime())
         const dateKey = getDateKey(lesson.startTime)
         if (!studentDailyAssignments.has(lesson.studentId)) studentDailyAssignments.set(lesson.studentId, new Set())
         studentDailyAssignments.get(lesson.studentId)?.add(dateKey)
-        studentMonthCounts.set(lesson.studentId, (studentMonthCounts.get(lesson.studentId) || 0) + 1)
-
-        const week = getWeekNumberInMonth(year, month, lesson.startTime)
-        if (!studentWeeklyCounts.has(lesson.studentId)) studentWeeklyCounts.set(lesson.studentId, new Map())
-        const weekCounts = studentWeeklyCounts.get(lesson.studentId)!
-        weekCounts.set(week, (weekCounts.get(week) || 0) + 1)
+        if (isContractCountType(lesson.type)) {
+            studentMonthCounts.set(lesson.studentId, (studentMonthCounts.get(lesson.studentId) || 0) + 1)
+            const week = getWeekNumberInMonth(year, month, lesson.startTime)
+            if (!studentWeeklyCounts.has(lesson.studentId)) studentWeeklyCounts.set(lesson.studentId, new Map())
+            const weekCounts = studentWeeklyCounts.get(lesson.studentId)!
+            weekCounts.set(week, (weekCounts.get(week) || 0) + 1)
+        }
     }
 
     for (const locked of lockedAssignments) {
         addInterval(roomIntervals, locked.roomId, locked.startTime.getTime(), locked.endTime.getTime())
+        addGlobalInterval(globalIntervals, locked.startTime.getTime(), locked.endTime.getTime())
         const dateKey = getDateKey(locked.startTime)
         if (!studentDailyAssignments.has(locked.studentId)) studentDailyAssignments.set(locked.studentId, new Set())
         studentDailyAssignments.get(locked.studentId)?.add(dateKey)
-        studentMonthCounts.set(locked.studentId, (studentMonthCounts.get(locked.studentId) || 0) + 1)
-
-        const week = getWeekNumberInMonth(year, month, locked.startTime)
-        if (!studentWeeklyCounts.has(locked.studentId)) studentWeeklyCounts.set(locked.studentId, new Map())
-        const weekCounts = studentWeeklyCounts.get(locked.studentId)!
-        weekCounts.set(week, (weekCounts.get(week) || 0) + 1)
+        if (isContractCountType(locked.type)) {
+            studentMonthCounts.set(locked.studentId, (studentMonthCounts.get(locked.studentId) || 0) + 1)
+            const week = getWeekNumberInMonth(year, month, locked.startTime)
+            if (!studentWeeklyCounts.has(locked.studentId)) studentWeeklyCounts.set(locked.studentId, new Map())
+            const weekCounts = studentWeeklyCounts.get(locked.studentId)!
+            weekCounts.set(week, (weekCounts.get(week) || 0) + 1)
+        }
     }
 
     const getModeFromNumberList = (values: number[]) => {
@@ -436,13 +499,36 @@ export async function generateSuggestedSchedule(
         }
     }
 
+    const getTargetRegularCount = (studentId: string) => studentById.get(studentId)?.defaultLessonCount || 4
+    const getRemainingNeed = (studentId: string) =>
+        Math.max(0, getTargetRegularCount(studentId) - (studentMonthCounts.get(studentId) || 0))
+    const getStudentPriorityOrder = () => {
+        return students
+            .map((student) => student.id)
+            .sort((leftId, rightId) => {
+                const leftNeed = getRemainingNeed(leftId)
+                const rightNeed = getRemainingNeed(rightId)
+                if (leftNeed !== rightNeed) return rightNeed - leftNeed
+
+                const leftScarcity = studentScarcity.get(leftId) ?? 999
+                const rightScarcity = studentScarcity.get(rightId) ?? 999
+                if (leftScarcity !== rightScarcity) return leftScarcity - rightScarcity
+
+                const leftTarget = getTargetRegularCount(leftId)
+                const rightTarget = getTargetRegularCount(rightId)
+                if (leftTarget !== rightTarget) return rightTarget - leftTarget
+
+                return leftId.localeCompare(rightId)
+            })
+    }
+
     const finalRecommendations = new Set<string>()
 
-    const canAssignHard = (candidate: ScheduleSuggestion) => {
+    const canAssignHard = (candidate: ScheduleSuggestion, options?: { ignoreWeeklyCap?: boolean }) => {
         const student = studentById.get(candidate.studentId)
         if (!student) return false
 
-        const targetMonthlyCount = student.defaultLessonCount || 4
+        const targetMonthlyCount = getTargetRegularCount(candidate.studentId)
         const currentMonthlyCount = studentMonthCounts.get(candidate.studentId) || 0
         if (currentMonthlyCount >= targetMonthlyCount) return false
 
@@ -450,10 +536,12 @@ export async function generateSuggestedSchedule(
         const currentDailySet = studentDailyAssignments.get(candidate.studentId)
         if ((currentDailySet?.has(dateKey) ?? false) && MAX_LESSONS_PER_DAY <= 1) return false
 
-        const weekIndex = getWeekNumberInMonth(year, month, candidate.slot.startTime)
-        const weeklyCap = getWeeklyCap(targetMonthlyCount, weekCountInMonth)
-        const currentWeekCount = studentWeeklyCounts.get(candidate.studentId)?.get(weekIndex) || 0
-        if (currentWeekCount >= weeklyCap) return false
+        if (!options?.ignoreWeeklyCap) {
+            const weekIndex = getWeekNumberInMonth(year, month, candidate.slot.startTime)
+            const weeklyCap = getWeeklyCap(targetMonthlyCount, weekCountInMonth)
+            const currentWeekCount = studentWeeklyCounts.get(candidate.studentId)?.get(weekIndex) || 0
+            if (currentWeekCount >= weeklyCap) return false
+        }
 
         const roomId = candidate.slot.roomId
         const startTime = candidate.slot.startTime.getTime()
@@ -473,43 +561,69 @@ export async function generateSuggestedSchedule(
         if (!student) return Number.NEGATIVE_INFINITY
 
         let score = 0
+        const targetRegularCount = getTargetRegularCount(candidate.studentId)
+        const currentRegularCount = studentMonthCounts.get(candidate.studentId) || 0
+        const remainingNeed = Math.max(0, targetRegularCount - currentRegularCount)
         const weekIndex = getWeekNumberInMonth(year, month, candidate.slot.startTime)
         const weekCount = studentWeeklyCounts.get(candidate.studentId)?.get(weekIndex) || 0
         const anchor = studentAnchors.get(candidate.studentId)
         const candidateMinute = toMinuteOfDay(candidate.slot.startTime)
         const candidateDay = getDay(candidate.slot.startTime)
 
-        // Primary heuristic: keep anchor (same weekday + same start time), then local search.
+        score += remainingNeed * 130
+
+        // Preference heuristic: keep anchor timing, but lower priority than teacher-time minimization.
         if (anchor && candidateDay === anchor.dayOfWeek) {
             const delta = Math.abs(candidateMinute - anchor.minuteOfDay)
             if (delta === 0) {
-                score += 1200
+                score += 320
             } else if (delta <= ANCHOR_NEARBY_MAX_MINUTES && !hasExactAnchorInPool) {
-                score += 850 - delta * 6
-                if (delta <= ANCHOR_NEARBY_HIGH_BAND_MINUTES) score += 120
+                score += 230 - delta * 2
+                if (delta <= ANCHOR_NEARBY_HIGH_BAND_MINUTES) score += 50
             } else if (delta <= ANCHOR_NEARBY_MAX_MINUTES) {
-                score += 80
+                score += 40
             }
         }
-        if (anchor?.source === "previous-month") score += 40
+        if (anchor?.source === "previous-month") score += 20
 
-        // Hard-distribution tie-breaker: favor weeks with fewer assignments.
-        score -= weekCount * 150
+        // Keep weekly spread as hard tie-breaker under normal pass.
+        score -= weekCount * 170
 
-        // Secondary heuristic: teacher idle minimization.
+        // Teacher idle minimization.
         const roomId = candidate.slot.roomId
         const startMs = candidate.slot.startTime.getTime()
         const endMs = candidate.slot.endTime.getTime()
         const intervals = roomIntervals.get(roomId)
         const contiguity = getContiguity(intervals, startMs, endMs)
         const adjacentCount = (contiguity.before ? 1 : 0) + (contiguity.after ? 1 : 0)
-        score += adjacentCount * 140
-        if (adjacentCount === 2) score += 60
+        score += adjacentCount * 170
+        if (adjacentCount === 2) score += 90
 
-        if (candidate.slot.roomId === "B") score += 20
+        const globalOverlap = hasIntervalOverlap(globalIntervals, startMs, endMs)
+        if (globalOverlap) score += 760
+        else score -= 620
+
+        const globalContiguity = getContiguity(globalIntervals, startMs, endMs)
+        const globalAdjacentCount = (globalContiguity.before ? 1 : 0) + (globalContiguity.after ? 1 : 0)
+        score += globalAdjacentCount * 260
+        if (globalAdjacentCount === 2) score += 140
+
+        const oppositeRoomId = roomId === "B" ? "A" : "B"
+        const oppositeRoomOverlap = hasIntervalOverlap(roomIntervals.get(oppositeRoomId), startMs, endMs)
+        if (oppositeRoomOverlap) {
+            score += 300
+            if (supportSlotStartSet.has(startMs)) {
+                score += 480
+            }
+        } else if (supportSlotStartSet.has(startMs) && roomId === "B") {
+            score += 110
+        }
 
         const fragmentationPenalty = getFragmentationPenalty(intervals, startMs, endMs, SLOT_DURATION_MS)
-        score -= fragmentationPenalty * 180
+        score -= fragmentationPenalty * 160
+        const globalFragmentationPenalty = getFragmentationPenalty(globalIntervals, startMs, endMs, SLOT_DURATION_MS)
+        score -= globalFragmentationPenalty * 260
+        if (!globalOverlap && globalAdjacentCount === 0) score -= 220
 
         score -= candidate.slot.startTime.getTime() / 10_000_000_000
         return score
@@ -525,34 +639,94 @@ export async function generateSuggestedSchedule(
 
         finalRecommendations.add(candidate.id)
         addInterval(roomIntervals, roomId, startMs, endMs)
+        addGlobalInterval(globalIntervals, startMs, endMs)
 
         if (!studentDailyAssignments.has(studentId)) studentDailyAssignments.set(studentId, new Set())
         studentDailyAssignments.get(studentId)?.add(dateKey)
 
-        studentMonthCounts.set(studentId, (studentMonthCounts.get(studentId) || 0) + 1)
-        if (!studentWeeklyCounts.has(studentId)) studentWeeklyCounts.set(studentId, new Map())
-        const weekly = studentWeeklyCounts.get(studentId)!
-        weekly.set(weekIndex, (weekly.get(weekIndex) || 0) + 1)
+        if (isContractCountType(candidate.type)) {
+            studentMonthCounts.set(studentId, (studentMonthCounts.get(studentId) || 0) + 1)
+            if (!studentWeeklyCounts.has(studentId)) studentWeeklyCounts.set(studentId, new Map())
+            const weekly = studentWeeklyCounts.get(studentId)!
+            weekly.set(weekIndex, (weekly.get(weekIndex) || 0) + 1)
+        }
     }
 
     const candidatePoolByStudent = new Map<string, ScheduleSuggestion[]>()
+    const candidatePoolBySlotRoom = new Map<string, ScheduleSuggestion[]>()
     for (const suggestion of allSuggestions) {
         const list = candidatePoolByStudent.get(suggestion.studentId) || []
         list.push(suggestion)
         candidatePoolByStudent.set(suggestion.studentId, list)
+
+        const slotRoomKey = `${suggestion.slot.startTime.getTime()}__${suggestion.slot.roomId}`
+        const slotRoomList = candidatePoolBySlotRoom.get(slotRoomKey) || []
+        slotRoomList.push(suggestion)
+        candidatePoolBySlotRoom.set(slotRoomKey, slotRoomList)
     }
 
-    const studentOrder = students
-        .map((student) => student.id)
-        .sort((a, b) => (studentScarcity.get(a) || 999) - (studentScarcity.get(b) || 999))
+    // Pass 1: prioritize support-time A/B simultaneous placement.
+    const supportSlotStartTimes = Array.from(supportSlotStartSet).sort((a, b) => a - b)
+    for (const slotStartMs of supportSlotStartTimes) {
+        const slotEndMs = slotStartMs + SLOT_DURATION_MS
+        if (hasIntervalOverlap(roomIntervals.get("A"), slotStartMs, slotEndMs)) continue
+        if (hasIntervalOverlap(roomIntervals.get("B"), slotStartMs, slotEndMs)) continue
 
+        const poolA = (candidatePoolBySlotRoom.get(`${slotStartMs}__A`) || [])
+            .filter((candidate) => !finalRecommendations.has(candidate.id))
+            .filter((candidate) => canAssignHard(candidate))
+        const poolB = (candidatePoolBySlotRoom.get(`${slotStartMs}__B`) || [])
+            .filter((candidate) => !finalRecommendations.has(candidate.id))
+            .filter((candidate) => canAssignHard(candidate))
+
+        if (poolA.length === 0 || poolB.length === 0) continue
+
+        const hasExactAnchorA = new Set<string>()
+        for (const candidate of poolA) {
+            const anchor = studentAnchors.get(candidate.studentId)
+            if (isAnchorExact(anchor, candidate.slot.startTime)) hasExactAnchorA.add(candidate.studentId)
+        }
+        const hasExactAnchorB = new Set<string>()
+        for (const candidate of poolB) {
+            const anchor = studentAnchors.get(candidate.studentId)
+            if (isAnchorExact(anchor, candidate.slot.startTime)) hasExactAnchorB.add(candidate.studentId)
+        }
+
+        let bestPair: { a: ScheduleSuggestion; b: ScheduleSuggestion; score: number } | null = null
+        for (const candidateA of poolA) {
+            for (const candidateB of poolB) {
+                if (candidateA.studentId === candidateB.studentId) continue
+                const scoreA = scoreCandidate(candidateA, hasExactAnchorA.has(candidateA.studentId))
+                const scoreB = scoreCandidate(candidateB, hasExactAnchorB.has(candidateB.studentId))
+                const remainingNeedA = getRemainingNeed(candidateA.studentId)
+                const remainingNeedB = getRemainingNeed(candidateB.studentId)
+                const pairScore = scoreA + scoreB + 900 + remainingNeedA * 220 + remainingNeedB * 220
+                if (!bestPair || pairScore > bestPair.score) {
+                    bestPair = {
+                        a: candidateA,
+                        b: candidateB,
+                        score: pairScore,
+                    }
+                }
+            }
+        }
+
+        if (!bestPair) continue
+        acceptCandidate(bestPair.a)
+        if (canAssignHard(bestPair.b)) {
+            acceptCandidate(bestPair.b)
+        }
+    }
+
+    // Pass 2: normal fill with weekly cap.
     let madeProgress = true
     while (madeProgress) {
         madeProgress = false
+        const studentOrder = getStudentPriorityOrder()
         for (const studentId of studentOrder) {
             const student = studentById.get(studentId)
             if (!student) continue
-            const targetMonthlyCount = student.defaultLessonCount || 4
+            const targetMonthlyCount = getTargetRegularCount(studentId)
             const currentMonthlyCount = studentMonthCounts.get(studentId) || 0
             if (currentMonthlyCount >= targetMonthlyCount) continue
 
@@ -580,41 +754,65 @@ export async function generateSuggestedSchedule(
                 isAnchorExact(anchor, candidate.slot.startTime)
             )
 
-            evenlyDistributedPool.sort((a, b) => {
-                const scoreDiff = scoreCandidate(b, hasExactAnchorInPool) - scoreCandidate(a, hasExactAnchorInPool)
-                if (scoreDiff !== 0) return scoreDiff
-                return a.slot.startTime.getTime() - b.slot.startTime.getTime()
-            })
+            let bestCandidate: ScheduleSuggestion | null = null
+            let bestScore = Number.NEGATIVE_INFINITY
+            for (const candidate of evenlyDistributedPool) {
+                const score = scoreCandidate(candidate, hasExactAnchorInPool)
+                if (
+                    !bestCandidate ||
+                    score > bestScore ||
+                    (score === bestScore && candidate.slot.startTime.getTime() < bestCandidate.slot.startTime.getTime())
+                ) {
+                    bestCandidate = candidate
+                    bestScore = score
+                }
+            }
+            if (!bestCandidate) continue
 
-            acceptCandidate(evenlyDistributedPool[0])
+            acceptCandidate(bestCandidate)
             madeProgress = true
         }
     }
 
-    // Fallback pass: fill what can be filled under hard constraints.
-    for (const studentId of studentOrder) {
-        const student = studentById.get(studentId)
-        if (!student) continue
+    // Pass 3: shortage recovery (weekly cap relaxed, daily cap kept).
+    let madeRecoveryProgress = true
+    while (madeRecoveryProgress) {
+        madeRecoveryProgress = false
+        const studentOrder = getStudentPriorityOrder()
+        for (const studentId of studentOrder) {
+            const student = studentById.get(studentId)
+            if (!student) continue
 
-        const targetMonthlyCount = student.defaultLessonCount || 4
-        while ((studentMonthCounts.get(studentId) || 0) < targetMonthlyCount) {
+            const targetMonthlyCount = getTargetRegularCount(studentId)
+            if ((studentMonthCounts.get(studentId) || 0) >= targetMonthlyCount) continue
+
             const pool = (candidatePoolByStudent.get(studentId) || [])
                 .filter((candidate) => !finalRecommendations.has(candidate.id))
-                .filter((candidate) => canAssignHard(candidate))
-            if (pool.length === 0) break
+                .filter((candidate) => canAssignHard(candidate, { ignoreWeeklyCap: true }))
+            if (pool.length === 0) continue
 
             const anchor = studentAnchors.get(studentId)
             const hasExactAnchorInPool = !!anchor && pool.some((candidate) =>
                 isAnchorExact(anchor, candidate.slot.startTime)
             )
 
-            pool.sort((a, b) => {
-                const scoreDiff = scoreCandidate(b, hasExactAnchorInPool) - scoreCandidate(a, hasExactAnchorInPool)
-                if (scoreDiff !== 0) return scoreDiff
-                return a.slot.startTime.getTime() - b.slot.startTime.getTime()
-            })
+            let bestCandidate: ScheduleSuggestion | null = null
+            let bestScore = Number.NEGATIVE_INFINITY
+            for (const candidate of pool) {
+                const score = scoreCandidate(candidate, hasExactAnchorInPool)
+                if (
+                    !bestCandidate ||
+                    score > bestScore ||
+                    (score === bestScore && candidate.slot.startTime.getTime() < bestCandidate.slot.startTime.getTime())
+                ) {
+                    bestCandidate = candidate
+                    bestScore = score
+                }
+            }
+            if (!bestCandidate) continue
 
-            acceptCandidate(pool[0])
+            acceptCandidate(bestCandidate)
+            madeRecoveryProgress = true
         }
     }
 
@@ -638,9 +836,50 @@ export async function generateSuggestedSchedule(
         }
     })
 
+    const diagnostics: ScheduleSuggestionDiagnostic[] = students.map((student) => {
+        const studentId = student.id
+        const targetRegularCount = getTargetRegularCount(studentId)
+        const currentRegularCount = studentMonthCounts.get(studentId) || 0
+        const candidateDaySet = candidateDaySetByStudent.get(studentId) || new Set<string>()
+        const assignedDaySet = studentDailyAssignments.get(studentId) || new Set<string>()
+        let additionalPossibleDays = 0
+        for (const dateKey of candidateDaySet) {
+            if (!assignedDaySet.has(dateKey)) additionalPossibleDays += 1
+        }
+        const maxPossibleRegularCount = currentRegularCount + additionalPossibleDays
+        const shortage = Math.max(0, targetRegularCount - maxPossibleRegularCount)
+        const candidateDayCount = candidateDaySet.size
+
+        let reasonCode: ScheduleSuggestionDiagnosticReasonCode = "TARGET_MET"
+        let reasonText = "目標回数を満たしています。"
+        if (shortage > 0) {
+            if (candidateDayCount === 0) {
+                reasonCode = "NO_CANDIDATE"
+                reasonText = `希望条件に合う候補枠がないため最大${maxPossibleRegularCount}回（目標${targetRegularCount}回）`
+            } else if (candidateDayCount < targetRegularCount || additionalPossibleDays === 0) {
+                reasonCode = "DAILY_CAP_LIMIT"
+                reasonText = `希望日${candidateDayCount}日・1日1コマ制約のため最大${maxPossibleRegularCount}回（目標${targetRegularCount}回）`
+            } else {
+                reasonCode = "SCHEDULE_CONFLICT"
+                reasonText = `候補枠の競合により最大${maxPossibleRegularCount}回（目標${targetRegularCount}回）`
+            }
+        }
+
+        return {
+            studentId,
+            targetRegularCount,
+            currentRegularCount,
+            maxPossibleRegularCount,
+            shortage,
+            reasonCode,
+            reasonText,
+        }
+    })
+
     return {
         success: true,
         suggestions: suggestionsWithStatus,
+        diagnostics,
         students: students.map(s => ({ id: s.id, name: s.name, defaultLessonCount: s.defaultLessonCount }))
     }
 }
@@ -660,7 +899,7 @@ export async function createBulkLessons(suggestions: ScheduleSuggestion[]) {
                     endTime: s.slot.endTime,
                     studentId: s.studentId,
                     teacherId: session.user.id!,
-                    type: "REGULAR",
+                    type: normalizeLessonType(s.type),
                     status: "BOOKED",
                     roomId: s.slot.roomId,
                 }

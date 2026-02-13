@@ -15,6 +15,7 @@ import {
 import {
     generateSuggestedSchedule,
     ScheduleSuggestion,
+    ScheduleSuggestionDiagnostic,
     LockedAssignment,
 } from "@/app/lib/actions/schedule-maker"
 import { useToast } from "@/components/ui/toast"
@@ -54,6 +55,8 @@ type DraftLesson = {
     type?: "REGULAR" | "AD_HOC" | "PRACTICE" | "SOLO_ADDITIONAL" | "DUET_ADDITIONAL"
 }
 
+type LessonTypeValue = Lesson["type"] | DraftLesson["type"] | null | undefined
+
 type Props = {
     students: Student[]
     lessons: Lesson[]
@@ -75,6 +78,10 @@ function normalizeLessonToDraft(lesson: Lesson): DraftLesson {
         roomId: lesson.roomId || "A",
         type: lesson.type || "REGULAR",
     }
+}
+
+function isContractLessonType(type: LessonTypeValue) {
+    return (type || "REGULAR") === "REGULAR"
 }
 
 function isSameDraftSet(a: DraftLesson[], b: DraftLesson[]) {
@@ -129,7 +136,9 @@ export function MonthlyScheduler({
     const [isAutoMode, setIsAutoMode] = useState(false)
     const [isGeneratingSuggestions, setIsGeneratingSuggestions] = useState(false)
     const [suggestions, setSuggestions] = useState<ScheduleSuggestion[]>([])
+    const [suggestionDiagnostics, setSuggestionDiagnostics] = useState<ScheduleSuggestionDiagnostic[]>([])
     const autoDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+    const autoAppliedKeysRef = useRef<Record<string, Set<string>>>({})
     const lastSuggestionErrorRef = useRef("")
     const lastAppliedSuggestionsKeyRef = useRef("")
 
@@ -138,6 +147,11 @@ export function MonthlyScheduler({
         setBaseLessons(lessons)
         setDraftByStudent({})
         setDirtyStudentIds(new Set())
+        setSuggestions([])
+        setSuggestionDiagnostics([])
+        autoAppliedKeysRef.current = {}
+        lastSuggestionErrorRef.current = ""
+        lastAppliedSuggestionsKeyRef.current = ""
     }, [lessons, month, year])
 
     useEffect(() => {
@@ -196,6 +210,7 @@ export function MonthlyScheduler({
     const draftLessonsCountByStudent = useMemo(() => {
         const map = new Map<string, number>()
         for (const lesson of effectiveLessons) {
+            if (!isContractLessonType(lesson.type)) continue
             map.set(lesson.studentId, (map.get(lesson.studentId) || 0) + 1)
         }
         return map
@@ -234,6 +249,7 @@ export function MonthlyScheduler({
             })
             if (!result.success || !result.suggestions) {
                 setSuggestions([])
+                setSuggestionDiagnostics([])
                 const message = result.error || "提案の作成に失敗しました。"
                 if (lastSuggestionErrorRef.current !== message) {
                     lastSuggestionErrorRef.current = message
@@ -243,8 +259,10 @@ export function MonthlyScheduler({
             }
             lastSuggestionErrorRef.current = ""
             setSuggestions(result.suggestions)
+            setSuggestionDiagnostics(result.diagnostics || [])
         } catch {
             setSuggestions([])
+            setSuggestionDiagnostics([])
             const message = "提案の作成中にエラーが発生しました。"
             if (lastSuggestionErrorRef.current !== message) {
                 lastSuggestionErrorRef.current = message
@@ -356,6 +374,7 @@ export function MonthlyScheduler({
             next.delete(selectedStudentId)
             return next
         })
+        delete autoAppliedKeysRef.current[selectedStudentId]
         toast.success(`${selectedStudent?.name || "生徒"}の予定を保存しました。`)
         router.refresh()
     }
@@ -388,6 +407,7 @@ export function MonthlyScheduler({
                 next.delete(studentId)
                 return next
             })
+            delete autoAppliedKeysRef.current[studentId]
         }
         setIsSavingAll(false)
         if (failedCount === 0) {
@@ -416,6 +436,14 @@ export function MonthlyScheduler({
         router.refresh()
     }
 
+    const diagnosticsByStudent = useMemo(() => {
+        return new Map(suggestionDiagnostics.map((diagnostic) => [diagnostic.studentId, diagnostic]))
+    }, [suggestionDiagnostics])
+    const shortageDiagnostics = useMemo(
+        () => suggestionDiagnostics.filter((diagnostic) => diagnostic.shortage > 0),
+        [suggestionDiagnostics]
+    )
+
     const applyRecommendedToDrafts = useCallback((targetSuggestions: ScheduleSuggestion[], showToast = false) => {
         const recommended = targetSuggestions.filter((suggestion) => suggestion.isRecommended && !suggestion.conflict)
         const recommendationsByStudent: Record<string, DraftLesson[]> = {}
@@ -427,36 +455,71 @@ export function MonthlyScheduler({
                 startTime: new Date(suggestion.slot.startTime),
                 endTime: new Date(suggestion.slot.endTime),
                 roomId: suggestion.slot.roomId === "B" ? "B" : "A",
-                type: "REGULAR",
+                type: suggestion.type || "REGULAR",
             })
         }
 
         const mergedDrafts: Record<string, DraftLesson[]> = {}
+        const nextAutoAppliedByStudent: Record<string, Set<string>> = {}
+        const shortageStudents: string[] = []
+        const shortageDetails: string[] = []
         for (const student of students) {
             const baseline = baseLessons
                 .filter((lesson) => lesson.studentId === student.id)
                 .map(normalizeLessonToDraft)
-            const fixed = draftByStudent[student.id] || baseline
-            const merged = [...fixed]
+            const currentDraft = draftByStudent[student.id] || baseline
+            const previousAutoKeys = autoAppliedKeysRef.current[student.id] || new Set<string>()
+            const manualLessons = currentDraft.filter((lesson) => !previousAutoKeys.has(toDraftKey(lesson)))
+            const targetCount = Math.max(student.defaultLessonCount || 0, 0)
+            const merged = [...manualLessons]
+            let mergedContractCount = merged.reduce(
+                (count, lesson) => count + (isContractLessonType(lesson.type) ? 1 : 0),
+                0
+            )
             const mergedKeys = new Set(merged.map(toDraftKey))
-            for (const lesson of recommendationsByStudent[student.id] || []) {
+            const nextAutoKeys = new Set<string>()
+            const studentRecommendations = [...(recommendationsByStudent[student.id] || [])].sort(
+                (a, b) => a.startTime.getTime() - b.startTime.getTime()
+            )
+            for (const lesson of studentRecommendations) {
+                if (mergedContractCount >= targetCount) break
                 const key = toDraftKey(lesson)
                 if (mergedKeys.has(key)) continue
                 merged.push(lesson)
                 mergedKeys.add(key)
+                nextAutoKeys.add(key)
+                if (isContractLessonType(lesson.type)) {
+                    mergedContractCount += 1
+                }
             }
+            if (mergedContractCount < targetCount) {
+                shortageStudents.push(student.name || student.email)
+                const diagnostic = diagnosticsByStudent.get(student.id)
+                if (diagnostic?.reasonText) {
+                    shortageDetails.push(`${student.name || student.email}: ${diagnostic.reasonText}`)
+                }
+            }
+            nextAutoAppliedByStudent[student.id] = nextAutoKeys
             if (!isSameDraftSet(merged, baseline)) {
                 mergedDrafts[student.id] = merged
             }
         }
 
+        autoAppliedKeysRef.current = nextAutoAppliedByStudent
         const nextDirty = new Set(Object.keys(mergedDrafts))
         setDraftByStudent((prev) => (isSameDraftMap(prev, mergedDrafts) ? prev : mergedDrafts))
         setDirtyStudentIds((prev) => (isSameIdSet(prev, nextDirty) ? prev : nextDirty))
         if (showToast) {
-            toast.success("提案内容を全生徒の編集下書きに反映しました。")
+            if (shortageStudents.length === 0) {
+                toast.success("提案内容を全生徒の編集下書きに反映しました。")
+            } else {
+                const preview = shortageDetails.slice(0, 2).join(" / ")
+                const suffix = shortageDetails.length > 2 ? " ほか" : ""
+                const detailText = preview ? ` ${preview}${suffix}` : ""
+                toast.info(`提案を反映しました。${shortageStudents.length}人は契約回数に未達です。${detailText}`)
+            }
         }
-    }, [baseLessons, draftByStudent, studentById, students, toast])
+    }, [baseLessons, diagnosticsByStudent, draftByStudent, studentById, students, toast])
 
     const applyRecommendedToDraftsRef = useRef(applyRecommendedToDrafts)
     applyRecommendedToDraftsRef.current = applyRecommendedToDrafts
@@ -592,6 +655,7 @@ export function MonthlyScheduler({
                         {filteredStudents.map((student) => {
                             const lessonCount = draftLessonsCountByStudent.get(student.id) || 0
                             const suggestionCount = suggestionCountByStudent.get(student.id) || 0
+                            const shortage = diagnosticsByStudent.get(student.id)
                             const isDirty = dirtyStudentIds.has(student.id)
                             const isActive = student.id === selectedStudentId
                             return (
@@ -614,6 +678,11 @@ export function MonthlyScheduler({
                                         {isAutoMode && suggestionCount > 0 && (
                                             <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-emerald-700">
                                                 提案 {suggestionCount}
+                                            </span>
+                                        )}
+                                        {isAutoMode && shortage && shortage.shortage > 0 && (
+                                            <span className="rounded bg-amber-100 px-1.5 py-0.5 text-amber-800">
+                                                上限{shortage.maxPossibleRegularCount}/目標{shortage.targetRegularCount}
                                             </span>
                                         )}
                                     </div>
@@ -640,6 +709,14 @@ export function MonthlyScheduler({
                                         手動編集内容を固定条件にして提案を再計算します。
                                         {isGeneratingSuggestions ? " 再計算中..." : ` 推奨候補: ${suggestions.filter((s) => s.isRecommended && !s.conflict).length}件`}
                                     </div>
+                                    {!isGeneratingSuggestions && shortageDiagnostics.length > 0 && (
+                                        <div className="mt-1 text-amber-700">
+                                            未達見込み: {shortageDiagnostics.length}人
+                                            {selectedStudent && diagnosticsByStudent.get(selectedStudent.id)?.shortage
+                                                ? ` / ${diagnosticsByStudent.get(selectedStudent.id)?.reasonText}`
+                                                : ""}
+                                        </div>
+                                    )}
                                 </div>
                             )}
                             <div className="flex-1">

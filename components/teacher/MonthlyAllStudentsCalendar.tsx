@@ -15,7 +15,7 @@ type LessonRow = {
     startTime: Date | string
     endTime: Date | string
     roomId: string | null
-    type?: "REGULAR" | "AD_HOC" | "PRACTICE" | "SOLO_ADDITIONAL" | "DUET_ADDITIONAL"
+    type?: string
     status: string
 }
 
@@ -37,6 +37,7 @@ const END_HOUR = 22
 type LessonCell = {
     studentId: string
     studentName: string
+    status: string
 }
 
 export function MonthlyAllStudentsCalendar({
@@ -85,6 +86,7 @@ export function MonthlyAllStudentsCalendar({
             row.push({
                 studentId: lesson.studentId,
                 studentName: lesson.studentName || "名前未設定",
+                status: lesson.status,
             })
             map.set(key, row)
         }
@@ -126,6 +128,12 @@ export function MonthlyAllStudentsCalendar({
                         <ChevronRight className="h-4 w-4" />
                     </Button>
                 </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-white px-3 py-2 text-xs font-medium text-slate-600">
+                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-1 text-emerald-700">公開済み</span>
+                <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-1 text-amber-700">下書き</span>
+                <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-1 text-slate-700">RoomB サポート不在</span>
             </div>
 
             <div className="overflow-auto rounded-lg border border-slate-200 bg-white">
@@ -176,6 +184,7 @@ export function MonthlyAllStudentsCalendar({
                                                     const top = rows[0]
                                                     const remaining = rows.length - 1
                                                     const noSupport = roomId === "B" && !hasSupportAt(iso)
+                                                    const isDraftTop = top?.status === "DRAFT"
                                                     return (
                                                         <div
                                                             key={`${day.toISOString()}-${roomId}`}
@@ -197,6 +206,14 @@ export function MonthlyAllStudentsCalendar({
                                                                     )}
                                                                 >
                                                                     <span className="w-full truncate text-center font-bold">{top.studentName}</span>
+                                                                    <span
+                                                                        className={cn(
+                                                                            "mt-0.5 rounded px-1 text-[8px] font-semibold",
+                                                                            isDraftTop ? "bg-amber-200 text-amber-800" : "bg-emerald-200 text-emerald-800"
+                                                                        )}
+                                                                    >
+                                                                        {isDraftTop ? "下書き" : "公開"}
+                                                                    </span>
                                                                     {remaining > 0 && <span className="text-[8px] font-semibold">+{remaining}</span>}
                                                                 </div>
                                                             )}

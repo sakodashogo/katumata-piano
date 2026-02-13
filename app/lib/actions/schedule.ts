@@ -245,6 +245,40 @@ export async function bulkUpdateOpenSlots(roomId: string, slots: string[], actio
     }
 }
 
+export async function getMonthlyLessonCalendarData(year: number, month: number) {
+    const session = await requireTeacher()
+    if (!session) {
+        return { success: false as const, error: "Unauthorized" }
+    }
+    if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) {
+        return { success: false as const, error: "Invalid month range" }
+    }
+
+    const monthStart = new Date(year, month - 1, 1, 0, 0, 0, 0)
+    const monthEnd = new Date(year, month, 1, 0, 0, 0, 0)
+
+    try {
+        const [lessons, supportShifts] = await Promise.all([
+            prisma.lesson.findMany({
+                where: {
+                    startTime: { gte: monthStart, lt: monthEnd },
+                    status: { not: "CANCELLED" },
+                },
+                include: {
+                    student: { select: { name: true } },
+                },
+                orderBy: { startTime: "asc" },
+            }),
+            getSupportShiftsInRangeSafe(monthStart, monthEnd),
+        ])
+
+        return { success: true as const, data: { lessons, supportShifts } }
+    } catch (error) {
+        console.error("Failed to fetch monthly lesson calendar data:", error)
+        return { success: false as const, error: "Failed to fetch monthly lesson calendar data" }
+    }
+}
+
 export async function moveLesson(lessonId: string, newStartTime: Date, newRoomId: string) {
     const session = await requireTeacher()
     if (!session) {
