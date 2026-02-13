@@ -111,7 +111,13 @@ export function RoomScheduler({ initialDate = new Date(), slots, lessons }: Prop
         setIsSubmitting(false)
 
         if (result.success) {
-            toast.success(`${selectedSlots.size}件の枠を公開しました。`)
+            const publishedCount = typeof result.publishedCount === "number" ? result.publishedCount : 0
+            const skippedClosed = typeof result.skippedClosedCount === "number" ? result.skippedClosedCount : 0
+            if (skippedClosed > 0) {
+                toast.info(`公開${publishedCount}件 / お休み重複で${skippedClosed}件スキップしました。`)
+            } else {
+                toast.success(`${publishedCount}件の枠を公開しました。`)
+            }
             setSelectedSlots(new Set())
             router.refresh()
         } else {

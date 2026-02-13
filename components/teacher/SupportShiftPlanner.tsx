@@ -1,7 +1,7 @@
 "use client"
 /* eslint-disable react-hooks/set-state-in-effect */
 
-import { useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
 import {
     addDays,
@@ -124,7 +124,10 @@ export function SupportShiftPlanner({ initialYear, initialMonth, staff, shifts, 
         () => eachDayOfInterval({ start: weekStart, end: weekEnd }),
         [weekStart, weekEnd],
     )
-    const isDayInMonth = (day: Date) => day.getFullYear() === initialYear && day.getMonth() === initialMonth - 1
+    const isDayInMonth = useCallback(
+        (day: Date) => day.getFullYear() === initialYear && day.getMonth() === initialMonth - 1,
+        [initialMonth, initialYear]
+    )
 
     useEffect(() => {
         setWeekStart(startOfWeek(monthStart, { weekStartsOn: 1 }))
@@ -192,7 +195,7 @@ export function SupportShiftPlanner({ initialYear, initialMonth, staff, shifts, 
             }
         }
         return keys
-    }, [currentCell, days, initialMonth, initialYear, isPainting, startCell])
+    }, [currentCell, days, isDayInMonth, isPainting, startCell])
 
     const handleWeekMove = (offsetDays: number) => {
         setWeekStart((prev) => addDays(prev, offsetDays))
@@ -256,7 +259,12 @@ export function SupportShiftPlanner({ initialYear, initialMonth, staff, shifts, 
             toast.error(result.error || "月間登録に失敗しました。")
             return
         }
-        toast.success(`月間登録完了: 追加${result.created}件 / スキップ${result.skipped}件`)
+        const skippedClosed = typeof result.skippedClosed === "number" ? result.skippedClosed : 0
+        if (skippedClosed > 0) {
+            toast.info(`月間登録完了: 追加${result.created}件 / 重複等${result.skipped}件 / お休み重複${skippedClosed}件`)
+        } else {
+            toast.success(`月間登録完了: 追加${result.created}件 / スキップ${result.skipped}件`)
+        }
         router.refresh()
     }
 
@@ -273,7 +281,7 @@ export function SupportShiftPlanner({ initialYear, initialMonth, staff, shifts, 
         setCurrentCell({ row, col })
     }
 
-    const commitPaint = () => {
+    const commitPaint = useCallback(() => {
         if (!isPainting) return
         const targetIsos = pendingRect
         if (targetIsos.size > 0) {
@@ -289,7 +297,7 @@ export function SupportShiftPlanner({ initialYear, initialMonth, staff, shifts, 
         setIsPainting(false)
         setStartCell(null)
         setCurrentCell(null)
-    }
+    }, [isPainting, paintMode, pendingRect])
 
     useEffect(() => {
         const handleMouseUp = () => commitPaint()
@@ -372,7 +380,12 @@ export function SupportShiftPlanner({ initialYear, initialMonth, staff, shifts, 
             toast.error(result.error || "保存に失敗しました。")
             return
         }
-        toast.success(`${initialYear}年${initialMonth}月のシフトを保存しました。`)
+        const skippedClosed = typeof result.skippedClosedCount === "number" ? result.skippedClosedCount : 0
+        if (skippedClosed > 0) {
+            toast.info(`${initialYear}年${initialMonth}月を保存しました（お休み重複 ${skippedClosed}件は除外）。`)
+        } else {
+            toast.success(`${initialYear}年${initialMonth}月のシフトを保存しました。`)
+        }
         router.refresh()
     }
 

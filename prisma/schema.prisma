@@ -50,6 +50,7 @@ model User {
   monthlyAvailabilities MonthlyAvailability[] @relation("StudentMonthlyAvailability")
   cancellationCredits CancellationCredit[]
   publishedMonthlySchedules MonthlySchedulePublication[] @relation("MonthlySchedulePublishedBy")
+  publishedClosedDaySchedules ClosedDayPublication[] @relation("ClosedDayPublishedBy")
   defaultLessonCount Int      @default(4) // Monthly contract lesson count
   assignedLessons    Lesson[] @relation("AssignedSupportStaff")
 }
@@ -198,4 +199,33 @@ model ClosedDay {
 
   @@index([date])
   @@unique([date, startTime, endTime])
+}
+
+model ClosedDayPublication {
+  id          String   @id @default(cuid())
+  year        Int
+  month       Int
+  publishedAt DateTime @default(now())
+  publishedBy String?
+  teacher     User?    @relation("ClosedDayPublishedBy", fields: [publishedBy], references: [id])
+  publishedClosedDays PublishedClosedDay[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([year, month])
+}
+
+model PublishedClosedDay {
+  id            String               @id @default(cuid())
+  publicationId String
+  publication   ClosedDayPublication @relation(fields: [publicationId], references: [id], onDelete: Cascade)
+  date          DateTime
+  startTime     String?
+  endTime       String?
+  reason        String?
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+
+  @@index([date])
+  @@unique([publicationId, date, startTime, endTime])
 }

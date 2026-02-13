@@ -1,5 +1,5 @@
 import { auth } from "@/auth"
-import { getClosedDaysForMonth } from "@/app/lib/actions/closed-day"
+import { getClosedDayPublicationStatus, getClosedDaysForMonth } from "@/app/lib/actions/closed-day"
 import { ClosedDayManager } from "@/components/teacher/ClosedDayManager"
 import { redirect } from "next/navigation"
 
@@ -25,8 +25,20 @@ export default async function ClosedDaysPage({
         ? monthParam
         : now.getMonth() + 1
 
-    const result = await getClosedDaysForMonth(currentYear, currentMonth)
+    const [result, publicationStatusResult] = await Promise.all([
+        getClosedDaysForMonth(currentYear, currentMonth),
+        getClosedDayPublicationStatus(currentYear, currentMonth),
+    ])
     const closedDays = result.success ? (result.data ?? []) : []
+    const publicationStatus = publicationStatusResult.success
+        ? publicationStatusResult.data
+        : {
+            publishedAt: null,
+            publishedBy: null,
+            draftCount: closedDays.length,
+            publishedCount: 0,
+            hasUnpublishedChanges: closedDays.length > 0,
+        }
 
     return (
         <div className="space-y-6">
@@ -42,6 +54,7 @@ export default async function ClosedDaysPage({
                     ...day,
                     date: new Date(day.date),
                 }))}
+                publicationStatus={publicationStatus}
             />
         </div>
     )

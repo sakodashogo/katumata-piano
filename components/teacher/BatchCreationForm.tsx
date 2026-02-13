@@ -4,7 +4,6 @@ import { useState, useMemo } from "react"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { useToast } from "@/components/ui/toast"
-import { Checkbox } from "@/components/ui/checkbox"
 import { Plus, X, Loader2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { WEEKDAY_OPTIONS, ROOMS } from "@/lib/constants"
@@ -128,7 +127,12 @@ export function BatchCreationForm({ year, month, menus }: Props) {
         setIsSubmitting(false)
 
         if (result.success) {
-            toast.success(`${result.count}件の下書き枠を作成しました。`)
+            const skippedClosed = typeof result.skippedClosedCount === "number" ? result.skippedClosedCount : 0
+            if (skippedClosed > 0) {
+                toast.info(`${result.count}件作成 / お休み重複で${skippedClosed}件スキップしました。`)
+            } else {
+                toast.success(`${result.count}件の下書き枠を作成しました。`)
+            }
             router.refresh()
         } else {
             toast.error(result.error || "作成に失敗しました。")

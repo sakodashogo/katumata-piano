@@ -2,6 +2,11 @@ import { prisma } from "@/lib/prisma"
 
 type DelegateMethod = (args: unknown) => Promise<unknown>
 
+export type ClosedDayScope = "teacher" | "student"
+export type ClosedDayQueryOptions = {
+    scope?: ClosedDayScope
+}
+
 export type ClosedDayRecord = {
     id: string
     date: Date
@@ -16,14 +21,31 @@ function isMissingRelationError(error: unknown) {
     return e.code === "P2021" || (typeof e.message === "string" && e.message.includes("does not exist"))
 }
 
-export async function getClosedDaysInRangeSafe(start: Date, end: Date): Promise<ClosedDayRecord[]> {
-    const closedDayDelegate = (prisma as unknown as { closedDay?: { findMany: DelegateMethod } }).closedDay
-    if (!closedDayDelegate || typeof closedDayDelegate.findMany !== "function") {
+function getClosedDayDelegates() {
+    const delegate = prisma as unknown as {
+        closedDay?: { findMany: DelegateMethod }
+        publishedClosedDay?: { findMany: DelegateMethod }
+    }
+    return {
+        draft: delegate.closedDay,
+        published: delegate.publishedClosedDay,
+    }
+}
+
+export async function getClosedDaysInRangeSafe(
+    start: Date,
+    end: Date,
+    options?: ClosedDayQueryOptions
+): Promise<ClosedDayRecord[]> {
+    const scope = options?.scope ?? "teacher"
+    const { draft, published } = getClosedDayDelegates()
+    const delegate = scope === "student" ? published : draft
+    if (!delegate || typeof delegate.findMany !== "function") {
         return []
     }
 
     try {
-        const records = await closedDayDelegate.findMany({
+        const records = await delegate.findMany({
             where: {
                 date: { gte: start, lt: end },
             },

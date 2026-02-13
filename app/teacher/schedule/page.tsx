@@ -1,7 +1,7 @@
 import { getMonthlyLessonCalendarData, getScheduleData } from "@/app/lib/actions/schedule"
 import { AdminCalendar } from "@/components/teacher/AdminCalendar"
 import { MonthlyAllStudentsCalendar } from "@/components/teacher/MonthlyAllStudentsCalendar"
-import { startOfWeek, endOfWeek } from "date-fns"
+import { addDays, endOfMonth, endOfWeek, startOfMonth, startOfWeek } from "date-fns"
 import { SyncButton } from "@/components/teacher/SyncButton"
 import { auth } from "@/auth"
 import { redirect } from "next/navigation"
@@ -64,10 +64,13 @@ export default async function SchedulePage({
 
     const monthYear = date.getFullYear()
     const month = date.getMonth() + 1
-    const [scheduleResult, monthlyCalendarResult, closedDays] = await Promise.all([
+    const monthStart = startOfMonth(new Date(monthYear, month - 1, 1))
+    const monthEndExclusive = addDays(endOfMonth(monthStart), 1)
+    const [scheduleResult, monthlyCalendarResult, closedDays, monthClosedDays] = await Promise.all([
         getScheduleData(undefined, start, end),
         getMonthlyLessonCalendarData(monthYear, month),
         getClosedDaysInRangeSafe(start, end),
+        getClosedDaysInRangeSafe(monthStart, monthEndExclusive),
     ])
 
     if (!scheduleResult.success || !scheduleResult.data) {
@@ -166,6 +169,10 @@ export default async function SchedulePage({
                     <MonthlyAllStudentsCalendar
                         lessons={monthlyLessons}
                         supportShifts={monthlySupportShifts}
+                        closedDays={monthClosedDays.map((cd) => ({
+                            ...cd,
+                            date: new Date(cd.date),
+                        }))}
                         year={monthYear}
                         month={month}
                     />

@@ -5,6 +5,7 @@ import { auth } from "@/auth"
 import { revalidatePath } from "next/cache"
 import { addMinutes } from "date-fns"
 import { getSupportShiftsInRangeSafe } from "@/lib/support-shifts"
+import { getClosedDaysInRangeSafe, isSlotClosed } from "@/lib/closed-days"
 
 async function hasRoomTimeConflict(args: {
     roomId: string
@@ -97,6 +98,11 @@ export async function createOpenSlot(data: { roomId: string, startTime: Date, en
             return { success: false, error: "開始時刻は終了時刻より前に設定してください。" }
         }
 
+        const closedDays = await getClosedDaysInRangeSafe(data.startTime, data.endTime, { scope: "teacher" })
+        if (isSlotClosed(closedDays, data.startTime, data.endTime)) {
+            return { success: false, error: "お休み時間帯のため空き枠を作成できません。" }
+        }
+
         const hasConflict = await hasRoomTimeConflict({
             roomId: data.roomId,
             startTime: data.startTime,
@@ -148,6 +154,11 @@ export async function updateOpenSlot(id: string, data: { roomId?: string, startT
 
         if (nextStartTime >= nextEndTime) {
             return { success: false, error: "開始時刻は終了時刻より前に設定してください。" }
+        }
+
+        const closedDays = await getClosedDaysInRangeSafe(nextStartTime, nextEndTime, { scope: "teacher" })
+        if (isSlotClosed(closedDays, nextStartTime, nextEndTime)) {
+            return { success: false, error: "お休み時間帯のため更新できません。" }
         }
 
         const shouldValidateOverlap =
@@ -207,17 +218,49 @@ export async function publishOpenSlots(ids: string[]) {
     if (session?.user?.role !== "TEACHER") return { success: false, error: "Unauthorized" }
 
     try {
-        await prisma.openSlot.updateMany({
+        if (ids.length === 0) {
+            return { success: true, publishedCount: 0, skippedClosedCount: 0 }
+        }
+
+        const slots = await prisma.openSlot.findMany({
             where: {
                 id: { in: ids },
                 isBooked: false,
             },
-            data: { isPublic: true }
+            select: {
+                id: true,
+                startTime: true,
+                endTime: true,
+            },
         })
+
+        if (slots.length === 0) {
+            return { success: true, publishedCount: 0, skippedClosedCount: 0 }
+        }
+
+        const minStart = slots.reduce((acc, slot) => (slot.startTime < acc ? slot.startTime : acc), slots[0].startTime)
+        const maxEnd = slots.reduce((acc, slot) => (slot.endTime > acc ? slot.endTime : acc), slots[0].endTime)
+        const closedDays = await getClosedDaysInRangeSafe(minStart, maxEnd, { scope: "teacher" })
+
+        const publishableIds = slots
+            .filter((slot) => !isSlotClosed(closedDays, slot.startTime, slot.endTime))
+            .map((slot) => slot.id)
+        const skippedClosedCount = slots.length - publishableIds.length
+
+        const result = publishableIds.length > 0
+            ? await prisma.openSlot.updateMany({
+                where: {
+                    id: { in: publishableIds },
+                    isBooked: false,
+                },
+                data: { isPublic: true },
+            })
+            : { count: 0 }
+
         revalidatePath('/teacher/resources')
         revalidatePath('/teacher/slots')
         revalidatePath('/student/book') // Revalidate student booking page
-        return { success: true }
+        return { success: true, publishedCount: result.count, skippedClosedCount }
     } catch {
         return { success: false, error: "Failed to publish slots" }
     }

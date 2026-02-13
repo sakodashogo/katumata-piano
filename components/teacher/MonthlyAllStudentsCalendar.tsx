@@ -7,6 +7,7 @@ import { ChevronLeft, ChevronRight } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { getStudentColorClasses } from "@/lib/student-color"
+import { isSlotClosed, type ClosedDayRecord } from "@/lib/closed-days"
 
 type LessonRow = {
     id: string
@@ -27,6 +28,7 @@ type SupportShift = {
 type Props = {
     lessons: LessonRow[]
     supportShifts?: SupportShift[]
+    closedDays?: ClosedDayRecord[]
     year: number
     month: number
 }
@@ -43,6 +45,7 @@ type LessonCell = {
 export function MonthlyAllStudentsCalendar({
     lessons,
     supportShifts = [],
+    closedDays = [],
     year,
     month,
 }: Props) {
@@ -180,6 +183,9 @@ export function MonthlyAllStudentsCalendar({
                                             <div className={cn("grid h-[44px] grid-cols-2 gap-[1px] bg-slate-100 p-[1px]", !inMonth && "opacity-35")}>
                                                 {(["A", "B"] as const).map((roomId) => {
                                                     const iso = getCellIso(day, hour, minute)
+                                                    const slotStart = new Date(iso)
+                                                    const slotEnd = new Date(slotStart.getTime() + 30 * 60 * 1000)
+                                                    const isClosed = inMonth && isSlotClosed(closedDays, slotStart, slotEnd)
                                                     const rows = lessonByCell.get(`${roomId}:${iso}`) || []
                                                     const top = rows[0]
                                                     const remaining = rows.length - 1
@@ -190,11 +196,14 @@ export function MonthlyAllStudentsCalendar({
                                                             key={`${day.toISOString()}-${roomId}`}
                                                             className={cn(
                                                                 "flex h-full w-full items-center justify-center rounded-[2px] border border-slate-200 bg-white px-1 text-[9px]",
-                                                                noSupport && rows.length === 0 && "border-dashed border-slate-300 bg-slate-100 text-slate-500"
+                                                                isClosed && "border-rose-200 bg-rose-100/70 text-rose-500",
+                                                                !isClosed && noSupport && rows.length === 0 && "border-dashed border-slate-300 bg-slate-100 text-slate-500"
                                                             )}
                                                             title={rows.map((row) => row.studentName).join(", ")}
                                                         >
-                                                            {!top ? (
+                                                            {isClosed ? (
+                                                                "お休み"
+                                                            ) : !top ? (
                                                                 noSupport ? "補助不在" : ""
                                                             ) : (
                                                                 <div

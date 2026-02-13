@@ -761,6 +761,7 @@ export function MonthlyScheduler({
                 <MonthlyAllStudentsCalendar
                     lessons={allLessonsForCalendar}
                     supportShifts={supportShifts}
+                    closedDays={closedDays}
                     year={year}
                     month={month}
                 />

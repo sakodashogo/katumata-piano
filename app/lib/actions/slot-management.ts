@@ -13,6 +13,7 @@ import {
     addMinutes,
 } from "date-fns"
 import { isStudentBookableMenu } from "@/lib/menu-category"
+import { getClosedDaysInRangeSafe, isSlotClosed } from "@/lib/closed-days"
 
 type RoomTimeRange = {
     roomId: string
@@ -78,10 +79,11 @@ export async function batchCreateOpenSlots(input: BatchCreateInput) {
 
         const monthStart = startOfMonth(new Date(input.year, input.month - 1))
         const monthEnd = endOfMonth(monthStart)
+        const monthEndExclusive = new Date(input.year, input.month, 1)
         const allDays = eachDayOfInterval({ start: monthStart, end: monthEnd })
         const matchingDays = allDays.filter(day => input.weekdays.includes(getDay(day)))
 
-        const [existingSlots, existingLessons] = await Promise.all([
+        const [existingSlots, existingLessons, closedDays] = await Promise.all([
             prisma.openSlot.findMany({
                 where: {
                     startTime: { gte: monthStart, lte: monthEnd },
@@ -98,6 +100,7 @@ export async function batchCreateOpenSlots(input: BatchCreateInput) {
                 },
                 select: { startTime: true, endTime: true, roomId: true },
             }),
+            getClosedDaysInRangeSafe(monthStart, monthEndExclusive, { scope: "teacher" }),
         ])
 
         const occupiedRanges: RoomTimeRange[] = [
@@ -125,6 +128,7 @@ export async function batchCreateOpenSlots(input: BatchCreateInput) {
             durationMin: number
             isPublic: boolean
         }[] = []
+        let skippedClosedCount = 0
 
         for (const day of matchingDays) {
             for (const range of input.timeRanges) {
@@ -136,6 +140,11 @@ export async function batchCreateOpenSlots(input: BatchCreateInput) {
                 let current = rangeStart
                 while (addMinutes(current, input.durationMin) <= rangeEnd) {
                     const slotEnd = addMinutes(current, input.durationMin)
+                    if (isSlotClosed(closedDays, current, slotEnd)) {
+                        skippedClosedCount += input.roomIds.length
+                        current = addMinutes(current, input.durationMin)
+                        continue
+                    }
 
                     for (const roomId of input.roomIds) {
                         const candidate: RoomTimeRange = {
@@ -162,13 +171,13 @@ export async function batchCreateOpenSlots(input: BatchCreateInput) {
         }
 
         if (slotsToCreate.length === 0) {
-            return { success: true as const, count: 0 }
+            return { success: true as const, count: 0, skippedClosedCount }
         }
 
         await prisma.openSlot.createMany({ data: slotsToCreate })
 
         revalidatePath('/teacher/slots')
-        return { success: true as const, count: slotsToCreate.length }
+        return { success: true as const, count: slotsToCreate.length, skippedClosedCount }
     } catch {
         return { success: false as const, error: "Failed to batch create slots" }
     }
@@ -253,6 +262,13 @@ export async function updateSlotDetails(
         const updateData: Record<string, unknown> = {}
         const nextEndTime =
             data.durationMin !== undefined ? addMinutes(existing.startTime, data.durationMin) : existing.endTime
+
+        if (data.durationMin !== undefined) {
+            const closedDays = await getClosedDaysInRangeSafe(existing.startTime, nextEndTime, { scope: "teacher" })
+            if (isSlotClosed(closedDays, existing.startTime, nextEndTime)) {
+                return { success: false as const, error: "お休み時間帯のため変更できません。" }
+            }
+        }
 
         if (data.durationMin !== undefined) {
             updateData.durationMin = data.durationMin

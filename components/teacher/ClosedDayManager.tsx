@@ -7,7 +7,6 @@ import {
     eachDayOfInterval,
     endOfMonth,
     format,
-    getDay,
     isSameDay,
     startOfMonth,
     startOfWeek,
@@ -18,12 +17,13 @@ import { ja } from "date-fns/locale"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { useToast } from "@/components/ui/toast"
-import { ChevronLeft, ChevronRight, Trash2 } from "lucide-react"
+import { ChevronLeft, ChevronRight, Trash2, Upload } from "lucide-react"
 import {
     addClosedDay,
     addClosedDaysBulk,
     deleteClosedDay,
     deleteClosedDaysForMonth,
+    publishClosedDaysForMonth,
 } from "@/app/lib/actions/closed-day"
 
 type ClosedDayRecord = {
@@ -38,17 +38,25 @@ type Props = {
     initialYear: number
     initialMonth: number
     closedDays: ClosedDayRecord[]
+    publicationStatus: {
+        publishedAt: Date | string | null
+        publishedBy: string | null
+        draftCount: number
+        publishedCount: number
+        hasUnpublishedChanges: boolean
+    }
 }
 
 const WEEKDAY_LABELS = ["日", "月", "火", "水", "木", "金", "土"]
 
-export function ClosedDayManager({ initialYear, initialMonth, closedDays }: Props) {
+export function ClosedDayManager({ initialYear, initialMonth, closedDays, publicationStatus }: Props) {
     const router = useRouter()
     const { toast } = useToast()
 
     const [year, setYear] = useState(initialYear)
     const [month, setMonth] = useState(initialMonth)
     const [isSubmitting, setIsSubmitting] = useState(false)
+    const [isPublishing, setIsPublishing] = useState(false)
 
     // Bulk add state
     const [bulkWeekdays, setBulkWeekdays] = useState<number[]>([])
@@ -196,6 +204,24 @@ export function ClosedDayManager({ initialYear, initialMonth, closedDays }: Prop
         }
     }
 
+    const handlePublishMonth = async () => {
+        if (isPublishing || isSubmitting) return
+        setIsPublishing(true)
+        try {
+            const result = await publishClosedDaysForMonth(year, month)
+            if (result.success) {
+                toast.success(`${result.publishedCount}件のお休みを生徒画面へ公開しました`)
+                router.refresh()
+            } else {
+                toast.error(result.error || "公開に失敗しました")
+            }
+        } catch {
+            toast.error("公開処理でエラーが発生しました")
+        } finally {
+            setIsPublishing(false)
+        }
+    }
+
     const toggleBulkWeekday = (dayIndex: number) => {
         setBulkWeekdays((prev) =>
             prev.includes(dayIndex)
@@ -243,11 +269,58 @@ export function ClosedDayManager({ initialYear, initialMonth, closedDays }: Prop
                     size="sm"
                     className="text-rose-600 border-rose-200 hover:bg-rose-50"
                     onClick={handleClearMonth}
-                    disabled={isSubmitting || closedDays.length === 0}
+                    disabled={isSubmitting || isPublishing || closedDays.length === 0}
                 >
                     <Trash2 className="h-4 w-4 mr-1" />
                     月のお休みをクリア
                 </Button>
+            </div>
+
+            <div className="rounded-lg border bg-white p-4 shadow-sm">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="space-y-1">
+                        <h3 className="font-bold text-sm text-slate-800">公開状態</h3>
+                        <p className="text-xs text-slate-500">
+                            生徒側には公開済みのお休みのみ反映されます。
+                        </p>
+                    </div>
+                    <Button
+                        onClick={handlePublishMonth}
+                        disabled={isPublishing || isSubmitting}
+                        className="bg-emerald-600 text-white hover:bg-emerald-700"
+                        size="sm"
+                    >
+                        <Upload className="h-4 w-4 mr-1" />
+                        {isPublishing ? "公開中..." : "この月のお休みを公開"}
+                    </Button>
+                </div>
+                <div className="mt-3 grid grid-cols-1 gap-2 text-xs text-slate-600 md:grid-cols-4">
+                    <div className="rounded border bg-slate-50 px-3 py-2">
+                        下書き件数: <span className="font-semibold text-slate-800">{publicationStatus.draftCount}</span>
+                    </div>
+                    <div className="rounded border bg-slate-50 px-3 py-2">
+                        公開済み件数: <span className="font-semibold text-slate-800">{publicationStatus.publishedCount}</span>
+                    </div>
+                    <div className="rounded border bg-slate-50 px-3 py-2">
+                        公開日時:{" "}
+                        <span className="font-semibold text-slate-800">
+                            {publicationStatus.publishedAt
+                                ? format(new Date(publicationStatus.publishedAt), "yyyy/MM/dd HH:mm")
+                                : "未公開"}
+                        </span>
+                    </div>
+                    <div className={cn(
+                        "rounded border px-3 py-2",
+                        publicationStatus.hasUnpublishedChanges
+                            ? "bg-amber-50 text-amber-800 border-amber-200"
+                            : "bg-emerald-50 text-emerald-800 border-emerald-200"
+                    )}>
+                        {publicationStatus.hasUnpublishedChanges ? "未公開変更あり" : "公開内容と一致"}
+                        {publicationStatus.publishedBy && (
+                            <span className="ml-1 text-[11px] text-slate-600">({publicationStatus.publishedBy})</span>
+                        )}
+                    </div>
+                </div>
             </div>
 
             {/* Bulk Add Controls */}
@@ -304,7 +377,7 @@ export function ClosedDayManager({ initialYear, initialMonth, closedDays }: Prop
 
                 <Button
                     onClick={handleBulkAdd}
-                    disabled={isSubmitting || bulkWeekdays.length === 0}
+                    disabled={isSubmitting || isPublishing || bulkWeekdays.length === 0}
                     className="bg-rose-600 text-white hover:bg-rose-700"
                     size="sm"
                 >
@@ -339,7 +412,7 @@ export function ClosedDayManager({ initialYear, initialMonth, closedDays }: Prop
                                 <button
                                     key={day.toISOString()}
                                     onClick={() => handleDayClick(day)}
-                                    disabled={!isCurrentMonth || isSubmitting}
+                                    disabled={!isCurrentMonth || isSubmitting || isPublishing}
                                     className={cn(
                                         "relative aspect-square rounded-lg p-1 text-sm transition-colors border",
                                         !isCurrentMonth && "opacity-30 cursor-default",
@@ -413,7 +486,7 @@ export function ClosedDayManager({ initialYear, initialMonth, closedDays }: Prop
                                             <td className="px-3 py-2 text-right">
                                                 <button
                                                     onClick={() => handleDeleteSingle(cd.id)}
-                                                    disabled={isSubmitting}
+                                                    disabled={isSubmitting || isPublishing}
                                                     className="text-rose-500 hover:text-rose-700 disabled:opacity-50"
                                                 >
                                                     <Trash2 className="h-4 w-4" />

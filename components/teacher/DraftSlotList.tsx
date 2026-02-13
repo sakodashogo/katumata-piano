@@ -118,7 +118,13 @@ export function DraftSlotList({ draftSlots, menus }: Props) {
         setIsSubmitting(false)
 
         if (result.success) {
-            toast.success(`${selectedIds.size}件を公開しました。`)
+            const publishedCount = typeof result.publishedCount === "number" ? result.publishedCount : 0
+            const skippedClosed = typeof result.skippedClosedCount === "number" ? result.skippedClosedCount : 0
+            if (skippedClosed > 0) {
+                toast.info(`公開${publishedCount}件 / お休み重複でスキップ${skippedClosed}件`)
+            } else {
+                toast.success(`${publishedCount}件を公開しました。`)
+            }
             setSelectedIds(new Set())
             router.refresh()
         } else {

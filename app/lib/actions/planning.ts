@@ -6,6 +6,7 @@ import { revalidatePath } from "next/cache"
 import { addDays, startOfMonth, endOfMonth, getDay, setHours, setMinutes } from "date-fns"
 import { notifyEvent } from "@/lib/notifications"
 import { getSupportShiftsInRangeSafe, hasSupportShiftInRange } from "@/lib/support-shifts"
+import { getClosedDaysInRangeSafe, isSlotClosed } from "@/lib/closed-days"
 
 function getMonthBounds(year: number, month: number) {
     const start = new Date(year, month - 1, 1, 0, 0, 0, 0)
@@ -221,6 +222,20 @@ export async function bulkCreateLessons(lessons: LessonDraft[]) {
     }
 
     try {
+        const parsedRanges = lessons
+            .map((lesson) => ({
+                startTime: new Date(lesson.startTime),
+                endTime: new Date(lesson.endTime),
+            }))
+            .filter((lesson) => !Number.isNaN(lesson.startTime.getTime()) && !Number.isNaN(lesson.endTime.getTime()))
+        const closedDays = parsedRanges.length > 0
+            ? await getClosedDaysInRangeSafe(
+                parsedRanges.reduce((acc, row) => (row.startTime < acc ? row.startTime : acc), parsedRanges[0].startTime),
+                parsedRanges.reduce((acc, row) => (row.endTime > acc ? row.endTime : acc), parsedRanges[0].endTime),
+                { scope: "teacher" }
+            )
+            : []
+
         await prisma.$transaction(async (tx) => {
             for (const lesson of lessons) {
                 const startTime = new Date(lesson.startTime)
@@ -229,6 +244,9 @@ export async function bulkCreateLessons(lessons: LessonDraft[]) {
 
                 if (Number.isNaN(startTime.getTime()) || Number.isNaN(endTime.getTime()) || endTime <= startTime) {
                     throw new Error("レッスン日時が不正です。")
+                }
+                if (isSlotClosed(closedDays, startTime, endTime)) {
+                    throw new Error("お休み時間帯にレッスンを作成できません。")
                 }
 
                 const [roomConflict, studentConflict] = await Promise.all([
@@ -317,6 +335,7 @@ export async function replaceStudentMonthlyLessons(input: ReplaceMonthlyLessonsI
     }
 
     const { start: monthStart, end: monthEnd } = getMonthBounds(input.year, input.month)
+    const closedDays = await getClosedDaysInRangeSafe(monthStart, monthEnd, { scope: "teacher" })
 
     const normalizedLessons = input.lessons
         .map((lesson) => ({
@@ -337,6 +356,9 @@ export async function replaceStudentMonthlyLessons(input: ReplaceMonthlyLessonsI
         }
         if (lesson.startTime < monthStart || lesson.startTime >= monthEnd) {
             return { success: false as const, error: "対象月以外の日時は保存できません。" }
+        }
+        if (isSlotClosed(closedDays, lesson.startTime, lesson.endTime)) {
+            return { success: false as const, error: "お休み時間帯のため保存できません。" }
         }
     }
     for (let i = 1; i < normalizedLessons.length; i++) {
@@ -495,6 +517,10 @@ export async function appendStudentMonthlyLesson(input: {
         const type = input.type || "REGULAR"
         if (Number.isNaN(startTime.getTime()) || Number.isNaN(endTime.getTime()) || endTime <= startTime) {
             return { success: false as const, error: "日時が不正です。" }
+        }
+        const closedDays = await getClosedDaysInRangeSafe(startTime, endTime, { scope: "teacher" })
+        if (isSlotClosed(closedDays, startTime, endTime)) {
+            return { success: false as const, error: "お休み時間帯のため設定できません。" }
         }
 
         const [roomConflict, studentConflict] = await Promise.all([

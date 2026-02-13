@@ -5,6 +5,7 @@ import { auth } from "@/auth"
 import { revalidatePath } from "next/cache"
 import { addMinutes } from "date-fns"
 import { getSupportShiftsInRangeSafe, hasSupportShiftInRange } from "@/lib/support-shifts"
+import { getClosedDaysInRangeSafe, isSlotClosed } from "@/lib/closed-days"
 
 function revalidateTeacherViews() {
     revalidatePath("/teacher/schedule")
@@ -141,6 +142,11 @@ export async function toggleOpenSlot(roomId: string, startTimeIso: string) {
                 where: { id: existingSlot.id },
             })
         } else {
+            const closedDays = await getClosedDaysInRangeSafe(startTime, endTime, { scope: "teacher" })
+            if (isSlotClosed(closedDays, startTime, endTime)) {
+                return { success: false, error: "お休み時間帯のため空き枠を追加できません。" }
+            }
+
             const hasConflict = await hasRoomScheduleConflict({
                 roomId,
                 startTime,
@@ -189,7 +195,7 @@ export async function bulkUpdateOpenSlots(roomId: string, slots: string[], actio
             const rangeStart = candidateStarts[0]
             const rangeEnd = addMinutes(candidateStarts[candidateStarts.length - 1], 30)
 
-            const [existing, existingLessons] = await Promise.all([
+            const [existing, existingLessons, closedDays] = await Promise.all([
                 prisma.openSlot.findMany({
                     where: {
                         roomId,
@@ -207,13 +213,19 @@ export async function bulkUpdateOpenSlots(roomId: string, slots: string[], actio
                     },
                     select: { startTime: true, endTime: true },
                 }),
+                getClosedDaysInRangeSafe(rangeStart, rangeEnd, { scope: "teacher" }),
             ])
 
             const hasOverlap = (start: Date, end: Date) =>
                 existing.some((slot) => slot.startTime < end && slot.endTime > start) ||
                 existingLessons.some((lesson) => lesson.startTime < end && lesson.endTime > start)
 
-            const newSlots = candidateStarts
+            const candidateStartsForCreate = candidateStarts.filter((start) =>
+                !isSlotClosed(closedDays, start, addMinutes(start, 30))
+            )
+            const skippedClosed = candidateStarts.length - candidateStartsForCreate.length
+
+            const newSlots = candidateStartsForCreate
                 .filter((start) => !hasOverlap(start, addMinutes(start, 30)))
                 .map((start) => ({
                     roomId,
@@ -227,6 +239,8 @@ export async function bulkUpdateOpenSlots(roomId: string, slots: string[], actio
                     data: newSlots
                 })
             }
+            revalidateTeacherViews()
+            return { success: true, skippedClosed, created: newSlots.length }
         } else {
             await prisma.openSlot.deleteMany({
                 where: {
@@ -291,6 +305,11 @@ export async function moveLesson(lessonId: string, newStartTime: Date, newRoomId
 
         const duration = lesson.endTime.getTime() - lesson.startTime.getTime()
         const newEndTime = new Date(newStartTime.getTime() + duration)
+
+        const closedDays = await getClosedDaysInRangeSafe(newStartTime, newEndTime, { scope: "teacher" })
+        if (isSlotClosed(closedDays, newStartTime, newEndTime)) {
+            return { success: false, error: "お休み時間帯にはレッスンを移動できません。" }
+        }
 
         if (newRoomId === "B" && lesson.type !== "PRACTICE") {
             const hasSupport = await hasSupportShiftInRange(newStartTime, newEndTime)
@@ -399,6 +418,11 @@ export async function moveOpenSlot(slotId: string, newStartTime: Date, newRoomId
 
         const duration = slot.endTime.getTime() - slot.startTime.getTime()
         const newEndTime = new Date(newStartTime.getTime() + duration)
+
+        const closedDays = await getClosedDaysInRangeSafe(newStartTime, newEndTime, { scope: "teacher" })
+        if (isSlotClosed(closedDays, newStartTime, newEndTime)) {
+            return { success: false, error: "お休み時間帯には空き枠を移動できません。" }
+        }
 
         const hasConflict = await hasRoomScheduleConflict({
             roomId: newRoomId,

@@ -181,7 +181,7 @@ export async function getBookableStartTimes(dateStr: string, menuId: string, dat
 
         const [supportShifts, closedDays] = await Promise.all([
             getSupportShiftsInRangeSafe(start, end),
-            getClosedDaysInRangeSafe(start, end),
+            getClosedDaysInRangeSafe(start, end, { scope: "student" }),
         ])
         const filtered = filterSlotsBySupport(slots, supportShifts, lessonType)
             .filter((slot) => !isSlotClosed(closedDays, new Date(slot.startTime), new Date(slot.endTime)))
@@ -230,7 +230,7 @@ export async function getBookableDaysInRange(startStr: string, endStr: string, m
 
         const [supportShifts, closedDays] = await Promise.all([
             getSupportShiftsInRangeSafe(start, end),
-            getClosedDaysInRangeSafe(start, end),
+            getClosedDaysInRangeSafe(start, end, { scope: "student" }),
         ])
         const filtered = filterSlotsBySupport(slots, supportShifts, lessonType)
             .filter((slot) => !isSlotClosed(closedDays, new Date(slot.startTime), new Date(slot.endTime)))
@@ -287,7 +287,7 @@ export async function getBookableSlotsInRange(startStr: string, endStr: string, 
 
         const [supportShifts, closedDays] = await Promise.all([
             getSupportShiftsInRangeSafe(start, end),
-            getClosedDaysInRangeSafe(start, end),
+            getClosedDaysInRangeSafe(start, end, { scope: "student" }),
         ])
         const filtered = filterSlotsBySupport(slots, supportShifts, lessonType)
             .filter((slot) => !isSlotClosed(closedDays, new Date(slot.startTime), new Date(slot.endTime)))

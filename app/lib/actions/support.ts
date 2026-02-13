@@ -3,7 +3,8 @@
 import { auth } from "@/auth"
 import { prisma } from "@/lib/prisma"
 import { revalidatePath } from "next/cache"
-import { eachDayOfInterval, endOfMonth, getDay, setHours, setMinutes, startOfMonth } from "date-fns"
+import { addDays, eachDayOfInterval, endOfMonth, getDay, setHours, setMinutes, startOfMonth } from "date-fns"
+import { getClosedDaysInRangeSafe, isSlotClosed } from "@/lib/closed-days"
 
 type DelegateMethod = (args: unknown) => Promise<unknown>
 
@@ -183,6 +184,11 @@ export async function upsertSupportShift(input: {
             return { success: false as const, error: "開始/終了時刻が不正です。" }
         }
 
+        const closedDays = await getClosedDaysInRangeSafe(startTime, endTime, { scope: "teacher" })
+        if (isSlotClosed(closedDays, startTime, endTime)) {
+            return { success: false as const, error: "お休み時間帯にはシフトを設定できません。" }
+        }
+
         const supportShift = getSupportShiftDelegate()
         if (!supportShift) {
             return { success: false as const, error: "DB未更新のためシフト保存できません。マイグレーション適用後に再実行してください。" }
@@ -239,8 +245,10 @@ export async function createMonthlySupportShifts(input: {
         }
         const monthStart = startOfMonth(new Date(input.year, input.month - 1, 1))
         const monthEnd = endOfMonth(monthStart)
+        const monthEndExclusive = addDays(monthEnd, 1)
         const allDays = eachDayOfInterval({ start: monthStart, end: monthEnd })
         const matchedDays = allDays.filter((day) => input.weekdays.includes(getDay(day)))
+        const closedDays = await getClosedDaysInRangeSafe(monthStart, monthEndExclusive, { scope: "teacher" })
 
         const supportShift = getSupportShiftDelegate()
         if (!supportShift || typeof supportShift.findMany !== "function" || typeof supportShift.create !== "function") {
@@ -249,11 +257,16 @@ export async function createMonthlySupportShifts(input: {
 
         let created = 0
         let skipped = 0
+        let skippedClosed = 0
         for (const day of matchedDays) {
             const startTime = setMinutes(setHours(new Date(day), input.startHour), input.startMinute)
             const endTime = setMinutes(setHours(new Date(day), input.endHour), input.endMinute)
             if (endTime <= startTime) {
                 skipped++
+                continue
+            }
+            if (isSlotClosed(closedDays, startTime, endTime)) {
+                skippedClosed++
                 continue
             }
             const overlap = await supportShift.findFirst({
@@ -275,7 +288,7 @@ export async function createMonthlySupportShifts(input: {
         }
 
         revalidateSupportViews()
-        return { success: true as const, created, skipped }
+        return { success: true as const, created, skipped, skippedClosed }
     } catch (error) {
         if (isMissingRelationError(error)) {
             return { success: false as const, error: "DB未更新のため月間登録できません。" }
@@ -398,8 +411,17 @@ export async function replaceSupportShiftsForStaffInRange(input: ReplaceSupportS
             .map((value) => new Date(value))
             .sort((a, b) => a.getTime() - b.getTime())
 
+        const closedDays = await getClosedDaysInRangeSafe(rangeStart, rangeEnd, { scope: "teacher" })
+        let skippedClosedCount = 0
+        const openSlotStarts = normalizedSlotStarts.filter((startTime) => {
+            const endTime = new Date(startTime.getTime() + 30 * 60 * 1000)
+            const isClosed = isSlotClosed(closedDays, startTime, endTime)
+            if (isClosed) skippedClosedCount++
+            return !isClosed
+        })
+
         const generatedIntervals = mergeIntervals(
-            normalizedSlotStarts.map((startTime) => ({
+            openSlotStarts.map((startTime) => ({
                 startTime,
                 endTime: new Date(startTime.getTime() + 30 * 60 * 1000),
             }))
@@ -425,7 +447,7 @@ export async function replaceSupportShiftsForStaffInRange(input: ReplaceSupportS
         }
 
         revalidateSupportViews()
-        return { success: true as const, count: finalIntervals.length }
+        return { success: true as const, count: finalIntervals.length, skippedClosedCount }
     } catch (error) {
         if (isMissingRelationError(error)) {
             return { success: false as const, error: "DB未更新のためシフト保存できません。マイグレーション適用後に再実行してください。" }
