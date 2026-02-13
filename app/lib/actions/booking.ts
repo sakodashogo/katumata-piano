@@ -4,10 +4,22 @@ import { prisma } from "@/lib/prisma"
 import { auth } from "@/auth"
 import { revalidatePath } from "next/cache"
 import { BOOKING_RULES } from "@/lib/constants"
-import { Prisma } from "@prisma/client"
 import { isStudentBookableMenu, toLessonTypeFromMenu } from "@/lib/menu-category"
 import { notifyEvent } from "@/lib/notifications"
 import { getSupportShiftsInRangeSafe } from "@/lib/support-shifts"
+import {
+    buildBookableStartTimes,
+    filterSlotsBySupport,
+} from "./booking-internal/bookable-slot-utils"
+import {
+    assertNoReservationConflict,
+    ensureContiguousSlots,
+} from "./booking-internal/reservation-utils"
+import {
+    addDays,
+    getMonthRange,
+    isWithinStudentModificationWindow,
+} from "./booking-internal/date-utils"
 
 export async function getMenus() {
     try {
@@ -26,89 +38,6 @@ export async function getMenus() {
     }
 }
 
-function isWithinStudentModificationWindow(lessonStart: Date) {
-    const now = new Date()
-    const diffInHours = (lessonStart.getTime() - now.getTime()) / (1000 * 60 * 60)
-    return diffInHours >= BOOKING_RULES.CANCELLATION_HOURS_BEFORE
-}
-
-function addDays(base: Date, days: number) {
-    const result = new Date(base)
-    result.setDate(result.getDate() + days)
-    return result
-}
-
-function getMonthRange(target: Date) {
-    const start = new Date(target.getFullYear(), target.getMonth(), 1, 0, 0, 0, 0)
-    const end = new Date(target.getFullYear(), target.getMonth() + 1, 1, 0, 0, 0, 0)
-    return { start, end }
-}
-
-function ensureContiguousSlots(
-    slots: Array<{ id: string; roomId: string; startTime: Date; endTime: Date }>
-) {
-    if (slots.length === 0) {
-        throw new Error("予約枠を選択してください。")
-    }
-
-    const sortedSlots = [...slots].sort((a, b) => a.startTime.getTime() - b.startTime.getTime())
-    const roomId = sortedSlots[0].roomId
-    if (sortedSlots.some((slot) => slot.roomId !== roomId)) {
-        throw new Error("同じ部屋の連続した枠を選択してください。")
-    }
-
-    for (let i = 1; i < sortedSlots.length; i++) {
-        if (sortedSlots[i - 1].endTime.getTime() !== sortedSlots[i].startTime.getTime()) {
-            throw new Error("連続した時間枠を選択してください。")
-        }
-    }
-
-    return {
-        sortedSlots,
-        roomId,
-        startTime: sortedSlots[0].startTime,
-        endTime: sortedSlots[sortedSlots.length - 1].endTime,
-    }
-}
-
-async function assertNoReservationConflict(
-    tx: Prisma.TransactionClient,
-    options: {
-        startTime: Date
-        endTime: Date
-        roomId: string
-        studentId: string
-        ignoreLessonId?: string
-    }
-) {
-    const roomConflict = await tx.lesson.findFirst({
-        where: {
-            id: options.ignoreLessonId ? { not: options.ignoreLessonId } : undefined,
-            status: { not: "CANCELLED" },
-            roomId: options.roomId,
-            startTime: { lt: options.endTime },
-            endTime: { gt: options.startTime },
-        },
-        select: { id: true },
-    })
-    if (roomConflict) {
-        throw new Error("同じ時間帯に別の予約が入りました。別の時間を選択してください。")
-    }
-
-    const studentConflict = await tx.lesson.findFirst({
-        where: {
-            id: options.ignoreLessonId ? { not: options.ignoreLessonId } : undefined,
-            status: { not: "CANCELLED" },
-            studentId: options.studentId,
-            startTime: { lt: options.endTime },
-            endTime: { gt: options.startTime },
-        },
-        select: { id: true },
-    })
-    if (studentConflict) {
-        throw new Error("同じ時間帯に既存の予約があります。日時をご確認ください。")
-    }
-}
 
 export async function getBookableMenusForStudent() {
     try {
@@ -205,82 +134,6 @@ export async function getAvailableSlotsInRange(startStr: string, endStr: string)
     }
 }
 
-type BookableStartTime = {
-    startTime: Date
-    endTime: Date
-    roomId: string
-    slotIds: string[]
-}
-
-function requiresSupportForRoomB(lessonType: string) {
-    return lessonType !== "PRACTICE"
-}
-
-function hasSupportOverlap(
-    shifts: Array<{ startTime: Date; endTime: Date }>,
-    startTime: Date,
-    endTime: Date
-) {
-    return shifts.some((shift) => shift.startTime < endTime && shift.endTime > startTime)
-}
-
-function buildBookableStartTimes(
-    slots: Array<{ id: string; roomId: string; startTime: Date; endTime: Date }>,
-    durationMin: number
-) {
-    const requiredDuration = Math.max(30, durationMin)
-    const byRoom = new Map<string, Array<{ id: string; roomId: string; startTime: Date; endTime: Date }>>()
-
-    for (const slot of slots) {
-        if (!byRoom.has(slot.roomId)) byRoom.set(slot.roomId, [])
-        byRoom.get(slot.roomId)!.push(slot)
-    }
-
-    const candidates: BookableStartTime[] = []
-
-    for (const [, roomSlots] of byRoom) {
-        roomSlots.sort((a, b) => a.startTime.getTime() - b.startTime.getTime())
-
-        for (let i = 0; i < roomSlots.length; i++) {
-            const chain: Array<{ id: string; roomId: string; startTime: Date; endTime: Date }> = [roomSlots[i]]
-            const chainStart = roomSlots[i].startTime
-            let chainEnd = roomSlots[i].endTime
-
-            if ((chainEnd.getTime() - chainStart.getTime()) / 60000 >= requiredDuration) {
-                candidates.push({
-                    startTime: chainStart,
-                    endTime: chainEnd,
-                    roomId: roomSlots[i].roomId,
-                    slotIds: chain.map((s) => s.id),
-                })
-                continue
-            }
-
-            for (let j = i + 1; j < roomSlots.length; j++) {
-                const prev = chain[chain.length - 1]
-                const next = roomSlots[j]
-                if (prev.endTime.getTime() !== next.startTime.getTime()) {
-                    break
-                }
-                chain.push(next)
-                chainEnd = next.endTime
-
-                if ((chainEnd.getTime() - chainStart.getTime()) / 60000 >= requiredDuration) {
-                    candidates.push({
-                        startTime: chainStart,
-                        endTime: chainEnd,
-                        roomId: chain[0].roomId,
-                        slotIds: chain.map((s) => s.id),
-                    })
-                    break
-                }
-            }
-        }
-    }
-
-    candidates.sort((a, b) => a.startTime.getTime() - b.startTime.getTime())
-    return candidates
-}
 
 export async function getBookableStartTimes(dateStr: string, menuId: string, dateEndStr?: string) {
     try {
@@ -326,11 +179,7 @@ export async function getBookableStartTimes(dateStr: string, menuId: string, dat
         })
 
         const supportShifts = await getSupportShiftsInRangeSafe(start, end)
-        const filtered = slots.filter((slot) => {
-            if (slot.roomId !== "B") return true
-            if (!requiresSupportForRoomB(lessonType)) return true
-            return hasSupportOverlap(supportShifts, slot.startTime, slot.endTime)
-        })
+        const filtered = filterSlotsBySupport(slots, supportShifts, lessonType)
 
         const candidates = buildBookableStartTimes(filtered, menu.durationMin)
         return { success: true, data: candidates }
@@ -375,11 +224,7 @@ export async function getBookableDaysInRange(startStr: string, endStr: string, m
         })
 
         const supportShifts = await getSupportShiftsInRangeSafe(start, end)
-        const filtered = slots.filter((slot) => {
-            if (slot.roomId !== "B") return true
-            if (!requiresSupportForRoomB(lessonType)) return true
-            return hasSupportOverlap(supportShifts, slot.startTime, slot.endTime)
-        })
+        const filtered = filterSlotsBySupport(slots, supportShifts, lessonType)
 
         const dates = new Set(
             buildBookableStartTimes(filtered, menu.durationMin).map((slot) =>
@@ -432,11 +277,7 @@ export async function getBookableSlotsInRange(startStr: string, endStr: string, 
         })
 
         const supportShifts = await getSupportShiftsInRangeSafe(start, end)
-        const filtered = slots.filter((slot) => {
-            if (slot.roomId !== "B") return true
-            if (!requiresSupportForRoomB(lessonType)) return true
-            return hasSupportOverlap(supportShifts, slot.startTime, slot.endTime)
-        })
+        const filtered = filterSlotsBySupport(slots, supportShifts, lessonType)
 
         const candidates = buildBookableStartTimes(filtered, menu.durationMin)
         return { success: true, data: candidates }
