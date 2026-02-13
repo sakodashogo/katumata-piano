@@ -27,19 +27,44 @@ const ToastContext = createContext<ToastContextType | undefined>(undefined)
 
 export function ToastProvider({ children }: { children: React.ReactNode }) {
     const [toasts, setToasts] = useState<Toast[]>([])
+    const timeoutMapRef = React.useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
+    const lastToastRef = React.useRef<{ key: string; at: number }>({ key: "", at: 0 })
 
     const addToast = useCallback((message: string, type: ToastType) => {
+        const key = `${type}:${message}`
+        const now = Date.now()
+        if (lastToastRef.current.key === key && now - lastToastRef.current.at < 800) {
+            return
+        }
+        lastToastRef.current = { key, at: now }
         const id = Math.random().toString(36).substring(2, 9)
         setToasts((prev) => [...prev, { id, message, type }])
 
         // Auto-remove after 4 seconds
-        setTimeout(() => {
+        const timeoutId = setTimeout(() => {
+            timeoutMapRef.current.delete(id)
             setToasts((prev) => prev.filter((t) => t.id !== id))
         }, 4000)
+        timeoutMapRef.current.set(id, timeoutId)
     }, [])
 
     const removeToast = useCallback((id: string) => {
+        const timeoutId = timeoutMapRef.current.get(id)
+        if (timeoutId) {
+            clearTimeout(timeoutId)
+            timeoutMapRef.current.delete(id)
+        }
         setToasts((prev) => prev.filter((t) => t.id !== id))
+    }, [])
+
+    React.useEffect(() => {
+        const timeoutMap = timeoutMapRef.current
+        return () => {
+            for (const timeoutId of timeoutMap.values()) {
+                clearTimeout(timeoutId)
+            }
+            timeoutMap.clear()
+        }
     }, [])
 
     const toast = React.useMemo(() => ({

@@ -1,5 +1,5 @@
 "use client"
-/* eslint-disable react-hooks/set-state-in-effect, react-hooks/preserve-manual-memoization, react-hooks/exhaustive-deps */
+/* eslint-disable react-hooks/set-state-in-effect */
 
 import { useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
@@ -51,6 +51,14 @@ type CellPos = { row: number; col: number }
 const HOURS = Array.from({ length: 13 }, (_, idx) => idx + 9)
 const MINUTES = [0, 30] as const
 
+function areSetsEqual<T>(left: Set<T>, right: Set<T>) {
+    if (left.size !== right.size) return false
+    for (const value of left) {
+        if (!right.has(value)) return false
+    }
+    return true
+}
+
 function getCellIso(day: Date, hour: number, minute: number) {
     return setMinutes(setHours(new Date(day), hour), minute).toISOString()
 }
@@ -88,10 +96,21 @@ export function SupportShiftPlanner({ initialDate, staff, shifts }: Props) {
     const [startCell, setStartCell] = useState<CellPos | null>(null)
     const [currentCell, setCurrentCell] = useState<CellPos | null>(null)
 
-    const weekStart = startOfWeek(currentDate, { weekStartsOn: 1 })
-    const weekEnd = endOfWeek(currentDate, { weekStartsOn: 1 })
-    const weekEndExclusive = addDays(weekStart, 7)
-    const days = eachDayOfInterval({ start: weekStart, end: weekEnd })
+    const weekStart = useMemo(
+        () => startOfWeek(currentDate, { weekStartsOn: 1 }),
+        [currentDate],
+    )
+    const weekEnd = useMemo(
+        () => endOfWeek(currentDate, { weekStartsOn: 1 }),
+        [currentDate],
+    )
+    const weekEndExclusive = useMemo(() => addDays(weekStart, 7), [weekStart])
+    const weekStartMs = weekStart.getTime()
+    const weekEndExclusiveMs = weekEndExclusive.getTime()
+    const days = useMemo(
+        () => eachDayOfInterval({ start: weekStart, end: weekEnd }),
+        [weekStart, weekEnd],
+    )
 
     useEffect(() => {
         if (!selectedStaffId) {
@@ -110,17 +129,20 @@ export function SupportShiftPlanner({ initialDate, staff, shifts }: Props) {
             if (shift.staffId !== selectedStaffId) continue
             const shiftStart = new Date(shift.startTime)
             const shiftEnd = new Date(shift.endTime)
-            const clippedStart = shiftStart > weekStart ? shiftStart : weekStart
-            const clippedEnd = shiftEnd < weekEndExclusive ? shiftEnd : weekEndExclusive
+            const clippedStart = shiftStart.getTime() > weekStartMs ? shiftStart : new Date(weekStartMs)
+            const clippedEnd = shiftEnd.getTime() < weekEndExclusiveMs ? shiftEnd : new Date(weekEndExclusiveMs)
             if (clippedEnd <= clippedStart) continue
             explodeShiftToSlots(clippedStart, clippedEnd).forEach((iso) => set.add(iso))
         }
         return set
-    }, [selectedStaffId, shifts, weekStart, weekEndExclusive])
+    }, [selectedStaffId, shifts, weekStartMs, weekEndExclusiveMs])
 
     useEffect(() => {
-        setDraftSlots(new Set(baseSlotSet))
-    }, [baseSlotSet, selectedStaffId, weekStart.getTime()])
+        setDraftSlots((prev) => {
+            if (areSetsEqual(prev, baseSlotSet)) return prev
+            return new Set(baseSlotSet)
+        })
+    }, [baseSlotSet])
 
     const pendingCount = useMemo(() => {
         let diff = 0

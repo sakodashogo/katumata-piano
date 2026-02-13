@@ -24,7 +24,7 @@ type DraftLesson = {
     type?: "REGULAR" | "AD_HOC" | "PRACTICE" | "SOLO_ADDITIONAL" | "DUET_ADDITIONAL"
 }
 
-type CellPos = { row: number; col: number }
+type CellPos = { row: number; gridCol: number }
 
 type Props = {
     studentId: string
@@ -44,6 +44,29 @@ type Props = {
 
 const START_HOUR = 9
 const END_HOUR = 22
+
+function areSetsEqual(left: Set<string>, right: Set<string>) {
+    if (left.size !== right.size) return false
+    for (const value of left) {
+        if (!right.has(value)) return false
+    }
+    return true
+}
+
+function areMapsEqual<K, V>(left: Map<K, V>, right: Map<K, V>) {
+    if (left.size !== right.size) return false
+    for (const [key, value] of left) {
+        if (!right.has(key) || right.get(key) !== value) return false
+    }
+    return true
+}
+
+function mapEntriesToKey<K extends string, V extends string>(map: Map<K, V>) {
+    return Array.from(map.entries())
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, value]) => `${key}:${value}`)
+        .join("|")
+}
 
 export function MonthlySlotGridEditor({
     studentId,
@@ -137,27 +160,43 @@ export function MonthlySlotGridEditor({
         }
         return map
     }, [existingLessons])
+    const editableSlotSet = React.useMemo(
+        () => new Set(Array.from(editableLessonsByIso.keys())),
+        [editableLessonsByIso]
+    )
 
     const [draftSlots, setDraftSlots] = React.useState<Set<string>>(new Set(Array.from(editableLessonsByIso.keys())))
     const [draftTypes, setDraftTypes] = React.useState<Map<string, "REGULAR" | "AD_HOC" | "PRACTICE" | "SOLO_ADDITIONAL" | "DUET_ADDITIONAL">>(new Map(editableLessonsByIso))
     const [draftRooms, setDraftRooms] = React.useState<Map<string, "A" | "B">>(new Map(editableRoomByIso))
-    const [selectedRoomId, setSelectedRoomId] = React.useState<"A" | "B">("A")
+    const draftSlotsRef = React.useRef(draftSlots)
+    draftSlotsRef.current = draftSlots
+    const draftTypesRef = React.useRef(draftTypes)
+    draftTypesRef.current = draftTypes
+    const draftRoomsRef = React.useRef(draftRooms)
+    draftRoomsRef.current = draftRooms
     const [selectedLessonType, setSelectedLessonType] = React.useState<"REGULAR" | "PRACTICE" | "SOLO_ADDITIONAL" | "DUET_ADDITIONAL">("REGULAR")
 
-    React.useEffect(() => {
-        setDraftSlots(new Set(Array.from(editableLessonsByIso.keys())))
-        setDraftTypes(new Map(editableLessonsByIso))
-        setDraftRooms(new Map(editableRoomByIso))
-    }, [editableLessonsByIso, editableRoomByIso, studentId])
+    const editableSyncKey = React.useMemo(() => {
+        const slotsKey = Array.from(editableSlotSet).sort().join("|")
+        const typeKey = mapEntriesToKey(editableLessonsByIso)
+        const roomKey = mapEntriesToKey(editableRoomByIso)
+        return `${studentId}__${year}-${month}__${slotsKey}__${typeKey}__${roomKey}`
+    }, [editableLessonsByIso, editableRoomByIso, editableSlotSet, month, studentId, year])
+    const lastAppliedSyncKeyRef = React.useRef<string>("")
 
     React.useEffect(() => {
-        const firstEditable = existingLessons.find((lesson) => lesson.isEditable && (lesson.roomId === "A" || lesson.roomId === "B"))
-        if (firstEditable?.roomId === "B") {
-            setSelectedRoomId("B")
-        } else {
-            setSelectedRoomId("A")
+        if (lastAppliedSyncKeyRef.current === editableSyncKey) return
+        lastAppliedSyncKeyRef.current = editableSyncKey
+        if (!areSetsEqual(draftSlotsRef.current, editableSlotSet)) {
+            setDraftSlots(new Set(editableSlotSet))
         }
-    }, [existingLessons, studentId])
+        if (!areMapsEqual(draftTypesRef.current, editableLessonsByIso)) {
+            setDraftTypes(new Map(editableLessonsByIso))
+        }
+        if (!areMapsEqual(draftRoomsRef.current, editableRoomByIso)) {
+            setDraftRooms(new Map(editableRoomByIso))
+        }
+    }, [editableLessonsByIso, editableRoomByIso, editableSlotSet, editableSyncKey])
 
     const isPaintingRef = React.useRef(false)
     const paintTypeRef = React.useRef<"draft" | "neutral">("draft")
@@ -171,19 +210,13 @@ export function MonthlySlotGridEditor({
     daysRef.current = days
     const timeSlotsRef = React.useRef(timeSlots)
     timeSlotsRef.current = timeSlots
-    const draftSlotsRef = React.useRef(draftSlots)
-    draftSlotsRef.current = draftSlots
-    const draftTypesRef = React.useRef(draftTypes)
-    draftTypesRef.current = draftTypes
-    const draftRoomsRef = React.useRef(draftRooms)
-    draftRoomsRef.current = draftRooms
 
     const getCellIso = (day: Date, hour: number, minute: number) =>
         setMinutes(setHours(startOfDay(day), hour), minute).toISOString()
 
     const isBooked = React.useCallback(
-        (iso: string) => nonEditableByRoom.get(selectedRoomId)?.has(new Date(iso).getTime()) ?? false,
-        [nonEditableByRoom, selectedRoomId]
+        (iso: string, roomId: "A" | "B") => nonEditableByRoom.get(roomId)?.has(new Date(iso).getTime()) ?? false,
+        [nonEditableByRoom]
     )
 
     const hasSupportAt = React.useCallback((iso: string) => {
@@ -192,54 +225,56 @@ export function MonthlySlotGridEditor({
         return parsedSupportShifts.some((shift) => shift.startTime < end && shift.endTime > start)
     }, [parsedSupportShifts])
 
-    const isBlockedBySupport = React.useCallback((iso: string) => {
-        if (selectedRoomId !== "B") return false
-        if (selectedLessonType === "PRACTICE") return false
+    const isBlockedBySupport = React.useCallback((iso: string, roomId: "A" | "B", lessonType: "REGULAR" | "PRACTICE" | "SOLO_ADDITIONAL" | "DUET_ADDITIONAL" = selectedLessonType) => {
+        if (roomId !== "B") return false
+        if (lessonType === "PRACTICE") return false
         return !hasSupportAt(iso)
-    }, [hasSupportAt, selectedLessonType, selectedRoomId])
+    }, [hasSupportAt, selectedLessonType])
 
     const isDayInMonth = (day: Date) => day.getMonth() === month - 1 && day.getFullYear() === year
 
-    const getSlotStatus = (iso: string): string => {
-        if (isBooked(iso)) return `booked:${nonEditableTypeByRoomIso.get(`${selectedRoomId}:${iso}`) || "REGULAR"}`
-        if (draftSlots.has(iso) && (draftRooms.get(iso) || "A") === selectedRoomId) {
+    const getSlotStatus = (iso: string, roomId: "A" | "B"): string => {
+        if (isBooked(iso, roomId)) return `booked:${nonEditableTypeByRoomIso.get(`${roomId}:${iso}`) || "REGULAR"}`
+        if (draftSlots.has(iso) && (draftRooms.get(iso) || "A") === roomId) {
             return `draft:${draftTypes.get(iso) || "REGULAR"}`
         }
-        if (isBlockedBySupport(iso)) return "no_support"
+        if (isBlockedBySupport(iso, roomId)) return "no_support"
         if (availableSet.has(iso)) return "available"
         if (unavailableSet.has(iso)) return "unavailable"
         return "neutral"
     }
 
-    const isInPendingRect = (row: number, col: number) => {
+    const isInPendingRect = (row: number, gridCol: number) => {
         const start = startCellRef.current
         const current = currentCellRef.current
         if (!start || !current || !isPaintingRef.current) return false
         const minRow = Math.min(start.row, current.row)
         const maxRow = Math.max(start.row, current.row)
-        const minCol = Math.min(start.col, current.col)
-        const maxCol = Math.max(start.col, current.col)
-        return row >= minRow && row <= maxRow && col >= minCol && col <= maxCol
+        const minCol = Math.min(start.gridCol, current.gridCol)
+        const maxCol = Math.max(start.gridCol, current.gridCol)
+        return row >= minRow && row <= maxRow && gridCol >= minCol && gridCol <= maxCol
     }
 
-    const getRectIsos = React.useCallback(() => {
+    const getRectCells = React.useCallback(() => {
         const start = startCellRef.current
         const current = currentCellRef.current
-        if (!start || !current) return []
+        if (!start || !current) return [] as Array<{ iso: string; roomId: "A" | "B" }>
         const minRow = Math.min(start.row, current.row)
         const maxRow = Math.max(start.row, current.row)
-        const minCol = Math.min(start.col, current.col)
-        const maxCol = Math.max(start.col, current.col)
-        const results: string[] = []
+        const minCol = Math.min(start.gridCol, current.gridCol)
+        const maxCol = Math.max(start.gridCol, current.gridCol)
+        const results: Array<{ iso: string; roomId: "A" | "B" }> = []
         for (let row = minRow; row <= maxRow; row++) {
             for (let col = minCol; col <= maxCol; col++) {
-                const day = daysRef.current[col]
+                const dayIndex = Math.floor(col / 2)
+                const roomId: "A" | "B" = col % 2 === 0 ? "A" : "B"
+                const day = daysRef.current[dayIndex]
                 const slot = timeSlotsRef.current[row]
                 if (!day || !slot) continue
                 if (day.getMonth() !== month - 1 || day.getFullYear() !== year) continue
                 const iso = getCellIso(day, slot.hour, slot.minute)
-                if (!isBooked(iso)) {
-                    results.push(iso)
+                if (!isBooked(iso, roomId)) {
+                    results.push({ iso, roomId })
                 }
             }
         }
@@ -249,8 +284,8 @@ export function MonthlySlotGridEditor({
     const commitPaint = React.useCallback(() => {
         if (!isPaintingRef.current) return
         isPaintingRef.current = false
-        const isos = getRectIsos()
-        if (isos.length === 0) {
+        const cells = getRectCells()
+        if (cells.length === 0) {
             startCellRef.current = null
             currentCellRef.current = null
             rerender()
@@ -260,12 +295,12 @@ export function MonthlySlotGridEditor({
         const nextSlots = new Set(draftSlotsRef.current)
         const nextTypes = new Map(draftTypesRef.current)
         const nextRooms = new Map(draftRoomsRef.current)
-        for (const iso of isos) {
+        for (const { iso, roomId } of cells) {
             if (paintType === "draft") {
-                if (isBlockedBySupport(iso)) continue
+                if (isBlockedBySupport(iso, roomId, selectedLessonType)) continue
                 nextSlots.add(iso)
                 nextTypes.set(iso, selectedLessonType)
-                nextRooms.set(iso, selectedRoomId)
+                nextRooms.set(iso, roomId)
             } else {
                 nextSlots.delete(iso)
                 nextTypes.delete(iso)
@@ -278,29 +313,31 @@ export function MonthlySlotGridEditor({
         startCellRef.current = null
         currentCellRef.current = null
         rerender()
-    }, [getRectIsos, isBlockedBySupport, selectedLessonType, selectedRoomId])
+    }, [getRectCells, isBlockedBySupport, selectedLessonType])
 
-    const handleCellStart = React.useCallback((row: number, col: number) => {
+    const handleCellStart = React.useCallback((row: number, gridCol: number) => {
         if (readOnly) return
-        const day = daysRef.current[col]
+        const dayIndex = Math.floor(gridCol / 2)
+        const roomId: "A" | "B" = gridCol % 2 === 0 ? "A" : "B"
+        const day = daysRef.current[dayIndex]
         const slot = timeSlotsRef.current[row]
         if (!day || !slot) return
         const iso = getCellIso(day, slot.hour, slot.minute)
-        if (isBooked(iso)) return
-        const hasDraftInCurrentRoom = draftSlotsRef.current.has(iso) && (draftRoomsRef.current.get(iso) || "A") === selectedRoomId
-        if (!hasDraftInCurrentRoom && isBlockedBySupport(iso)) return
+        if (isBooked(iso, roomId)) return
+        const hasDraftInCurrentRoom = draftSlotsRef.current.has(iso) && (draftRoomsRef.current.get(iso) || "A") === roomId
+        if (!hasDraftInCurrentRoom && isBlockedBySupport(iso, roomId, selectedLessonType)) return
         isPaintingRef.current = true
         paintTypeRef.current = hasDraftInCurrentRoom ? "neutral" : "draft"
-        startCellRef.current = { row, col }
-        currentCellRef.current = { row, col }
+        startCellRef.current = { row, gridCol }
+        currentCellRef.current = { row, gridCol }
         rerender()
-    }, [isBooked, isBlockedBySupport, readOnly, selectedRoomId])
+    }, [isBooked, isBlockedBySupport, readOnly, selectedLessonType])
 
-    const updateCurrentCell = React.useCallback((row: number, col: number) => {
+    const updateCurrentCell = React.useCallback((row: number, gridCol: number) => {
         if (!isPaintingRef.current || readOnly) return
         const current = currentCellRef.current
-        if (current && current.row === row && current.col === col) return
-        currentCellRef.current = { row, col }
+        if (current && current.row === row && current.gridCol === gridCol) return
+        currentCellRef.current = { row, gridCol }
         rerender()
     }, [readOnly])
 
@@ -327,9 +364,9 @@ export function MonthlySlotGridEditor({
             const cell = target?.closest<HTMLElement>("[data-row]")
             if (!cell) return
             const row = Number.parseInt(cell.dataset.row || "", 10)
-            const col = Number.parseInt(cell.dataset.col || "", 10)
-            if (!Number.isNaN(row) && !Number.isNaN(col)) {
-                updateCurrentCell(row, col)
+            const gridCol = Number.parseInt(cell.dataset.gridCol || "", 10)
+            if (!Number.isNaN(row) && !Number.isNaN(gridCol)) {
+                updateCurrentCell(row, gridCol)
             }
         }
         element.addEventListener("touchmove", handler, { passive: false })
@@ -343,19 +380,17 @@ export function MonthlySlotGridEditor({
         const raw = window.localStorage.getItem(storageKey)
         if (!raw) return
         try {
-            const parsed = JSON.parse(raw) as {
-                slots?: string[]
-                types?: Array<[string, "REGULAR" | "AD_HOC" | "PRACTICE" | "SOLO_ADDITIONAL" | "DUET_ADDITIONAL"]>
-                rooms?: Array<[string, "A" | "B"]>
-                roomId?: "A" | "B"
+                const parsed = JSON.parse(raw) as {
+                    slots?: string[]
+                    types?: Array<[string, "REGULAR" | "AD_HOC" | "PRACTICE" | "SOLO_ADDITIONAL" | "DUET_ADDITIONAL"]>
+                    rooms?: Array<[string, "A" | "B"]>
+                }
+                if (Array.isArray(parsed.slots)) setDraftSlots(new Set(parsed.slots))
+                if (Array.isArray(parsed.types)) setDraftTypes(new Map(parsed.types))
+                if (Array.isArray(parsed.rooms)) setDraftRooms(new Map(parsed.rooms))
+            } catch {
+                // ignore
             }
-            if (Array.isArray(parsed.slots)) setDraftSlots(new Set(parsed.slots))
-            if (Array.isArray(parsed.types)) setDraftTypes(new Map(parsed.types))
-            if (Array.isArray(parsed.rooms)) setDraftRooms(new Map(parsed.rooms))
-            if (parsed.roomId === "A" || parsed.roomId === "B") setSelectedRoomId(parsed.roomId)
-        } catch {
-            // ignore
-        }
     }, [storageKey, studentId])
 
     React.useEffect(() => {
@@ -364,10 +399,9 @@ export function MonthlySlotGridEditor({
             slots: Array.from(draftSlots),
             types: Array.from(draftTypes.entries()),
             rooms: Array.from(draftRooms.entries()),
-            roomId: selectedRoomId,
         })
         window.localStorage.setItem(storageKey, payload)
-    }, [draftRooms, draftSlots, draftTypes, selectedRoomId, storageKey])
+    }, [draftRooms, draftSlots, draftTypes, storageKey])
 
     const draftLessons = React.useMemo(() => {
         return Array.from(draftSlots).map((iso) => {
@@ -375,11 +409,11 @@ export function MonthlySlotGridEditor({
             return {
                 startTime,
                 endTime: new Date(startTime.getTime() + 30 * 60 * 1000),
-                roomId: draftRooms.get(iso) || selectedRoomId,
+                roomId: draftRooms.get(iso) || "A",
                 type: draftTypes.get(iso) || "REGULAR",
             }
         })
-    }, [draftRooms, draftSlots, draftTypes, selectedRoomId])
+    }, [draftRooms, draftSlots, draftTypes])
 
     React.useEffect(() => {
         onDraftChange?.(draftLessons)
@@ -402,15 +436,15 @@ export function MonthlySlotGridEditor({
         setWeekStart((prev) => addDays(prev, direction === "next" ? 7 : -7))
     }
 
-    const getVisualState = (iso: string, row: number, col: number) => {
-        if (isBooked(iso)) return `booked:${nonEditableTypeByRoomIso.get(`${selectedRoomId}:${iso}`) || "REGULAR"}`
-        if (isInPendingRect(row, col)) {
+    const getVisualState = (iso: string, row: number, gridCol: number, roomId: "A" | "B") => {
+        if (isBooked(iso, roomId)) return `booked:${nonEditableTypeByRoomIso.get(`${roomId}:${iso}`) || "REGULAR"}`
+        if (isInPendingRect(row, gridCol)) {
             if (paintTypeRef.current === "draft") return `draft:${selectedLessonType}`
             if (availableSet.has(iso)) return "available"
             if (unavailableSet.has(iso)) return "unavailable"
             return "neutral"
         }
-        return getSlotStatus(iso)
+        return getSlotStatus(iso, roomId)
     }
 
     const typeColor = (type: string) => {
@@ -445,18 +479,6 @@ export function MonthlySlotGridEditor({
                 </div>
                 <div className="flex flex-wrap items-center gap-2 text-[11px]">
                     <div className="flex items-center gap-2 rounded border bg-white px-2 py-1">
-                        <span className="text-slate-500">教室</span>
-                        <select
-                            value={selectedRoomId}
-                            onChange={(event) => setSelectedRoomId(event.target.value === "B" ? "B" : "A")}
-                            className="h-6 rounded border px-1 text-[11px]"
-                            disabled={readOnly}
-                        >
-                            <option value="A">第1</option>
-                            <option value="B">第2</option>
-                        </select>
-                    </div>
-                    <div className="flex items-center gap-2 rounded border bg-white px-2 py-1">
                         <span className="text-slate-500">種別</span>
                         <select
                             value={selectedLessonType}
@@ -486,10 +508,10 @@ export function MonthlySlotGridEditor({
 
             <div
                 ref={gridRef}
-                className="flex-1 overflow-auto rounded-lg border border-slate-200 bg-white select-none"
+                className="min-h-[780px] max-h-[calc(100vh-220px)] overflow-auto rounded-lg border border-slate-200 bg-white select-none"
                 onMouseLeave={() => commitPaint()}
             >
-                <table className="w-full min-w-[980px] border-collapse text-center text-sm">
+                <table className="w-full min-w-[1180px] border-collapse text-center text-sm">
                     <thead className="sticky top-0 z-20 bg-slate-50 text-slate-500">
                         <tr>
                             <th className="sticky left-0 z-30 w-12 border-r border-slate-200 bg-slate-50 px-1 py-1.5 text-[10px] font-medium">時間</th>
@@ -500,7 +522,7 @@ export function MonthlySlotGridEditor({
                                 return (
                                     <th
                                         key={day.toISOString()}
-                                        className={cn("min-w-[62px] border-r border-slate-200 px-0 py-1 font-medium last:border-r-0", !inMonth && "opacity-35")}
+                                        className={cn("min-w-[136px] border-r border-slate-200 px-0 py-1 font-medium last:border-r-0", !inMonth && "opacity-35")}
                                     >
                                         <div className="flex flex-col items-center leading-tight">
                                             <span className={cn("text-[10px]", isSun && "text-red-500", isSat && "text-blue-500")}>
@@ -509,6 +531,10 @@ export function MonthlySlotGridEditor({
                                             <span className={cn("text-sm font-bold", inMonth ? "text-slate-900" : "text-slate-400", isSun && inMonth && "text-red-600", isSat && inMonth && "text-blue-600")}>
                                                 {format(day, "d")}
                                             </span>
+                                            <div className="mt-0.5 grid w-full grid-cols-2 gap-[1px] px-1 text-[9px]">
+                                                <span className="rounded bg-blue-50 py-0.5 font-semibold text-blue-700">A</span>
+                                                <span className="rounded bg-emerald-50 py-0.5 font-semibold text-emerald-700">B</span>
+                                            </div>
                                         </div>
                                     </th>
                                 )
@@ -524,38 +550,46 @@ export function MonthlySlotGridEditor({
                                 {days.map((day, colIndex) => {
                                     const iso = getCellIso(day, hour, minute)
                                     const inMonth = isDayInMonth(day)
-                                    const visual = getVisualState(iso, rowIndex, colIndex)
-                                    const isNoSupport = visual === "no_support"
                                     return (
                                         <td key={day.toISOString()} className={cn("border-r p-0 last:border-r-0", minute === 0 ? "border-t border-slate-200" : "border-t border-slate-100")}>
-                                            <div
-                                                data-row={rowIndex}
-                                                data-col={colIndex}
-                                                onMouseDown={(event) => {
-                                                    if (event.button === 0 && inMonth && !readOnly) handleCellStart(rowIndex, colIndex)
-                                                }}
-                                                onMouseEnter={() => {
-                                                    if (inMonth && !readOnly) updateCurrentCell(rowIndex, colIndex)
-                                                }}
-                                                onTouchStart={() => {
-                                                    if (inMonth && !readOnly) handleCellStart(rowIndex, colIndex)
-                                                }}
-                                                className={cn(
-                                                    "flex h-[34px] w-full items-center justify-center transition-colors duration-75",
-                                                    !inMonth && "bg-slate-50 opacity-30",
-                                                    inMonth && visual.startsWith("booked:") && "cursor-not-allowed bg-slate-400 text-white",
-                                                    inMonth && visual.startsWith("draft:") && `${readOnly ? "cursor-default" : "cursor-pointer"} ${typeColor(visual.split(":")[1] || "REGULAR")}`,
-                                                    inMonth && visual === "available" && `${readOnly ? "cursor-default" : "cursor-pointer"} bg-green-100`,
-                                                    inMonth && visual === "unavailable" && `${readOnly ? "cursor-default" : "cursor-pointer"} bg-red-100`,
-                                                    inMonth && visual === "neutral" && !readOnly && "cursor-pointer hover:bg-slate-50",
-                                                    inMonth && isNoSupport && "bg-slate-100 border border-dashed border-slate-300"
-                                                )}
-                                            >
-                                                {inMonth && visual.startsWith("booked:") && <span className="text-[9px] font-bold">済</span>}
-                                                {inMonth && visual.startsWith("draft:") && <span className="text-[9px] font-bold">{typeShort(visual.split(":")[1] || "REGULAR")}</span>}
-                                                {inMonth && visual === "available" && <span className="text-[9px] font-medium text-green-600">◯</span>}
-                                                {inMonth && visual === "unavailable" && <span className="text-[9px] text-red-400">✕</span>}
-                                                {inMonth && isNoSupport && <span className="rounded bg-slate-200 px-1 text-[9px] text-slate-600">自主練のみ</span>}
+                                            <div className={cn("grid h-[44px] grid-cols-2 gap-[1px] bg-slate-100 p-[1px]", !inMonth && "opacity-35")}>
+                                                {(["A", "B"] as const).map((roomId, roomOffset) => {
+                                                    const gridCol = colIndex * 2 + roomOffset
+                                                    const visual = getVisualState(iso, rowIndex, gridCol, roomId)
+                                                    const isNoSupport = visual === "no_support"
+                                                    return (
+                                                        <div
+                                                            key={`${day.toISOString()}-${roomId}`}
+                                                            data-row={rowIndex}
+                                                            data-grid-col={gridCol}
+                                                            onMouseDown={(event) => {
+                                                                if (event.button === 0 && inMonth && !readOnly) handleCellStart(rowIndex, gridCol)
+                                                            }}
+                                                            onMouseEnter={() => {
+                                                                if (inMonth && !readOnly) updateCurrentCell(rowIndex, gridCol)
+                                                            }}
+                                                            onTouchStart={() => {
+                                                                if (inMonth && !readOnly) handleCellStart(rowIndex, gridCol)
+                                                            }}
+                                                            className={cn(
+                                                                "flex h-full w-full items-center justify-center rounded-[2px] border border-slate-200 transition-colors duration-75",
+                                                                inMonth && visual.startsWith("booked:") && "cursor-not-allowed bg-slate-400 text-white",
+                                                                inMonth && visual.startsWith("draft:") && `${readOnly ? "cursor-default" : "cursor-pointer"} ${typeColor(visual.split(":")[1] || "REGULAR")}`,
+                                                                inMonth && visual === "available" && `${readOnly ? "cursor-default" : "cursor-pointer"} bg-green-100`,
+                                                                inMonth && visual === "unavailable" && `${readOnly ? "cursor-default" : "cursor-pointer"} bg-red-100`,
+                                                                inMonth && visual === "neutral" && !readOnly && "cursor-pointer bg-white hover:bg-slate-50",
+                                                                inMonth && visual === "neutral" && readOnly && "bg-white",
+                                                                inMonth && isNoSupport && "bg-slate-100 border-dashed border-slate-300"
+                                                            )}
+                                                        >
+                                                            {inMonth && visual.startsWith("booked:") && <span className="text-[9px] font-bold">済</span>}
+                                                            {inMonth && visual.startsWith("draft:") && <span className="text-[9px] font-bold">{typeShort(visual.split(":")[1] || "REGULAR")}</span>}
+                                                            {inMonth && visual === "available" && <span className="text-[9px] font-medium text-green-600">◯</span>}
+                                                            {inMonth && visual === "unavailable" && <span className="text-[9px] text-red-400">✕</span>}
+                                                            {inMonth && isNoSupport && <span className="rounded bg-slate-200 px-1 text-[9px] text-slate-600">自主練</span>}
+                                                        </div>
+                                                    )
+                                                })}
                                             </div>
                                         </td>
                                     )

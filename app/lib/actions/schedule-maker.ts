@@ -410,19 +410,20 @@ export async function generateSuggestedSchedule(
     // Update suggestions with "Conflict" and "Recommended" status
     const combinedSuggestions = [...lockedSuggestions, ...allSuggestions]
     const lockedIds = new Set(lockedSuggestions.map((suggestion) => suggestion.id))
-    const suggestionsWithStatus = combinedSuggestions.map(s => {
-        // Conflict = Is this slot claimed by ANY recommendation (other than self)?
-        // Or simpler: Conflict = Multiple students want this slot
+    const suggestionsWithStatus = combinedSuggestions.map((s) => {
+        const isRecommended = lockedIds.has(s.id) || finalRecommendations.has(s.id)
         const othersInSlot = combinedSuggestions.filter((o) =>
+            o.id !== s.id &&
             o.slot.startTime.getTime() === s.slot.startTime.getTime() &&
             o.slot.roomId === s.slot.roomId
         )
-        const isConflict = othersInSlot.length > 1
+        // Recommended suggestions are already de-duplicated by slot in the optimizer.
+        const isConflict = !isRecommended && othersInSlot.length > 0
 
         return {
             ...s,
             conflict: isConflict,
-            isRecommended: lockedIds.has(s.id) || finalRecommendations.has(s.id)
+            isRecommended
         }
     })
 

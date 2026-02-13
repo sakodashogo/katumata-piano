@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { ChevronLeft, ChevronRight, Sparkles, Save, Upload } from "lucide-react"
 import { MonthlySlotGridEditor } from "@/components/teacher/MonthlySlotGridEditor"
+import { MonthlyAllStudentsCalendar } from "@/components/teacher/MonthlyAllStudentsCalendar"
 import {
     publishMonthlySchedule,
     replaceStudentMonthlyLessons,
@@ -86,6 +87,25 @@ function isSameDraftSet(a: DraftLesson[], b: DraftLesson[]) {
     return true
 }
 
+function isSameDraftMap(left: Record<string, DraftLesson[]>, right: Record<string, DraftLesson[]>) {
+    const leftKeys = Object.keys(left).sort()
+    const rightKeys = Object.keys(right).sort()
+    if (leftKeys.length !== rightKeys.length) return false
+    for (let i = 0; i < leftKeys.length; i++) {
+        if (leftKeys[i] !== rightKeys[i]) return false
+        if (!isSameDraftSet(left[leftKeys[i]], right[rightKeys[i]])) return false
+    }
+    return true
+}
+
+function isSameIdSet(left: Set<string>, right: Set<string>) {
+    if (left.size !== right.size) return false
+    for (const id of left) {
+        if (!right.has(id)) return false
+    }
+    return true
+}
+
 export function MonthlyScheduler({
     students,
     lessons,
@@ -109,6 +129,7 @@ export function MonthlyScheduler({
     const [isGeneratingSuggestions, setIsGeneratingSuggestions] = useState(false)
     const [suggestions, setSuggestions] = useState<ScheduleSuggestion[]>([])
     const autoDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+    const lastSuggestionErrorRef = useRef("")
 
     const [baseLessons, setBaseLessons] = useState<Lesson[]>(lessons)
     useEffect(() => {
@@ -160,6 +181,14 @@ export function MonthlyScheduler({
     )
 
     const currentSelectedDraft = draftByStudent[selectedStudentId] || selectedStudentBaseline
+    const selectedStudentLessonsForEditor = useMemo(
+        () =>
+            effectiveLessons.map((lesson) => ({
+                ...lesson,
+                isEditable: lesson.studentId === selectedStudentId,
+            })),
+        [effectiveLessons, selectedStudentId]
+    )
 
     const draftLessonsCountByStudent = useMemo(() => {
         const map = new Map<string, number>()
@@ -189,13 +218,22 @@ export function MonthlyScheduler({
             const result = await generateSuggestedSchedule(year, month, { lockedAssignments: locks })
             if (!result.success || !result.suggestions) {
                 setSuggestions([])
-                toast.error(result.error || "提案の作成に失敗しました。")
+                const message = result.error || "提案の作成に失敗しました。"
+                if (lastSuggestionErrorRef.current !== message) {
+                    lastSuggestionErrorRef.current = message
+                    toast.error(message)
+                }
                 return
             }
+            lastSuggestionErrorRef.current = ""
             setSuggestions(result.suggestions)
         } catch {
             setSuggestions([])
-            toast.error("提案の作成中にエラーが発生しました。")
+            const message = "提案の作成中にエラーが発生しました。"
+            if (lastSuggestionErrorRef.current !== message) {
+                lastSuggestionErrorRef.current = message
+                toast.error(message)
+            }
         } finally {
             setIsGeneratingSuggestions(false)
         }
@@ -224,27 +262,33 @@ export function MonthlyScheduler({
         router.push(`/teacher/schedule/monthly?${params.toString()}`)
     }
 
-    const handleDraftChangeForSelected = (updated: DraftLesson[]) => {
+    const handleDraftChangeForSelected = useCallback((updated: DraftLesson[]) => {
         if (!selectedStudentId) return
-        const baseline = baseLessons
-            .filter((lesson) => lesson.studentId === selectedStudentId)
-            .map(normalizeLessonToDraft)
+        const baseline = selectedStudentBaseline
+        const isBaseline = isSameDraftSet(updated, baseline)
         setDraftByStudent((prev) => {
-            const next = { ...prev }
-            if (isSameDraftSet(updated, baseline)) {
+            const prevDraft = prev[selectedStudentId]
+            if (isBaseline) {
+                if (typeof prevDraft === "undefined") return prev
+                const next = { ...prev }
                 delete next[selectedStudentId]
-            } else {
-                next[selectedStudentId] = updated
+                return next
             }
-            return next
+            if (prevDraft && isSameDraftSet(prevDraft, updated)) {
+                return prev
+            }
+            return { ...prev, [selectedStudentId]: updated }
         })
         setDirtyStudentIds((prev) => {
+            const hasDirty = prev.has(selectedStudentId)
+            if (isBaseline && !hasDirty) return prev
+            if (!isBaseline && hasDirty) return prev
             const next = new Set(prev)
-            if (isSameDraftSet(updated, baseline)) next.delete(selectedStudentId)
+            if (isBaseline) next.delete(selectedStudentId)
             else next.add(selectedStudentId)
             return next
         })
-    }
+    }, [selectedStudentBaseline, selectedStudentId])
 
     const saveStudentDraft = async (studentId: string, draftLessons: DraftLesson[]) => {
         const result = await replaceStudentMonthlyLessons({
@@ -353,33 +397,50 @@ export function MonthlyScheduler({
         router.refresh()
     }
 
-    const handleApplyRecommendedToDrafts = () => {
-        const recommended = suggestions.filter((suggestion) => suggestion.isRecommended && !suggestion.conflict)
-        const byStudent: Record<string, DraftLesson[]> = {}
+    const applyRecommendedToDrafts = useCallback((targetSuggestions: ScheduleSuggestion[], showToast = false) => {
+        const recommended = targetSuggestions.filter((suggestion) => suggestion.isRecommended && !suggestion.conflict)
+        const recommendationsByStudent: Record<string, DraftLesson[]> = {}
         for (const suggestion of recommended) {
             const studentId = suggestion.studentId
             if (!studentById.has(studentId)) continue
-            if (!byStudent[studentId]) byStudent[studentId] = []
-            byStudent[studentId].push({
+            if (!recommendationsByStudent[studentId]) recommendationsByStudent[studentId] = []
+            recommendationsByStudent[studentId].push({
                 startTime: new Date(suggestion.slot.startTime),
                 endTime: new Date(suggestion.slot.endTime),
-                roomId: suggestion.slot.roomId,
+                roomId: suggestion.slot.roomId === "B" ? "B" : "A",
                 type: "REGULAR",
             })
         }
-        const mergedDrafts: Record<string, DraftLesson[]> = { ...draftByStudent }
+
+        const mergedDrafts: Record<string, DraftLesson[]> = {}
         for (const student of students) {
-            const baseline = baseLessons.filter((lesson) => lesson.studentId === student.id).map(normalizeLessonToDraft)
-            const nextDraft = byStudent[student.id] || baseline
-            if (isSameDraftSet(nextDraft, baseline)) {
-                delete mergedDrafts[student.id]
-            } else {
-                mergedDrafts[student.id] = nextDraft
+            const baseline = baseLessons
+                .filter((lesson) => lesson.studentId === student.id)
+                .map(normalizeLessonToDraft)
+            const fixed = draftByStudent[student.id] || baseline
+            const merged = [...fixed]
+            const mergedKeys = new Set(merged.map(toDraftKey))
+            for (const lesson of recommendationsByStudent[student.id] || []) {
+                const key = toDraftKey(lesson)
+                if (mergedKeys.has(key)) continue
+                merged.push(lesson)
+                mergedKeys.add(key)
+            }
+            if (!isSameDraftSet(merged, baseline)) {
+                mergedDrafts[student.id] = merged
             }
         }
-        setDraftByStudent(mergedDrafts)
-        setDirtyStudentIds(new Set(Object.keys(mergedDrafts)))
-        toast.success("提案内容を編集下書きに反映しました。")
+
+        const nextDirty = new Set(Object.keys(mergedDrafts))
+        setDraftByStudent((prev) => (isSameDraftMap(prev, mergedDrafts) ? prev : mergedDrafts))
+        setDirtyStudentIds((prev) => (isSameIdSet(prev, nextDirty) ? prev : nextDirty))
+        if (showToast) {
+            toast.success("提案内容を全生徒の編集下書きに反映しました。")
+        }
+    }, [baseLessons, draftByStudent, studentById, students, toast])
+
+    const handleApplyRecommendedToDrafts = () => {
+        applyRecommendedToDrafts(suggestions, true)
     }
 
     const suggestionCountByStudent = useMemo(() => {
@@ -391,13 +452,28 @@ export function MonthlyScheduler({
         return map
     }, [suggestions])
 
+    useEffect(() => {
+        if (!isAutoMode) return
+        if (isGeneratingSuggestions) return
+        applyRecommendedToDrafts(suggestions, false)
+    }, [applyRecommendedToDrafts, isAutoMode, isGeneratingSuggestions, suggestions])
+
     const draftLessons = useMemo(
         () => effectiveLessons.filter((lesson) => lesson.status === "DRAFT"),
         [effectiveLessons]
     )
 
+    const allLessonsForCalendar = useMemo(
+        () =>
+            effectiveLessons.map((lesson) => ({
+                ...lesson,
+                studentName: studentById.get(lesson.studentId)?.name || studentById.get(lesson.studentId)?.email || "名前未設定",
+            })),
+        [effectiveLessons, studentById]
+    )
+
     return (
-        <div className="flex h-[calc(100vh-120px)] flex-col gap-4">
+        <div className="flex min-h-[calc(100vh-120px)] flex-col gap-4 pb-6">
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-white p-3">
                 <div className="flex items-center gap-2">
                     <Button variant="outline" onClick={() => handleMonthChange(-1)}>
@@ -437,7 +513,7 @@ export function MonthlyScheduler({
                     </Button>
                     {isAutoMode && (
                         <Button variant="outline" onClick={handleApplyRecommendedToDrafts} disabled={suggestions.length === 0}>
-                            提案を下書きに反映
+                            提案を全生徒に反映
                         </Button>
                     )}
                 </div>
@@ -468,8 +544,8 @@ export function MonthlyScheduler({
                 </div>
             </div>
 
-            <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[320px_1fr]">
-                <aside className="flex min-h-0 flex-col rounded-lg border bg-white">
+            <div className="grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
+                <aside className="flex min-h-[760px] flex-col rounded-lg border bg-white">
                     <div className="border-b p-3">
                         <div className="text-sm font-semibold text-slate-900">生徒選択</div>
                         <input
@@ -479,7 +555,7 @@ export function MonthlyScheduler({
                             className="mt-2 h-9 w-full rounded border px-2 text-sm"
                         />
                     </div>
-                    <div className="min-h-0 flex-1 overflow-auto p-2">
+                    <div className="flex-1 overflow-auto p-2">
                         {filteredStudents.map((student) => {
                             const lessonCount = draftLessonsCountByStudent.get(student.id) || 0
                             const suggestionCount = suggestionCountByStudent.get(student.id) || 0
@@ -517,7 +593,7 @@ export function MonthlyScheduler({
                     </div>
                 </aside>
 
-                <section className="min-h-0 rounded-lg border bg-slate-50 p-3">
+                <section className="min-h-[760px] rounded-lg border bg-slate-50 p-3">
                     {!selectedStudent ? (
                         <div className="flex h-full items-center justify-center text-sm text-slate-500">
                             生徒を選択してください。
@@ -533,7 +609,7 @@ export function MonthlyScheduler({
                                     </div>
                                 </div>
                             )}
-                            <div className="min-h-0 flex-1">
+                            <div className="flex-1">
                                 <MonthlySlotGridEditor
                                     studentId={selectedStudent.id}
                                     studentName={selectedStudent.name || selectedStudent.email}
@@ -547,10 +623,7 @@ export function MonthlyScheduler({
                                             ? selectedStudent.availability!.unavailableSlots.map(String)
                                             : []
                                     }
-                                    existingLessons={effectiveLessons.map((lesson) => ({
-                                        ...lesson,
-                                        isEditable: lesson.studentId === selectedStudent.id,
-                                    }))}
+                                    existingLessons={selectedStudentLessonsForEditor}
                                     supportShifts={supportShifts}
                                     year={year}
                                     month={month}
@@ -562,6 +635,15 @@ export function MonthlyScheduler({
                     )}
                 </section>
             </div>
+
+            <section className="rounded-lg border bg-slate-50 p-3">
+                <MonthlyAllStudentsCalendar
+                    lessons={allLessonsForCalendar}
+                    supportShifts={supportShifts}
+                    year={year}
+                    month={month}
+                />
+            </section>
         </div>
     )
 }
