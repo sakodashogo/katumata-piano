@@ -1,5 +1,3 @@
-
-
 "use server"
 
 import { prisma } from "@/lib/prisma"
@@ -34,10 +32,30 @@ export type LockedAssignment = {
 const WORKING_HOUR_START = 14
 const WORKING_HOUR_END = 20
 const WORKING_DAYS = [1, 2, 3, 4, 5, 6] // Mon-Sat (0 is Sunday)
+const SLOT_DURATION_MINUTES = 30
+const SLOT_DURATION_MS = SLOT_DURATION_MINUTES * 60 * 1000
+const MAX_LESSONS_PER_DAY = 1
+const ANCHOR_NEARBY_MAX_MINUTES = 60
+const ANCHOR_NEARBY_HIGH_BAND_MINUTES = 30
+
+type GeneratedSlot = {
+    startTime: Date
+    endTime: Date
+    dayOfWeek: string
+    roomId: string
+}
+
+type Interval = { start: number; end: number }
+
+type StudentAnchor = {
+    dayOfWeek: number
+    minuteOfDay: number
+    source: "previous-month" | "default-preference"
+}
 
 // Helper to generate teacher slots for a given month
 function generateTeacherSlots(year: number, month: number) {
-    const slots = []
+    const slots: GeneratedSlot[] = []
     const start = new Date(year, month - 1, 1)
     const end = new Date(year, month, 0)
 
@@ -64,6 +82,96 @@ function generateTeacherSlots(year: number, month: number) {
     return slots
 }
 
+function getWeekNumberInMonth(year: number, month: number, date: Date) {
+    const firstDayOfMonth = new Date(year, month - 1, 1)
+    const dayDiff = date.getDate() - 1
+    return Math.floor((dayDiff + getDay(firstDayOfMonth)) / 7)
+}
+
+function getDateKey(date: Date) {
+    return format(date, "yyyy-MM-dd")
+}
+
+function toMinuteOfDay(date: Date) {
+    return date.getHours() * 60 + date.getMinutes()
+}
+
+function parseHHMMToMinuteOfDay(value: string | null | undefined) {
+    if (!value) return null
+    const [hourRaw, minuteRaw] = value.split(":")
+    const hour = Number(hourRaw)
+    const minute = Number(minuteRaw)
+    if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null
+    if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null
+    return hour * 60 + minute
+}
+
+function dayNameToIndex(value: string | null | undefined) {
+    if (!value) return null
+    const normalized = value.toLowerCase()
+    const mapping: Record<string, number> = {
+        sunday: 0,
+        monday: 1,
+        tuesday: 2,
+        wednesday: 3,
+        thursday: 4,
+        friday: 5,
+        saturday: 6,
+    }
+    return mapping[normalized] ?? null
+}
+
+function getWeeklyCap(defaultLessonCount: number, weekCountInMonth: number) {
+    if (defaultLessonCount === 4) return 1
+    if (defaultLessonCount === 8) return 2
+    return Math.max(1, Math.ceil(defaultLessonCount / Math.max(weekCountInMonth, 1)))
+}
+
+function hasIntervalOverlap(intervals: Interval[] | undefined, start: number, end: number) {
+    if (!intervals || intervals.length === 0) return false
+    return intervals.some((interval) => interval.start < end && interval.end > start)
+}
+
+function addInterval(intervalMap: Map<string, Interval[]>, roomId: string, start: number, end: number) {
+    const list = intervalMap.get(roomId) ?? []
+    list.push({ start, end })
+    list.sort((a, b) => a.start - b.start)
+    intervalMap.set(roomId, list)
+}
+
+function getContiguity(intervals: Interval[] | undefined, start: number, end: number) {
+    if (!intervals || intervals.length === 0) return { before: false, after: false }
+    let before = false
+    let after = false
+    for (const interval of intervals) {
+        if (interval.end === start) before = true
+        if (interval.start === end) after = true
+    }
+    return { before, after }
+}
+
+function getFragmentationPenalty(intervals: Interval[] | undefined, start: number, end: number, durationMs: number) {
+    if (!intervals || intervals.length === 0) return 0
+    let prev: Interval | null = null
+    let next: Interval | null = null
+    const startDateKey = getDateKey(new Date(start))
+    for (const interval of intervals) {
+        if (getDateKey(new Date(interval.start)) !== startDateKey) continue
+        if (interval.end <= start && (!prev || interval.end > prev.end)) prev = interval
+        if (interval.start >= end && (!next || interval.start < next.start)) next = interval
+    }
+    let penalty = 0
+    if (prev) {
+        const gapBefore = start - prev.end
+        if (gapBefore > 0 && gapBefore < durationMs) penalty += 1
+    }
+    if (next) {
+        const gapAfter = next.start - end
+        if (gapAfter > 0 && gapAfter < durationMs) penalty += 1
+    }
+    return penalty
+}
+
 export async function generateSuggestedSchedule(
     year: number,
     month: number,
@@ -76,9 +184,11 @@ export async function generateSuggestedSchedule(
 
     const start = new Date(year, month - 1, 1)
     const end = new Date(year, month, 0, 23, 59, 59)
+    const previousStart = new Date(year, month - 2, 1)
+    const previousEnd = new Date(year, month - 1, 0, 23, 59, 59)
 
     // 1. Fetch Data
-    const [students, existingLessons, supportShifts] = await Promise.all([
+    const [students, existingLessons, previousMonthLessons, supportShifts] = await Promise.all([
         prisma.user.findMany({
             where: { role: "STUDENT" },
             include: {
@@ -97,6 +207,16 @@ export async function generateSuggestedSchedule(
             where: {
                 startTime: { gte: start, lte: end },
                 status: { not: "CANCELLED" }
+            }
+        }),
+        prisma.lesson.findMany({
+            where: {
+                startTime: { gte: previousStart, lte: previousEnd },
+                status: { not: "CANCELLED" }
+            },
+            select: {
+                studentId: true,
+                startTime: true,
             }
         }),
         getSupportShiftsInRangeSafe(start, end),
@@ -211,200 +331,285 @@ export async function generateSuggestedSchedule(
         }
     }
 
-
-    // 4. Optimization (Greedy with weekday fixation + weekly distribution + gap minimization)
+    // 4. CSP Solver (Hard constraints -> Primary heuristic -> Secondary heuristic)
     const studentById = new Map(students.map((student) => [student.id, student]))
     const studentScarcity = new Map<string, number>()
     for (const suggestion of allSuggestions) {
         studentScarcity.set(suggestion.studentId, (studentScarcity.get(suggestion.studentId) || 0) + 1)
     }
 
-    const occupiedSlots = new Set<string>()
-    const studentDailyCounts = new Map<string, Set<number>>()
+    const weekIndexSet = new Set<number>()
+    for (let day = 1; day <= end.getDate(); day++) {
+        weekIndexSet.add(getWeekNumberInMonth(year, month, new Date(year, month - 1, day)))
+    }
+    const weekCountInMonth = weekIndexSet.size
+
+    const studentDailyAssignments = new Map<string, Set<string>>()
     const studentMonthCounts = new Map<string, number>()
     const studentWeeklyCounts = new Map<string, Map<number, number>>()
-
-    const getWeekNumber = (date: Date) => {
-        const firstDayOfMonth = new Date(year, month - 1, 1)
-        const dayDiff = date.getDate() - 1
-        return Math.floor((dayDiff + getDay(firstDayOfMonth)) / 7)
-    }
+    const roomIntervals = new Map<string, Interval[]>()
 
     for (const lesson of existingLessons) {
-        occupiedSlots.add(`${lesson.startTime.getTime()}__${lesson.roomId || "A"}`)
-        const day = lesson.startTime.getDate()
-        if (!studentDailyCounts.has(lesson.studentId)) studentDailyCounts.set(lesson.studentId, new Set())
-        studentDailyCounts.get(lesson.studentId)?.add(day)
+        const roomId = lesson.roomId || "A"
+        addInterval(roomIntervals, roomId, lesson.startTime.getTime(), lesson.endTime.getTime())
+        const dateKey = getDateKey(lesson.startTime)
+        if (!studentDailyAssignments.has(lesson.studentId)) studentDailyAssignments.set(lesson.studentId, new Set())
+        studentDailyAssignments.get(lesson.studentId)?.add(dateKey)
         studentMonthCounts.set(lesson.studentId, (studentMonthCounts.get(lesson.studentId) || 0) + 1)
 
-        const week = getWeekNumber(lesson.startTime)
+        const week = getWeekNumberInMonth(year, month, lesson.startTime)
         if (!studentWeeklyCounts.has(lesson.studentId)) studentWeeklyCounts.set(lesson.studentId, new Map())
         const weekCounts = studentWeeklyCounts.get(lesson.studentId)!
         weekCounts.set(week, (weekCounts.get(week) || 0) + 1)
     }
 
     for (const locked of lockedAssignments) {
-        occupiedSlots.add(`${locked.startTime.getTime()}__${locked.roomId}`)
-        const day = locked.startTime.getDate()
-        if (!studentDailyCounts.has(locked.studentId)) studentDailyCounts.set(locked.studentId, new Set())
-        studentDailyCounts.get(locked.studentId)?.add(day)
+        addInterval(roomIntervals, locked.roomId, locked.startTime.getTime(), locked.endTime.getTime())
+        const dateKey = getDateKey(locked.startTime)
+        if (!studentDailyAssignments.has(locked.studentId)) studentDailyAssignments.set(locked.studentId, new Set())
+        studentDailyAssignments.get(locked.studentId)?.add(dateKey)
         studentMonthCounts.set(locked.studentId, (studentMonthCounts.get(locked.studentId) || 0) + 1)
 
-        const week = getWeekNumber(locked.startTime)
+        const week = getWeekNumberInMonth(year, month, locked.startTime)
         if (!studentWeeklyCounts.has(locked.studentId)) studentWeeklyCounts.set(locked.studentId, new Map())
         const weekCounts = studentWeeklyCounts.get(locked.studentId)!
         weekCounts.set(week, (weekCounts.get(week) || 0) + 1)
     }
 
-    const getMode = (values: number[]) => {
-        const counts = new Map<number, number>()
+    const getModeFromNumberList = (values: number[]) => {
+        const countMap = new Map<number, number>()
         for (const value of values) {
-            counts.set(value, (counts.get(value) || 0) + 1)
+            countMap.set(value, (countMap.get(value) || 0) + 1)
         }
-        const sorted = Array.from(counts.entries()).sort((a, b) => b[1] - a[1])
+        const sorted = Array.from(countMap.entries()).sort((a, b) => b[1] - a[1])
         return sorted[0]?.[0]
     }
 
-    const preferredWeekdayByStudent = new Map<string, number>()
+    const getModeFromStringList = (values: string[]) => {
+        const countMap = new Map<string, number>()
+        for (const value of values) {
+            countMap.set(value, (countMap.get(value) || 0) + 1)
+        }
+        const sorted = Array.from(countMap.entries()).sort((a, b) => b[1] - a[1])
+        return sorted[0]?.[0]
+    }
+
+    const studentAnchors = new Map<string, StudentAnchor>()
+
     for (const student of students) {
-        const existingDays = existingLessons
+        const previousPatterns = previousMonthLessons
             .filter((lesson) => lesson.studentId === student.id)
-            .map((lesson) => getDay(lesson.startTime))
-        if (existingDays.length > 0) {
-            const mode = getMode(existingDays)
-            if (mode !== undefined) preferredWeekdayByStudent.set(student.id, mode)
-            continue
+            .map((lesson) => `${getDay(lesson.startTime)}__${toMinuteOfDay(lesson.startTime)}`)
+        const previousMode = getModeFromStringList(previousPatterns)
+        if (previousMode) {
+            const [dayRaw, minuteRaw] = previousMode.split("__")
+            const dayOfWeek = Number(dayRaw)
+            const minuteOfDay = Number(minuteRaw)
+            if (Number.isFinite(dayOfWeek) && Number.isFinite(minuteOfDay)) {
+                studentAnchors.set(student.id, {
+                    dayOfWeek,
+                    minuteOfDay,
+                    source: "previous-month",
+                })
+                continue
+            }
         }
 
-        const candidateDays = allSuggestions
-            .filter((suggestion) => suggestion.studentId === student.id)
-            .map((suggestion) => getDay(suggestion.slot.startTime))
-        const candidateMode = getMode(candidateDays)
-        if (candidateMode !== undefined) preferredWeekdayByStudent.set(student.id, candidateMode)
+        const general = student.availabilities[0]
+        const preferredDays = Array.isArray(general?.days) ? (general?.days as string[]) : []
+        const dayFromGeneral = getModeFromNumberList(
+            preferredDays
+                .map((dayName) => dayNameToIndex(dayName))
+                .filter((day): day is number => day !== null)
+        )
+        const minuteFromGeneral = parseHHMMToMinuteOfDay(general?.startTime)
+        if (dayFromGeneral !== undefined && minuteFromGeneral !== null) {
+            studentAnchors.set(student.id, {
+                dayOfWeek: dayFromGeneral,
+                minuteOfDay: minuteFromGeneral,
+                source: "default-preference",
+            })
+        }
     }
-
-    const initialOccupied = new Set<string>()
-    for (const lesson of existingLessons) {
-        initialOccupied.add(`${lesson.startTime.getTime()}__${lesson.roomId || "A"}`)
-    }
-    for (const locked of lockedAssignments) {
-        initialOccupied.add(`${locked.startTime.getTime()}__${locked.roomId}`)
-    }
-    const isAdjacentToInitial = (time: number, roomId: string) =>
-        initialOccupied.has(`${time - 30 * 60000}__${roomId}`) || initialOccupied.has(`${time + 30 * 60000}__${roomId}`)
-
-    const sortedCandidates = [...allSuggestions].sort((a, b) => {
-        const scarcityA = studentScarcity.get(a.studentId) || 999
-        const scarcityB = studentScarcity.get(b.studentId) || 999
-        if (scarcityA !== scarcityB) return scarcityA - scarcityB
-
-        const preferredA = preferredWeekdayByStudent.get(a.studentId)
-        const preferredB = preferredWeekdayByStudent.get(b.studentId)
-        const fixedA = preferredA !== undefined && preferredA === getDay(a.slot.startTime) ? 1 : 0
-        const fixedB = preferredB !== undefined && preferredB === getDay(b.slot.startTime) ? 1 : 0
-        if (fixedA !== fixedB) return fixedB - fixedA
-
-        const adjA = isAdjacentToInitial(a.slot.startTime.getTime(), a.slot.roomId) ? 1 : 0
-        const adjB = isAdjacentToInitial(b.slot.startTime.getTime(), b.slot.roomId) ? 1 : 0
-        if (adjA !== adjB) return adjB - adjA
-
-        return a.slot.startTime.getTime() - b.slot.startTime.getTime()
-    })
 
     const finalRecommendations = new Set<string>()
 
-    const canAssign = (candidate: ScheduleSuggestion, strictDistribution: boolean) => {
-        const slotTime = candidate.slot.startTime.getTime()
-        const occupiedKey = `${slotTime}__${candidate.slot.roomId}`
-        const day = candidate.slot.startTime.getDate()
-        const week = getWeekNumber(candidate.slot.startTime)
+    const canAssignHard = (candidate: ScheduleSuggestion) => {
         const student = studentById.get(candidate.studentId)
         if (!student) return false
 
-        const maxLessons = student.defaultLessonCount || 4
-        const currentMonthCount = studentMonthCounts.get(candidate.studentId) || 0
-        if (currentMonthCount >= maxLessons) return false
-        if (occupiedSlots.has(occupiedKey)) return false
-        if (studentDailyCounts.get(candidate.studentId)?.has(day)) return false
+        const targetMonthlyCount = student.defaultLessonCount || 4
+        const currentMonthlyCount = studentMonthCounts.get(candidate.studentId) || 0
+        if (currentMonthlyCount >= targetMonthlyCount) return false
 
-        if (strictDistribution) {
-            const currentWeekCount = studentWeeklyCounts.get(candidate.studentId)?.get(week) || 0
-            if (currentWeekCount >= 1) return false
-        }
+        const dateKey = getDateKey(candidate.slot.startTime)
+        const currentDailySet = studentDailyAssignments.get(candidate.studentId)
+        if ((currentDailySet?.has(dateKey) ?? false) && MAX_LESSONS_PER_DAY <= 1) return false
+
+        const weekIndex = getWeekNumberInMonth(year, month, candidate.slot.startTime)
+        const weeklyCap = getWeeklyCap(targetMonthlyCount, weekCountInMonth)
+        const currentWeekCount = studentWeeklyCounts.get(candidate.studentId)?.get(weekIndex) || 0
+        if (currentWeekCount >= weeklyCap) return false
+
+        const roomId = candidate.slot.roomId
+        const startTime = candidate.slot.startTime.getTime()
+        const endTime = candidate.slot.endTime.getTime()
+        if (hasIntervalOverlap(roomIntervals.get(roomId), startTime, endTime)) return false
 
         return true
     }
 
-    const scoreCandidate = (candidate: ScheduleSuggestion, strictDistribution: boolean) => {
-        const slotTime = candidate.slot.startTime.getTime()
-        const roomId = candidate.slot.roomId
-        const week = getWeekNumber(candidate.slot.startTime)
-        const preferredDay = preferredWeekdayByStudent.get(candidate.studentId)
-        const dayOfWeek = getDay(candidate.slot.startTime)
-        const weekCount = studentWeeklyCounts.get(candidate.studentId)?.get(week) || 0
-        const adjacentBefore = occupiedSlots.has(`${slotTime - 30 * 60000}__${roomId}`) ? 1 : 0
-        const adjacentAfter = occupiedSlots.has(`${slotTime + 30 * 60000}__${roomId}`) ? 1 : 0
-        const adjacentCount = adjacentBefore + adjacentAfter
-        const closesGap = adjacentCount === 2 ? 1 : 0
-        const fixedWeekday = preferredDay !== undefined && preferredDay === dayOfWeek ? 1 : 0
+    const isAnchorExact = (anchor: StudentAnchor | undefined, slotStart: Date) => {
+        if (!anchor) return false
+        return getDay(slotStart) === anchor.dayOfWeek && toMinuteOfDay(slotStart) === anchor.minuteOfDay
+    }
 
-        return (
-            fixedWeekday * 100 +
-            closesGap * 40 +
-            adjacentCount * 20 -
-            weekCount * (strictDistribution ? 50 : 20) -
-            candidate.slot.startTime.getTime() / 10_000_000_000
-        )
+    const scoreCandidate = (candidate: ScheduleSuggestion, hasExactAnchorInPool: boolean) => {
+        const student = studentById.get(candidate.studentId)
+        if (!student) return Number.NEGATIVE_INFINITY
+
+        let score = 0
+        const weekIndex = getWeekNumberInMonth(year, month, candidate.slot.startTime)
+        const weekCount = studentWeeklyCounts.get(candidate.studentId)?.get(weekIndex) || 0
+        const anchor = studentAnchors.get(candidate.studentId)
+        const candidateMinute = toMinuteOfDay(candidate.slot.startTime)
+        const candidateDay = getDay(candidate.slot.startTime)
+
+        // Primary heuristic: keep anchor (same weekday + same start time), then local search.
+        if (anchor && candidateDay === anchor.dayOfWeek) {
+            const delta = Math.abs(candidateMinute - anchor.minuteOfDay)
+            if (delta === 0) {
+                score += 1200
+            } else if (delta <= ANCHOR_NEARBY_MAX_MINUTES && !hasExactAnchorInPool) {
+                score += 850 - delta * 6
+                if (delta <= ANCHOR_NEARBY_HIGH_BAND_MINUTES) score += 120
+            } else if (delta <= ANCHOR_NEARBY_MAX_MINUTES) {
+                score += 80
+            }
+        }
+        if (anchor?.source === "previous-month") score += 40
+
+        // Hard-distribution tie-breaker: favor weeks with fewer assignments.
+        score -= weekCount * 150
+
+        // Secondary heuristic: teacher idle minimization.
+        const roomId = candidate.slot.roomId
+        const startMs = candidate.slot.startTime.getTime()
+        const endMs = candidate.slot.endTime.getTime()
+        const intervals = roomIntervals.get(roomId)
+        const contiguity = getContiguity(intervals, startMs, endMs)
+        const adjacentCount = (contiguity.before ? 1 : 0) + (contiguity.after ? 1 : 0)
+        score += adjacentCount * 140
+        if (adjacentCount === 2) score += 60
+
+        const fragmentationPenalty = getFragmentationPenalty(intervals, startMs, endMs, SLOT_DURATION_MS)
+        score -= fragmentationPenalty * 180
+
+        score -= candidate.slot.startTime.getTime() / 10_000_000_000
+        return score
     }
 
     const acceptCandidate = (candidate: ScheduleSuggestion) => {
-        const slotTime = candidate.slot.startTime.getTime()
-        const occupiedKey = `${slotTime}__${candidate.slot.roomId}`
-        const day = candidate.slot.startTime.getDate()
-        const week = getWeekNumber(candidate.slot.startTime)
-        const currentMonthCount = studentMonthCounts.get(candidate.studentId) || 0
+        const studentId = candidate.studentId
+        const dateKey = getDateKey(candidate.slot.startTime)
+        const weekIndex = getWeekNumberInMonth(year, month, candidate.slot.startTime)
+        const roomId = candidate.slot.roomId
+        const startMs = candidate.slot.startTime.getTime()
+        const endMs = candidate.slot.endTime.getTime()
 
         finalRecommendations.add(candidate.id)
-        occupiedSlots.add(occupiedKey)
-        if (!studentDailyCounts.has(candidate.studentId)) studentDailyCounts.set(candidate.studentId, new Set())
-        studentDailyCounts.get(candidate.studentId)?.add(day)
-        studentMonthCounts.set(candidate.studentId, currentMonthCount + 1)
-        if (!studentWeeklyCounts.has(candidate.studentId)) studentWeeklyCounts.set(candidate.studentId, new Map())
-        const weekCounts = studentWeeklyCounts.get(candidate.studentId)!
-        weekCounts.set(week, (weekCounts.get(week) || 0) + 1)
+        addInterval(roomIntervals, roomId, startMs, endMs)
+
+        if (!studentDailyAssignments.has(studentId)) studentDailyAssignments.set(studentId, new Set())
+        studentDailyAssignments.get(studentId)?.add(dateKey)
+
+        studentMonthCounts.set(studentId, (studentMonthCounts.get(studentId) || 0) + 1)
+        if (!studentWeeklyCounts.has(studentId)) studentWeeklyCounts.set(studentId, new Map())
+        const weekly = studentWeeklyCounts.get(studentId)!
+        weekly.set(weekIndex, (weekly.get(weekIndex) || 0) + 1)
+    }
+
+    const candidatePoolByStudent = new Map<string, ScheduleSuggestion[]>()
+    for (const suggestion of allSuggestions) {
+        const list = candidatePoolByStudent.get(suggestion.studentId) || []
+        list.push(suggestion)
+        candidatePoolByStudent.set(suggestion.studentId, list)
     }
 
     const studentOrder = students
         .map((student) => student.id)
         .sort((a, b) => (studentScarcity.get(a) || 999) - (studentScarcity.get(b) || 999))
 
-    const processCandidates = (strictDistribution: boolean) => {
+    let madeProgress = true
+    while (madeProgress) {
+        madeProgress = false
         for (const studentId of studentOrder) {
-            while (true) {
-                const pool = sortedCandidates
-                    .filter((candidate) => candidate.studentId === studentId && !finalRecommendations.has(candidate.id))
-                    .filter((candidate) => canAssign(candidate, strictDistribution))
+            const student = studentById.get(studentId)
+            if (!student) continue
+            const targetMonthlyCount = student.defaultLessonCount || 4
+            const currentMonthlyCount = studentMonthCounts.get(studentId) || 0
+            if (currentMonthlyCount >= targetMonthlyCount) continue
 
-                if (pool.length === 0) break
+            const pool = (candidatePoolByStudent.get(studentId) || [])
+                .filter((candidate) => !finalRecommendations.has(candidate.id))
+                .filter((candidate) => canAssignHard(candidate))
 
-                pool.sort((a, b) => {
-                    const scoreDiff = scoreCandidate(b, strictDistribution) - scoreCandidate(a, strictDistribution)
-                    if (scoreDiff !== 0) return scoreDiff
-                    return a.slot.startTime.getTime() - b.slot.startTime.getTime()
-                })
+            if (pool.length === 0) continue
 
-                acceptCandidate(pool[0])
+            // Hard phase first: restrict to least-filled weeks for even weekly spread.
+            let minWeekCount = Number.POSITIVE_INFINITY
+            for (const candidate of pool) {
+                const weekIndex = getWeekNumberInMonth(year, month, candidate.slot.startTime)
+                const weekCount = studentWeeklyCounts.get(studentId)?.get(weekIndex) || 0
+                minWeekCount = Math.min(minWeekCount, weekCount)
             }
+            const evenlyDistributedPool = pool.filter((candidate) => {
+                const weekIndex = getWeekNumberInMonth(year, month, candidate.slot.startTime)
+                const weekCount = studentWeeklyCounts.get(studentId)?.get(weekIndex) || 0
+                return weekCount === minWeekCount
+            })
+
+            const anchor = studentAnchors.get(studentId)
+            const hasExactAnchorInPool = !!anchor && evenlyDistributedPool.some((candidate) =>
+                isAnchorExact(anchor, candidate.slot.startTime)
+            )
+
+            evenlyDistributedPool.sort((a, b) => {
+                const scoreDiff = scoreCandidate(b, hasExactAnchorInPool) - scoreCandidate(a, hasExactAnchorInPool)
+                if (scoreDiff !== 0) return scoreDiff
+                return a.slot.startTime.getTime() - b.slot.startTime.getTime()
+            })
+
+            acceptCandidate(evenlyDistributedPool[0])
+            madeProgress = true
         }
     }
 
-    processCandidates(true)
-    processCandidates(false)
+    // Fallback pass: fill what can be filled under hard constraints.
+    for (const studentId of studentOrder) {
+        const student = studentById.get(studentId)
+        if (!student) continue
 
-    for (const candidate of sortedCandidates) {
-        if (finalRecommendations.has(candidate.id)) continue
-        if (!canAssign(candidate, false)) continue
-        acceptCandidate(candidate)
+        const targetMonthlyCount = student.defaultLessonCount || 4
+        while ((studentMonthCounts.get(studentId) || 0) < targetMonthlyCount) {
+            const pool = (candidatePoolByStudent.get(studentId) || [])
+                .filter((candidate) => !finalRecommendations.has(candidate.id))
+                .filter((candidate) => canAssignHard(candidate))
+            if (pool.length === 0) break
+
+            const anchor = studentAnchors.get(studentId)
+            const hasExactAnchorInPool = !!anchor && pool.some((candidate) =>
+                isAnchorExact(anchor, candidate.slot.startTime)
+            )
+
+            pool.sort((a, b) => {
+                const scoreDiff = scoreCandidate(b, hasExactAnchorInPool) - scoreCandidate(a, hasExactAnchorInPool)
+                if (scoreDiff !== 0) return scoreDiff
+                return a.slot.startTime.getTime() - b.slot.startTime.getTime()
+            })
+
+            acceptCandidate(pool[0])
+        }
     }
 
     // Update suggestions with "Conflict" and "Recommended" status
@@ -461,4 +666,3 @@ export async function createBulkLessons(suggestions: ScheduleSuggestion[]) {
         return { success: false, error: "Failed to create lessons" }
     }
 }
-
