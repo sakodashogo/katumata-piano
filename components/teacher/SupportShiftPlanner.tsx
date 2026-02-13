@@ -5,14 +5,18 @@ import { useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
 import {
     addDays,
+    addMonths,
     addMinutes,
     eachDayOfInterval,
+    endOfMonth,
     endOfWeek,
     format,
     isSameDay,
     setHours,
     setMinutes,
+    startOfDay,
     startOfWeek,
+    subMonths,
 } from "date-fns"
 import { ja } from "date-fns/locale"
 import { cn } from "@/lib/utils"
@@ -24,7 +28,7 @@ import {
     replaceSupportShiftsForStaffInRange,
     setSupportStaffActive,
 } from "@/app/lib/actions/support"
-import { ChevronLeft, ChevronRight, RotateCcw, Save } from "lucide-react"
+import { CheckCheck, ChevronLeft, ChevronRight, Copy, Eraser, RotateCcw, Save } from "lucide-react"
 
 type SupportStaff = {
     id: string
@@ -41,7 +45,8 @@ type SupportShift = {
 }
 
 type Props = {
-    initialDate: Date
+    initialYear: number
+    initialMonth: number
     staff: SupportStaff[]
     shifts: SupportShift[]
 }
@@ -73,17 +78,20 @@ function explodeShiftToSlots(start: Date, end: Date) {
     return slots
 }
 
-export function SupportShiftPlanner({ initialDate, staff, shifts }: Props) {
+export function SupportShiftPlanner({ initialYear, initialMonth, staff, shifts }: Props) {
     const router = useRouter()
     const { toast } = useToast()
 
-    const [currentDate, setCurrentDate] = useState(initialDate)
+    const monthStart = useMemo(() => new Date(initialYear, initialMonth - 1, 1), [initialMonth, initialYear])
+    const monthEndInclusive = useMemo(() => endOfMonth(monthStart), [monthStart])
+    const monthEndExclusive = useMemo(() => addDays(monthEndInclusive, 1), [monthEndInclusive])
+    const [weekStart, setWeekStart] = useState(() => startOfWeek(monthStart, { weekStartsOn: 1 }))
     const [newStaffName, setNewStaffName] = useState("")
     const activeStaff = useMemo(() => staff.filter((member) => member.active), [staff])
     const [selectedStaffId, setSelectedStaffId] = useState(activeStaff[0]?.id ?? staff[0]?.id ?? "")
     const [isSaving, setIsSaving] = useState(false)
 
-    const [monthValue, setMonthValue] = useState(format(new Date(), "yyyy-MM"))
+    const [monthValue, setMonthValue] = useState(format(monthStart, "yyyy-MM"))
     const [weekdayFlags, setWeekdayFlags] = useState<Record<number, boolean>>({
         1: true, 2: true, 3: true, 4: true, 5: true, 6: false, 0: false,
     })
@@ -96,21 +104,22 @@ export function SupportShiftPlanner({ initialDate, staff, shifts }: Props) {
     const [startCell, setStartCell] = useState<CellPos | null>(null)
     const [currentCell, setCurrentCell] = useState<CellPos | null>(null)
 
-    const weekStart = useMemo(
-        () => startOfWeek(currentDate, { weekStartsOn: 1 }),
-        [currentDate],
-    )
     const weekEnd = useMemo(
-        () => endOfWeek(currentDate, { weekStartsOn: 1 }),
-        [currentDate],
+        () => endOfWeek(weekStart, { weekStartsOn: 1 }),
+        [weekStart],
     )
-    const weekEndExclusive = useMemo(() => addDays(weekStart, 7), [weekStart])
-    const weekStartMs = weekStart.getTime()
-    const weekEndExclusiveMs = weekEndExclusive.getTime()
+    const monthStartMs = monthStart.getTime()
+    const monthEndExclusiveMs = monthEndExclusive.getTime()
     const days = useMemo(
         () => eachDayOfInterval({ start: weekStart, end: weekEnd }),
         [weekStart, weekEnd],
     )
+    const isDayInMonth = (day: Date) => day.getFullYear() === initialYear && day.getMonth() === initialMonth - 1
+
+    useEffect(() => {
+        setWeekStart(startOfWeek(monthStart, { weekStartsOn: 1 }))
+        setMonthValue(format(monthStart, "yyyy-MM"))
+    }, [monthStart])
 
     useEffect(() => {
         if (!selectedStaffId) {
@@ -129,13 +138,13 @@ export function SupportShiftPlanner({ initialDate, staff, shifts }: Props) {
             if (shift.staffId !== selectedStaffId) continue
             const shiftStart = new Date(shift.startTime)
             const shiftEnd = new Date(shift.endTime)
-            const clippedStart = shiftStart.getTime() > weekStartMs ? shiftStart : new Date(weekStartMs)
-            const clippedEnd = shiftEnd.getTime() < weekEndExclusiveMs ? shiftEnd : new Date(weekEndExclusiveMs)
+            const clippedStart = shiftStart.getTime() > monthStartMs ? shiftStart : new Date(monthStartMs)
+            const clippedEnd = shiftEnd.getTime() < monthEndExclusiveMs ? shiftEnd : new Date(monthEndExclusiveMs)
             if (clippedEnd <= clippedStart) continue
             explodeShiftToSlots(clippedStart, clippedEnd).forEach((iso) => set.add(iso))
         }
         return set
-    }, [selectedStaffId, shifts, weekStartMs, weekEndExclusiveMs])
+    }, [monthEndExclusiveMs, monthStartMs, selectedStaffId, shifts])
 
     useEffect(() => {
         setDraftSlots((prev) => {
@@ -168,17 +177,22 @@ export function SupportShiftPlanner({ initialDate, staff, shifts }: Props) {
             for (let col = minCol; col <= maxCol; col++) {
                 const day = days[col]
                 if (!day) continue
+                if (!isDayInMonth(day)) continue
                 keys.add(getCellIso(day, hour, minute))
             }
         }
         return keys
-    }, [currentCell, days, isPainting, startCell])
+    }, [currentCell, days, initialMonth, initialYear, isPainting, startCell])
 
     const handleWeekMove = (offsetDays: number) => {
-        const nextDate = addDays(currentDate, offsetDays)
-        const dateParam = format(nextDate, "yyyy-MM-dd")
-        router.push(`/teacher/support?date=${dateParam}`)
-        setCurrentDate(nextDate)
+        setWeekStart((prev) => addDays(prev, offsetDays))
+    }
+
+    const handleMonthMove = (direction: "prev" | "next") => {
+        const nextMonth = direction === "next" ? addMonths(monthStart, 1) : subMonths(monthStart, 1)
+        const nextYear = nextMonth.getFullYear()
+        const nextMonthValue = nextMonth.getMonth() + 1
+        router.push(`/teacher/support?year=${nextYear}&month=${nextMonthValue}`)
     }
 
     const handleCreateStaff = async () => {
@@ -241,7 +255,7 @@ export function SupportShiftPlanner({ initialDate, staff, shifts }: Props) {
         const day = days[col]
         const hour = HOURS[Math.floor(row / 2)]
         const minute = row % 2 === 0 ? 0 : 30
-        if (!day || hour === undefined) return
+        if (!day || hour === undefined || !isDayInMonth(day)) return
         const iso = getCellIso(day, hour, minute)
         setIsPainting(true)
         setPaintMode(draftSlots.has(iso) ? "remove" : "add")
@@ -277,9 +291,56 @@ export function SupportShiftPlanner({ initialDate, staff, shifts }: Props) {
             window.removeEventListener("touchend", handleMouseUp)
             window.removeEventListener("touchcancel", handleMouseUp)
         }
-    })
+    }, [commitPaint])
 
-    const handleSaveWeek = async () => {
+    const batchSetWeek = (mode: "fill" | "clear") => {
+        const next = new Set(draftSlots)
+        for (const day of days) {
+            if (!isDayInMonth(day)) continue
+            for (const hour of HOURS) {
+                for (const minute of MINUTES) {
+                    const iso = getCellIso(day, hour, minute)
+                    if (mode === "fill") next.add(iso)
+                    else next.delete(iso)
+                }
+            }
+        }
+        setDraftSlots(next)
+    }
+
+    const applyWeekPatternToMonth = () => {
+        const weekPattern = new Map<number, Map<string, boolean>>()
+        for (const day of days) {
+            const dayPattern = new Map<string, boolean>()
+            for (const hour of HOURS) {
+                for (const minute of MINUTES) {
+                    const key = `${hour}:${minute}`
+                    const iso = getCellIso(day, hour, minute)
+                    dayPattern.set(key, draftSlots.has(iso))
+                }
+            }
+            weekPattern.set(day.getDay(), dayPattern)
+        }
+
+        const next = new Set(draftSlots)
+        let cursor = startOfDay(monthStart)
+        while (cursor <= monthEndInclusive) {
+            const pattern = weekPattern.get(cursor.getDay())
+            if (pattern) {
+                for (const hour of HOURS) {
+                    for (const minute of MINUTES) {
+                        const iso = getCellIso(cursor, hour, minute)
+                        if (pattern.get(`${hour}:${minute}`)) next.add(iso)
+                        else next.delete(iso)
+                    }
+                }
+            }
+            cursor = addDays(cursor, 1)
+        }
+        setDraftSlots(next)
+    }
+
+    const handleSaveMonth = async () => {
         if (!selectedStaffId) {
             toast.error("講師を選択してください。")
             return
@@ -287,16 +348,21 @@ export function SupportShiftPlanner({ initialDate, staff, shifts }: Props) {
         setIsSaving(true)
         const result = await replaceSupportShiftsForStaffInRange({
             staffId: selectedStaffId,
-            rangeStartIso: weekStart.toISOString(),
-            rangeEndIso: weekEndExclusive.toISOString(),
-            slotStartIsos: Array.from(draftSlots).sort(),
+            rangeStartIso: monthStart.toISOString(),
+            rangeEndIso: monthEndExclusive.toISOString(),
+            slotStartIsos: Array.from(draftSlots)
+                .filter((iso) => {
+                    const date = new Date(iso)
+                    return date >= monthStart && date < monthEndExclusive
+                })
+                .sort(),
         })
         setIsSaving(false)
         if (!result.success) {
             toast.error(result.error || "保存に失敗しました。")
             return
         }
-        toast.success("週次シフトを保存しました。")
+        toast.success(`${initialYear}年${initialMonth}月のシフトを保存しました。`)
         router.refresh()
     }
 
@@ -391,6 +457,28 @@ export function SupportShiftPlanner({ initialDate, staff, shifts }: Props) {
             </div>
 
             <div className="space-y-4">
+                <div className="flex items-center justify-between rounded-xl border bg-white p-4 shadow-sm">
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleMonthMove("prev")}
+                    >
+                        <ChevronLeft className="mr-1 h-4 w-4" />
+                        前月
+                    </Button>
+                    <div className="text-lg font-bold text-slate-900">
+                        {initialYear}年 {initialMonth}月
+                    </div>
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleMonthMove("next")}
+                    >
+                        次月
+                        <ChevronRight className="ml-1 h-4 w-4" />
+                    </Button>
+                </div>
+
                 <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-white p-4 shadow-sm">
                     <div className="flex items-center gap-2 rounded border bg-slate-50 px-2 py-1">
                         <Button variant="ghost" size="sm" onClick={() => handleWeekMove(-7)}>
@@ -412,11 +500,26 @@ export function SupportShiftPlanner({ initialDate, staff, shifts }: Props) {
                             <RotateCcw className="mr-2 h-4 w-4" />
                             変更を破棄
                         </Button>
-                        <Button onClick={handleSaveWeek} disabled={isSaving || pendingCount === 0 || !selectedStaffId}>
+                        <Button onClick={handleSaveMonth} disabled={isSaving || pendingCount === 0 || !selectedStaffId}>
                             <Save className="mr-2 h-4 w-4" />
-                            {isSaving ? "保存中..." : `保存 (${pendingCount})`}
+                            {isSaving ? "保存中..." : `月を保存 (${pendingCount})`}
                         </Button>
                     </div>
+                </div>
+
+                <div className="flex flex-wrap gap-2 rounded-xl border bg-white p-3 shadow-sm">
+                    <Button size="sm" variant="outline" onClick={() => batchSetWeek("fill")} disabled={!selectedStaffId}>
+                        <CheckCheck className="mr-1 h-3.5 w-3.5" />
+                        この週を全て勤務
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => batchSetWeek("clear")} disabled={!selectedStaffId}>
+                        <Eraser className="mr-1 h-3.5 w-3.5" />
+                        この週をクリア
+                    </Button>
+                    <Button size="sm" variant="secondary" onClick={applyWeekPatternToMonth} disabled={!selectedStaffId}>
+                        <Copy className="mr-1 h-3.5 w-3.5" />
+                        この週のパターンを月全体に適用
+                    </Button>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-white p-3 text-xs">
@@ -451,6 +554,7 @@ export function SupportShiftPlanner({ initialDate, staff, shifts }: Props) {
                                                 {minute === 0 ? `${hour}:00` : `${hour}:30`}
                                             </td>
                                             {days.map((day, colIndex) => {
+                                                const inMonth = isDayInMonth(day)
                                                 const iso = getCellIso(day, hour, minute)
                                                 const hasBase = baseSlotSet.has(iso)
                                                 const hasDraft = draftSlots.has(iso)
@@ -462,25 +566,31 @@ export function SupportShiftPlanner({ initialDate, staff, shifts }: Props) {
                                                             data-col={colIndex}
                                                             onMouseDown={(e) => {
                                                                 if (e.button !== 0) return
+                                                                if (!inMonth) return
                                                                 e.preventDefault()
                                                                 startPaint(rowIndex, colIndex)
                                                             }}
                                                             onMouseEnter={() => {
                                                                 if (!isPainting) return
+                                                                if (!inMonth) return
                                                                 setCurrentCell({ row: rowIndex, col: colIndex })
                                                             }}
-                                                            onTouchStart={() => startPaint(rowIndex, colIndex)}
+                                                            onTouchStart={() => {
+                                                                if (!inMonth) return
+                                                                startPaint(rowIndex, colIndex)
+                                                            }}
                                                             className={cn(
                                                                 "relative h-8 rounded border transition-colors",
+                                                                !inMonth && "border-slate-100 bg-slate-50 opacity-40",
                                                                 hasDraft ? "border-cyan-300 bg-cyan-50" : "border-dashed border-slate-200",
                                                                 inRect && paintMode === "add" && "border-emerald-300 bg-emerald-100",
                                                                 inRect && paintMode === "remove" && "border-rose-300 bg-rose-100",
                                                             )}
                                                         >
-                                                            {hasDraft && !inRect && <span className="text-[10px] font-semibold text-cyan-700">勤務</span>}
-                                                            {inRect && paintMode === "add" && <span className="text-[10px] font-semibold text-emerald-700">追加</span>}
-                                                            {inRect && paintMode === "remove" && <span className="text-[10px] font-semibold text-rose-700">削除</span>}
-                                                            {!hasDraft && hasBase && !inRect && (
+                                                            {inMonth && hasDraft && !inRect && <span className="text-[10px] font-semibold text-cyan-700">勤務</span>}
+                                                            {inMonth && inRect && paintMode === "add" && <span className="text-[10px] font-semibold text-emerald-700">追加</span>}
+                                                            {inMonth && inRect && paintMode === "remove" && <span className="text-[10px] font-semibold text-rose-700">削除</span>}
+                                                            {inMonth && !hasDraft && hasBase && !inRect && (
                                                                 <span className="text-[10px] font-semibold text-rose-600">削除予定</span>
                                                             )}
                                                         </div>

@@ -1,7 +1,7 @@
 import { auth } from "@/auth"
 import { getSupportShiftsInRange, getSupportStaff } from "@/app/lib/actions/support"
 import { SupportShiftPlanner } from "@/components/teacher/SupportShiftPlanner"
-import { endOfWeek, startOfWeek } from "date-fns"
+import { addDays, endOfMonth, startOfMonth } from "date-fns"
 import { redirect } from "next/navigation"
 
 type ShiftRow = {
@@ -23,16 +23,27 @@ export default async function SupportPage({
     }
 
     const params = await searchParams
+    const yearParamRaw = params.year
+    const monthParamRaw = params.month
+    const yearParam = Number(Array.isArray(yearParamRaw) ? yearParamRaw[0] : yearParamRaw)
+    const monthParam = Number(Array.isArray(monthParamRaw) ? monthParamRaw[0] : monthParamRaw)
+
     const dateParamRaw = params.date
     const dateParam = Array.isArray(dateParamRaw) ? dateParamRaw[0] : dateParamRaw
-    const parsed = dateParam ? new Date(dateParam) : new Date()
-    const baseDate = Number.isNaN(parsed.getTime()) ? new Date() : parsed
-    const weekStart = startOfWeek(baseDate, { weekStartsOn: 1 })
-    const weekEnd = endOfWeek(baseDate, { weekStartsOn: 1 })
+    const parsedDate = dateParam ? new Date(dateParam) : new Date()
+    const fallbackDate = Number.isNaN(parsedDate.getTime()) ? new Date() : parsedDate
+
+    const currentYear = Number.isFinite(yearParam) && yearParam >= 2000 ? yearParam : fallbackDate.getFullYear()
+    const currentMonth = Number.isFinite(monthParam) && monthParam >= 1 && monthParam <= 12
+        ? monthParam
+        : fallbackDate.getMonth() + 1
+
+    const monthStart = startOfMonth(new Date(currentYear, currentMonth - 1, 1))
+    const monthEndExclusive = addDays(endOfMonth(monthStart), 1)
 
     const [staffRes, shiftsRes] = await Promise.all([
         getSupportStaff(),
-        getSupportShiftsInRange(weekStart.toISOString(), weekEnd.toISOString()),
+        getSupportShiftsInRange(monthStart.toISOString(), monthEndExclusive.toISOString()),
     ])
 
     const staff = staffRes.success ? (staffRes.data ?? []) : []
@@ -42,11 +53,12 @@ export default async function SupportPage({
         <div className="space-y-6">
             <div>
                 <h1 className="text-2xl font-bold text-slate-900">サポート講師シフト</h1>
-                <p className="text-slate-500">講師登録と週次シフトをカレンダーで管理します。</p>
+                <p className="text-slate-500">講師登録と月次シフト提出をカレンダーで管理します。</p>
             </div>
 
             <SupportShiftPlanner
-                initialDate={baseDate}
+                initialYear={currentYear}
+                initialMonth={currentMonth}
                 staff={staff}
                 shifts={shifts.map((shift) => ({
                     ...shift,
