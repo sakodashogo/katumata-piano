@@ -11,6 +11,7 @@ import { LESSON_STATUS_LABELS } from "@/lib/constants"
 import { StudentEditDialog } from "@/components/teacher/StudentEditDialog"
 import { auth } from "@/auth"
 import { redirect } from "next/navigation"
+import { getTeacherWorkingHoursSafe } from "@/lib/teacher-working-hours"
 
 export default async function StudentDetailPage({
     params,
@@ -42,9 +43,10 @@ export default async function StudentDetailPage({
         ? parsedMonth
         : now.getMonth() + 1
 
-    const [{ data: lessons }, { data: availability }] = await Promise.all([
+    const [{ data: lessons }, { data: availability }, workingHours] = await Promise.all([
         getStudentHistory(id),
-        getMonthlyAvailability(id, year, month)
+        getMonthlyAvailability(id, year, month),
+        getTeacherWorkingHoursSafe(),
     ])
 
     return (
@@ -136,6 +138,7 @@ export default async function StudentDetailPage({
                         year={year}
                         month={month}
                         initialData={availability}
+                        workingHours={workingHours}
                     />
                 </div>
             </div>

@@ -2,6 +2,7 @@ import { auth } from "@/auth"
 import { getMonthlyAvailability } from "@/app/lib/actions/availability"
 import AvailabilityPageClient from "./client"
 import { redirect } from "next/navigation"
+import { getTeacherWorkingHoursSafe } from "@/lib/teacher-working-hours"
 
 export default async function AvailabilityPage({
     searchParams
@@ -25,7 +26,10 @@ export default async function AvailabilityPage({
     const year = params.year ? parseInt(params.year) : now.getFullYear()
     const month = params.month ? parseInt(params.month) : now.getMonth() + 1
 
-    const result = await getMonthlyAvailability(studentId, year, month)
+    const [result, workingHours] = await Promise.all([
+        getMonthlyAvailability(studentId, year, month),
+        getTeacherWorkingHoursSafe(),
+    ])
     const data = result.success ? result.data : null
 
     return (
@@ -34,6 +38,7 @@ export default async function AvailabilityPage({
             year={year}
             month={month}
             studentId={studentId}
+            workingHours={workingHours}
         />
     )
 }

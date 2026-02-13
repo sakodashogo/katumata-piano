@@ -8,6 +8,7 @@ import { isStudentBookableMenu, toLessonTypeFromMenu } from "@/lib/menu-category
 import { notifyEvent } from "@/lib/notifications"
 import { getSupportShiftsInRangeSafe } from "@/lib/support-shifts"
 import { getClosedDaysInRangeSafe, isSlotClosed } from "@/lib/closed-days"
+import { getTeacherWorkingHoursSafe, isWithinTeacherWorkingHours } from "@/lib/teacher-working-hours"
 import {
     buildBookableStartTimes,
     filterSlotsBySupport,
@@ -21,6 +22,15 @@ import {
     getMonthRange,
     isWithinStudentModificationWindow,
 } from "./booking-internal/date-utils"
+
+type SlotLike = {
+    startTime: Date
+    endTime: Date
+}
+
+function filterByTeacherWorkingHours<T extends SlotLike>(slots: T[], workingHours: Awaited<ReturnType<typeof getTeacherWorkingHoursSafe>>) {
+    return slots.filter((slot) => isWithinTeacherWorkingHours(workingHours, slot.startTime, slot.endTime))
+}
 
 export async function getMenus() {
     try {
@@ -94,18 +104,32 @@ export async function getAvailableSlots(dateStr: string) {
         const end = new Date(dateStr)
         end.setHours(23, 59, 59, 999)
 
-        const slots = await prisma.openSlot.findMany({
-            where: {
-                isBooked: false,
-                isPublic: true,
-                startTime: {
-                    gte: start,
-                    lte: end,
+        const [slots, workingHours] = await Promise.all([
+            prisma.openSlot.findMany({
+                where: {
+                    isBooked: false,
+                    isPublic: true,
+                    startTime: {
+                        gte: start,
+                        lte: end,
+                    },
                 },
-            },
-            orderBy: { startTime: "asc" },
-        })
-        return { success: true, data: slots }
+                orderBy: { startTime: "asc" },
+            }),
+            getTeacherWorkingHoursSafe(),
+        ])
+
+        return {
+            success: true,
+            data: filterByTeacherWorkingHours(
+                slots.map((slot) => ({
+                    ...slot,
+                    startTime: new Date(slot.startTime),
+                    endTime: new Date(slot.endTime),
+                })),
+                workingHours
+            ),
+        }
     } catch {
         return { success: false, error: "Failed to fetch slots" }
     }
@@ -116,20 +140,29 @@ export async function getAvailableSlotsInRange(startStr: string, endStr: string)
         const start = new Date(startStr)
         const end = new Date(endStr)
 
-        const slots = await prisma.openSlot.findMany({
-            where: {
-                isBooked: false,
-                isPublic: true,
-                startTime: {
-                    gte: start,
-                    lte: end,
+        const [slots, workingHours] = await Promise.all([
+            prisma.openSlot.findMany({
+                where: {
+                    isBooked: false,
+                    isPublic: true,
+                    startTime: {
+                        gte: start,
+                        lte: end,
+                    },
                 },
-            },
-            select: {
-                startTime: true
-            }
+                select: {
+                    startTime: true
+                }
+            }),
+            getTeacherWorkingHoursSafe(),
+        ])
+
+        const filtered = slots.filter((slot) => {
+            const slotStart = new Date(slot.startTime)
+            const slotEnd = new Date(slotStart.getTime() + 30 * 60 * 1000)
+            return isWithinTeacherWorkingHours(workingHours, slotStart, slotEnd)
         })
-        return { success: true, data: slots }
+        return { success: true, data: filtered }
     } catch {
         return { success: false, error: "Failed to fetch slots" }
     }
@@ -167,7 +200,10 @@ export async function getBookableStartTimes(dateStr: string, menuId: string, dat
             where: {
                 isBooked: false,
                 isPublic: true,
-                startTime: { gte: start, lt: end },
+                startTime: {
+                    gte: start,
+                    lt: end,
+                },
                 OR: [{ menuId: null }, { menuId }],
             },
             select: {
@@ -179,11 +215,15 @@ export async function getBookableStartTimes(dateStr: string, menuId: string, dat
             orderBy: { startTime: "asc" },
         })
 
-        const [supportShifts, closedDays] = await Promise.all([
+        const [supportShifts, closedDays, workingHours] = await Promise.all([
             getSupportShiftsInRangeSafe(start, end),
             getClosedDaysInRangeSafe(start, end, { scope: "student" }),
+            getTeacherWorkingHoursSafe(),
         ])
-        const filtered = filterSlotsBySupport(slots, supportShifts, lessonType)
+        const filtered = filterByTeacherWorkingHours(
+            filterSlotsBySupport(slots, supportShifts, lessonType),
+            workingHours
+        )
             .filter((slot) => !isSlotClosed(closedDays, new Date(slot.startTime), new Date(slot.endTime)))
 
         const candidates = buildBookableStartTimes(filtered, menu.durationMin)
@@ -228,11 +268,15 @@ export async function getBookableDaysInRange(startStr: string, endStr: string, m
             orderBy: { startTime: "asc" },
         })
 
-        const [supportShifts, closedDays] = await Promise.all([
+        const [supportShifts, closedDays, workingHours] = await Promise.all([
             getSupportShiftsInRangeSafe(start, end),
             getClosedDaysInRangeSafe(start, end, { scope: "student" }),
+            getTeacherWorkingHoursSafe(),
         ])
-        const filtered = filterSlotsBySupport(slots, supportShifts, lessonType)
+        const filtered = filterByTeacherWorkingHours(
+            filterSlotsBySupport(slots, supportShifts, lessonType),
+            workingHours
+        )
             .filter((slot) => !isSlotClosed(closedDays, new Date(slot.startTime), new Date(slot.endTime)))
 
         const dates = new Set(
@@ -285,11 +329,15 @@ export async function getBookableSlotsInRange(startStr: string, endStr: string, 
             orderBy: { startTime: "asc" },
         })
 
-        const [supportShifts, closedDays] = await Promise.all([
+        const [supportShifts, closedDays, workingHours] = await Promise.all([
             getSupportShiftsInRangeSafe(start, end),
             getClosedDaysInRangeSafe(start, end, { scope: "student" }),
+            getTeacherWorkingHoursSafe(),
         ])
-        const filtered = filterSlotsBySupport(slots, supportShifts, lessonType)
+        const filtered = filterByTeacherWorkingHours(
+            filterSlotsBySupport(slots, supportShifts, lessonType),
+            workingHours
+        )
             .filter((slot) => !isSlotClosed(closedDays, new Date(slot.startTime), new Date(slot.endTime)))
 
         const candidates = buildBookableStartTimes(filtered, menu.durationMin)

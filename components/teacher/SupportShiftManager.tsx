@@ -127,7 +127,13 @@ export function SupportShiftManager({
             toast.error(res.error || "月間登録に失敗しました。")
             return
         }
-        toast.success(`月間登録完了: 追加${res.created}件 / スキップ${res.skipped}件`)
+        const skippedClosed = typeof res.skippedClosed === "number" ? res.skippedClosed : 0
+        const skippedOutside = typeof res.skippedOutsideWorkingHours === "number" ? res.skippedOutsideWorkingHours : 0
+        if (skippedClosed > 0 || skippedOutside > 0) {
+            toast.info(`月間登録完了: 追加${res.created}件 / 重複等${res.skipped}件 / お休み重複${skippedClosed}件 / 時間外${skippedOutside}件`)
+        } else {
+            toast.success(`月間登録完了: 追加${res.created}件 / スキップ${res.skipped}件`)
+        }
         router.refresh()
     }
 

@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma"
 import { auth } from "@/auth"
 import { revalidatePath } from "next/cache"
 import { z } from "zod"
+import { filterSlotIsoListByTeacherWorkingHours, getTeacherWorkingHoursSafe } from "@/lib/teacher-working-hours"
 
 const AvailabilitySchema = z.object({
     days: z.array(z.string()),
@@ -72,16 +73,33 @@ export async function getMonthlyAvailability(studentId: string, year: number, mo
     }
 
     try {
-        const availability = await prisma.monthlyAvailability.findUnique({
-            where: {
-                studentId_year_month: {
-                    studentId,
-                    year,
-                    month
+        const [availability, workingHours] = await Promise.all([
+            prisma.monthlyAvailability.findUnique({
+                where: {
+                    studentId_year_month: {
+                        studentId,
+                        year,
+                        month
+                    }
                 }
-            }
-        })
-        return { success: true, data: availability }
+            }),
+            getTeacherWorkingHoursSafe(),
+        ])
+        if (!availability) {
+            return { success: true, data: availability }
+        }
+        const availableSlotsRaw = Array.isArray(availability.availableSlots)
+            ? availability.availableSlots.map(String)
+            : []
+        const unavailableSlotsRaw = Array.isArray(availability.unavailableSlots)
+            ? availability.unavailableSlots.map(String)
+            : []
+        const sanitizedAvailability = {
+            ...availability,
+            availableSlots: filterSlotIsoListByTeacherWorkingHours(workingHours, availableSlotsRaw, 30),
+            unavailableSlots: filterSlotIsoListByTeacherWorkingHours(workingHours, unavailableSlotsRaw, 30),
+        }
+        return { success: true, data: sanitizedAvailability }
     } catch (error) {
         console.error("Failed to fetch availability:", error)
         return { success: false, error: "Failed to fetch availability" }
@@ -103,6 +121,18 @@ export async function saveMonthlyAvailability(
     }
 
     try {
+        const workingHours = await getTeacherWorkingHoursSafe()
+        const filteredAvailableSlots = filterSlotIsoListByTeacherWorkingHours(
+            workingHours,
+            data.availableSlots || [],
+            30
+        )
+        const filteredUnavailableSlots = filterSlotIsoListByTeacherWorkingHours(
+            workingHours,
+            data.unavailableSlots || [],
+            30
+        )
+
         const availability = await prisma.monthlyAvailability.upsert({
             where: {
                 studentId_year_month: {
@@ -112,15 +142,15 @@ export async function saveMonthlyAvailability(
                 }
             },
             update: {
-                availableSlots: data.availableSlots,
-                unavailableSlots: data.unavailableSlots,
+                availableSlots: filteredAvailableSlots,
+                unavailableSlots: filteredUnavailableSlots,
             },
             create: {
                 studentId,
                 year,
                 month,
-                availableSlots: data.availableSlots,
-                unavailableSlots: data.unavailableSlots,
+                availableSlots: filteredAvailableSlots,
+                unavailableSlots: filteredUnavailableSlots,
             }
         })
 

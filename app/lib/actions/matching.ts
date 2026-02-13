@@ -2,6 +2,7 @@
 
 import { prisma } from "@/lib/prisma"
 import { addDays, startOfWeek, endOfWeek, format, parse, isSameDay } from "date-fns"
+import { getTeacherWorkingHoursSafe, isWithinTeacherWorkingHours } from "@/lib/teacher-working-hours"
 
 // Helper to parse "HH:mm" to minutes from midnight
 function timeToMinutes(time: string) {
@@ -37,11 +38,15 @@ export async function findMatches() {
         },
         orderBy: { startTime: "asc" }
     })
+    const workingHours = await getTeacherWorkingHoursSafe()
+    const filteredOpenSlots = openSlots.filter((slot) =>
+        isWithinTeacherWorkingHours(workingHours, slot.startTime, slot.endTime)
+    )
 
     // 3. Algorithm
     const matches = []
 
-    for (const slot of openSlots) {
+    for (const slot of filteredOpenSlots) {
         const slotDay = format(slot.startTime, "EEEE").toLowerCase() // "monday"
         const slotStartMin = timeToMinutes(format(slot.startTime, "HH:mm"))
         const slotEndMin = timeToMinutes(format(slot.endTime, "HH:mm"))
@@ -64,5 +69,5 @@ export async function findMatches() {
         }
     }
 
-    return { matches, openSlots }
+    return { matches, openSlots: filteredOpenSlots }
 }

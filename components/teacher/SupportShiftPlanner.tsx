@@ -30,6 +30,7 @@ import {
 } from "@/app/lib/actions/support"
 import { CheckCheck, ChevronLeft, ChevronRight, Copy, Eraser, RotateCcw, Save } from "lucide-react"
 import { isSlotClosed } from "@/lib/closed-days"
+import { isWithinTeacherWorkingHours, type TeacherWorkingHoursByDay } from "@/lib/teacher-working-hours"
 
 type SupportStaff = {
     id: string
@@ -59,6 +60,7 @@ type Props = {
     staff: SupportStaff[]
     shifts: SupportShift[]
     closedDays?: ClosedDayRecord[]
+    workingHours: TeacherWorkingHoursByDay
 }
 
 type CellPos = { row: number; col: number }
@@ -88,7 +90,14 @@ function explodeShiftToSlots(start: Date, end: Date) {
     return slots
 }
 
-export function SupportShiftPlanner({ initialYear, initialMonth, staff, shifts, closedDays = [] }: Props) {
+export function SupportShiftPlanner({
+    initialYear,
+    initialMonth,
+    staff,
+    shifts,
+    closedDays = [],
+    workingHours,
+}: Props) {
     const router = useRouter()
     const { toast } = useToast()
 
@@ -128,6 +137,11 @@ export function SupportShiftPlanner({ initialYear, initialMonth, staff, shifts, 
         (day: Date) => day.getFullYear() === initialYear && day.getMonth() === initialMonth - 1,
         [initialMonth, initialYear]
     )
+    const isWorkingHourCell = useCallback((day: Date, hour: number, minute: number) => {
+        const startTime = setMinutes(setHours(new Date(day), hour), minute)
+        const endTime = addMinutes(startTime, 30)
+        return isWithinTeacherWorkingHours(workingHours, startTime, endTime)
+    }, [workingHours])
 
     useEffect(() => {
         setWeekStart(startOfWeek(monthStart, { weekStartsOn: 1 }))
@@ -191,11 +205,12 @@ export function SupportShiftPlanner({ initialYear, initialMonth, staff, shifts, 
                 const day = days[col]
                 if (!day) continue
                 if (!isDayInMonth(day)) continue
+                if (!isWorkingHourCell(day, hour, minute)) continue
                 keys.add(getCellIso(day, hour, minute))
             }
         }
         return keys
-    }, [currentCell, days, isDayInMonth, isPainting, startCell])
+    }, [currentCell, days, isDayInMonth, isPainting, isWorkingHourCell, startCell])
 
     const handleWeekMove = (offsetDays: number) => {
         setWeekStart((prev) => addDays(prev, offsetDays))
@@ -260,8 +275,9 @@ export function SupportShiftPlanner({ initialYear, initialMonth, staff, shifts, 
             return
         }
         const skippedClosed = typeof result.skippedClosed === "number" ? result.skippedClosed : 0
-        if (skippedClosed > 0) {
-            toast.info(`月間登録完了: 追加${result.created}件 / 重複等${result.skipped}件 / お休み重複${skippedClosed}件`)
+        const skippedOutside = typeof result.skippedOutsideWorkingHours === "number" ? result.skippedOutsideWorkingHours : 0
+        if (skippedClosed > 0 || skippedOutside > 0) {
+            toast.info(`月間登録完了: 追加${result.created}件 / 重複等${result.skipped}件 / お休み重複${skippedClosed}件 / 時間外${skippedOutside}件`)
         } else {
             toast.success(`月間登録完了: 追加${result.created}件 / スキップ${result.skipped}件`)
         }
@@ -274,6 +290,7 @@ export function SupportShiftPlanner({ initialYear, initialMonth, staff, shifts, 
         const hour = HOURS[Math.floor(row / 2)]
         const minute = row % 2 === 0 ? 0 : 30
         if (!day || hour === undefined || !isDayInMonth(day)) return
+        if (!isWorkingHourCell(day, hour, minute)) return
         const iso = getCellIso(day, hour, minute)
         setIsPainting(true)
         setPaintMode(draftSlots.has(iso) ? "remove" : "add")
@@ -317,6 +334,7 @@ export function SupportShiftPlanner({ initialYear, initialMonth, staff, shifts, 
             if (!isDayInMonth(day)) continue
             for (const hour of HOURS) {
                 for (const minute of MINUTES) {
+                    if (!isWorkingHourCell(day, hour, minute)) continue
                     const iso = getCellIso(day, hour, minute)
                     if (mode === "fill") next.add(iso)
                     else next.delete(iso)
@@ -347,6 +365,7 @@ export function SupportShiftPlanner({ initialYear, initialMonth, staff, shifts, 
             if (pattern) {
                 for (const hour of HOURS) {
                     for (const minute of MINUTES) {
+                        if (!isWorkingHourCell(cursor, hour, minute)) continue
                         const iso = getCellIso(cursor, hour, minute)
                         if (pattern.get(`${hour}:${minute}`)) next.add(iso)
                         else next.delete(iso)
@@ -381,8 +400,9 @@ export function SupportShiftPlanner({ initialYear, initialMonth, staff, shifts, 
             return
         }
         const skippedClosed = typeof result.skippedClosedCount === "number" ? result.skippedClosedCount : 0
-        if (skippedClosed > 0) {
-            toast.info(`${initialYear}年${initialMonth}月を保存しました（お休み重複 ${skippedClosed}件は除外）。`)
+        const skippedOutside = typeof result.skippedOutsideWorkingHoursCount === "number" ? result.skippedOutsideWorkingHoursCount : 0
+        if (skippedClosed > 0 || skippedOutside > 0) {
+            toast.info(`${initialYear}年${initialMonth}月を保存しました（お休み重複 ${skippedClosed}件 / 時間外 ${skippedOutside}件を除外）。`)
         } else {
             toast.success(`${initialYear}年${initialMonth}月のシフトを保存しました。`)
         }
@@ -549,6 +569,7 @@ export function SupportShiftPlanner({ initialYear, initialMonth, staff, shifts, 
                     <span className="inline-flex items-center gap-1 rounded-full bg-cyan-50 px-2 py-1 text-cyan-700">登録済みシフト</span>
                     <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-1 text-emerald-700">追加予定</span>
                     <span className="inline-flex items-center gap-1 rounded-full bg-rose-50 px-2 py-1 text-rose-700">削除予定</span>
+                    <span className="inline-flex items-center gap-1 rounded-full bg-slate-200 px-2 py-1 text-slate-700">営業時間外</span>
                     <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-1 text-slate-700">ドラッグで矩形選択</span>
                 </div>
 
@@ -585,6 +606,7 @@ export function SupportShiftPlanner({ initialYear, initialMonth, staff, shifts, 
                                                 const cellStart = setMinutes(setHours(new Date(day), hour), minute)
                                                 const cellEnd = addMinutes(cellStart, 30)
                                                 const cellClosed = inMonth && isSlotClosed(closedDays, cellStart, cellEnd)
+                                                const cellOutsideWorking = inMonth && !isWorkingHourCell(day, hour, minute)
                                                 return (
                                                     <td key={day.toISOString()} className="border-r p-0.5 last:border-r-0">
                                                         <div
@@ -592,33 +614,35 @@ export function SupportShiftPlanner({ initialYear, initialMonth, staff, shifts, 
                                                             data-col={colIndex}
                                                             onMouseDown={(e) => {
                                                                 if (e.button !== 0) return
-                                                                if (!inMonth || cellClosed) return
+                                                                if (!inMonth || cellClosed || cellOutsideWorking) return
                                                                 e.preventDefault()
                                                                 startPaint(rowIndex, colIndex)
                                                             }}
                                                             onMouseEnter={() => {
                                                                 if (!isPainting) return
-                                                                if (!inMonth || cellClosed) return
+                                                                if (!inMonth || cellClosed || cellOutsideWorking) return
                                                                 setCurrentCell({ row: rowIndex, col: colIndex })
                                                             }}
                                                             onTouchStart={() => {
-                                                                if (!inMonth || cellClosed) return
+                                                                if (!inMonth || cellClosed || cellOutsideWorking) return
                                                                 startPaint(rowIndex, colIndex)
                                                             }}
                                                             className={cn(
                                                                 "relative h-8 rounded border transition-colors",
                                                                 !inMonth && "border-slate-100 bg-slate-50 opacity-40",
+                                                                cellOutsideWorking && "border-slate-300 bg-slate-200/70",
                                                                 cellClosed && "border-rose-200 bg-rose-100/70",
                                                                 !cellClosed && hasDraft ? "border-cyan-300 bg-cyan-50" : !cellClosed && "border-dashed border-slate-200",
                                                                 !cellClosed && inRect && paintMode === "add" && "border-emerald-300 bg-emerald-100",
                                                                 !cellClosed && inRect && paintMode === "remove" && "border-rose-300 bg-rose-100",
                                                             )}
                                                         >
+                                                            {cellOutsideWorking && <span className="text-[9px] font-bold text-slate-500">対象外</span>}
                                                             {cellClosed && <span className="text-[9px] font-bold text-rose-500">お休み</span>}
-                                                            {!cellClosed && inMonth && hasDraft && !inRect && <span className="text-[10px] font-semibold text-cyan-700">勤務</span>}
-                                                            {!cellClosed && inMonth && inRect && paintMode === "add" && <span className="text-[10px] font-semibold text-emerald-700">追加</span>}
-                                                            {!cellClosed && inMonth && inRect && paintMode === "remove" && <span className="text-[10px] font-semibold text-rose-700">削除</span>}
-                                                            {!cellClosed && inMonth && !hasDraft && hasBase && !inRect && (
+                                                            {!cellClosed && !cellOutsideWorking && inMonth && hasDraft && !inRect && <span className="text-[10px] font-semibold text-cyan-700">勤務</span>}
+                                                            {!cellClosed && !cellOutsideWorking && inMonth && inRect && paintMode === "add" && <span className="text-[10px] font-semibold text-emerald-700">追加</span>}
+                                                            {!cellClosed && !cellOutsideWorking && inMonth && inRect && paintMode === "remove" && <span className="text-[10px] font-semibold text-rose-700">削除</span>}
+                                                            {!cellClosed && !cellOutsideWorking && inMonth && !hasDraft && hasBase && !inRect && (
                                                                 <span className="text-[10px] font-semibold text-rose-600">削除予定</span>
                                                             )}
                                                         </div>

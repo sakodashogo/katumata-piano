@@ -4,15 +4,17 @@ import { AvailabilityCalendar } from "@/components/availability/AvailabilityCale
 import { saveMonthlyAvailability } from "@/app/lib/actions/availability"
 import { useRouter } from "next/navigation"
 import { useToast } from "@/components/ui/toast"
+import { type TeacherWorkingHoursByDay } from "@/lib/teacher-working-hours"
 
 type Props = {
     initialData: any
     year: number
     month: number
     studentId: string
+    workingHours: TeacherWorkingHoursByDay
 }
 
-export default function AvailabilityPageClient({ initialData, year, month, studentId }: Props) {
+export default function AvailabilityPageClient({ initialData, year, month, studentId, workingHours }: Props) {
     const router = useRouter()
     const { toast } = useToast()
 
@@ -53,6 +55,7 @@ export default function AvailabilityPageClient({ initialData, year, month, stude
                 initialUnavailableSlots={unavailableSlots}
                 onSave={onSave}
                 onMonthChange={onMonthChange}
+                workingHours={workingHours}
             />
         </div>
     )

@@ -5,10 +5,8 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
 import { addDays, setHours, setMinutes, startOfDay, endOfDay, areIntervalsOverlapping, addMinutes } from "date-fns";
+import { getTeacherWorkingHourRangesForDay, getTeacherWorkingHoursSafe } from "@/lib/teacher-working-hours";
 
-// Configuration for Working Hours
-const WORKING_HOURS_START = 10; // 10:00
-const WORKING_HOURS_END = 20;   // 20:00
 const SLOT_DURATION_MINUTES = 30; // 30 minutes slots
 
 export async function syncScheduleFromGoogle(startDateStr: string, endDateStr: string, roomId: string = "A") {
@@ -24,6 +22,7 @@ export async function syncScheduleFromGoogle(startDateStr: string, endDateStr: s
 
     try {
         const calendar = await getCalendarClient();
+        const workingHours = await getTeacherWorkingHoursSafe();
 
         // ensure start and end dates are valid Date objects
         const start = new Date(startDateStr);
@@ -52,52 +51,70 @@ export async function syncScheduleFromGoogle(startDateStr: string, endDateStr: s
         const newSlotsToCreate: { roomId: string; startTime: Date; endTime: Date; isBooked: boolean }[] = [];
 
         for (const day of daysToProcess) {
-            // Define working hours for this day
-            const workStart = setMinutes(setHours(day, WORKING_HOURS_START), 0);
-            const workEnd = setMinutes(setHours(day, WORKING_HOURS_END), 0);
+            const dayRanges = getTeacherWorkingHourRangesForDay(workingHours, day.getDay());
+            for (const range of dayRanges) {
+                const [startHourRaw, startMinuteRaw] = range.startTime.split(":");
+                const [endHourRaw, endMinuteRaw] = range.endTime.split(":");
+                const startHour = Number(startHourRaw);
+                const startMinute = Number(startMinuteRaw);
+                const endHour = Number(endHourRaw);
+                const endMinute = Number(endMinuteRaw);
+                if (
+                    !Number.isFinite(startHour) ||
+                    !Number.isFinite(startMinute) ||
+                    !Number.isFinite(endHour) ||
+                    !Number.isFinite(endMinute)
+                ) {
+                    continue;
+                }
 
-            // Filter GCal events that overlap with working hours on this day
-            const dayEvents = events.filter(event => {
-                if (!event.start?.dateTime || !event.end?.dateTime) return false; // Skip full day events for now or handle them
+                const workStart = setMinutes(setHours(day, startHour), startMinute);
+                const workEnd = setMinutes(setHours(day, endHour), endMinute);
+                if (workEnd <= workStart) continue;
 
-                const eventStart = new Date(event.start.dateTime);
-                const eventEnd = new Date(event.end.dateTime);
+                // Filter GCal events that overlap with working hours on this day
+                const dayEvents = events.filter(event => {
+                    if (!event.start?.dateTime || !event.end?.dateTime) return false; // Skip full day events for now or handle them
 
-                return areIntervalsOverlapping(
-                    { start: workStart, end: workEnd },
-                    { start: eventStart, end: eventEnd }
-                );
-            });
-
-            // Calculate free slots
-            // Iterate through every possible slot in the working day
-            let slotTime = new Date(workStart);
-            while (slotTime < workEnd) {
-                const slotEnd = addMinutes(slotTime, SLOT_DURATION_MINUTES);
-
-                // Check if this slot overlaps with ANY GCal event
-                const isBlocked = dayEvents.some(event => {
-                    if (!event.start?.dateTime || !event.end?.dateTime) return false;
                     const eventStart = new Date(event.start.dateTime);
                     const eventEnd = new Date(event.end.dateTime);
 
-                    // Check overlap
                     return areIntervalsOverlapping(
-                        { start: slotTime, end: slotEnd },
+                        { start: workStart, end: workEnd },
                         { start: eventStart, end: eventEnd }
                     );
                 });
 
-                if (!isBlocked) {
-                    newSlotsToCreate.push({
-                        roomId,
-                        startTime: new Date(slotTime),
-                        endTime: new Date(slotEnd),
-                        isBooked: false, // Default is available
-                    });
-                }
+                // Calculate free slots
+                // Iterate through every possible slot in the working day
+                let slotTime = new Date(workStart);
+                while (slotTime < workEnd) {
+                    const slotEnd = addMinutes(slotTime, SLOT_DURATION_MINUTES);
 
-                slotTime = slotEnd; // Move to next slot
+                    // Check if this slot overlaps with ANY GCal event
+                    const isBlocked = dayEvents.some(event => {
+                        if (!event.start?.dateTime || !event.end?.dateTime) return false;
+                        const eventStart = new Date(event.start.dateTime);
+                        const eventEnd = new Date(event.end.dateTime);
+
+                        // Check overlap
+                        return areIntervalsOverlapping(
+                            { start: slotTime, end: slotEnd },
+                            { start: eventStart, end: eventEnd }
+                        );
+                    });
+
+                    if (!isBlocked) {
+                        newSlotsToCreate.push({
+                            roomId,
+                            startTime: new Date(slotTime),
+                            endTime: new Date(slotEnd),
+                            isBooked: false, // Default is available
+                        });
+                    }
+
+                    slotTime = slotEnd; // Move to next slot
+                }
             }
         }
 

@@ -4,6 +4,7 @@ import { MonthlyScheduler } from "@/components/teacher/MonthlyScheduler"
 import { redirect } from "next/navigation"
 import { getClosedDaysInRangeSafe } from "@/lib/closed-days"
 import { startOfMonth, endOfMonth, addDays } from "date-fns"
+import { getTeacherWorkingHoursSafe } from "@/lib/teacher-working-hours"
 
 export default async function MonthlyPlanningPage({
     searchParams
@@ -34,9 +35,10 @@ export default async function MonthlyPlanningPage({
     const monthStart = startOfMonth(new Date(year, month - 1, 1))
     const monthEndExclusive = addDays(endOfMonth(monthStart), 1)
 
-    const [result, closedDays] = await Promise.all([
+    const [result, closedDays, workingHours] = await Promise.all([
         getMonthlyPlanningData(year, month),
         getClosedDaysInRangeSafe(monthStart, monthEndExclusive),
+        getTeacherWorkingHoursSafe(),
     ])
 
     if (!result.success || !result.data) {
@@ -66,6 +68,7 @@ export default async function MonthlyPlanningPage({
                 month={month}
                 isPublished={isPublished}
                 publishedAt={publishedAt}
+                workingHours={workingHours}
             />
         </div>
     )

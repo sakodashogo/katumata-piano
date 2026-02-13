@@ -120,8 +120,9 @@ export function DraftSlotList({ draftSlots, menus }: Props) {
         if (result.success) {
             const publishedCount = typeof result.publishedCount === "number" ? result.publishedCount : 0
             const skippedClosed = typeof result.skippedClosedCount === "number" ? result.skippedClosedCount : 0
-            if (skippedClosed > 0) {
-                toast.info(`公開${publishedCount}件 / お休み重複でスキップ${skippedClosed}件`)
+            const skippedOutside = typeof result.skippedOutsideWorkingCount === "number" ? result.skippedOutsideWorkingCount : 0
+            if (skippedClosed > 0 || skippedOutside > 0) {
+                toast.info(`公開${publishedCount}件 / お休み重複${skippedClosed}件 / 時間外${skippedOutside}件をスキップ`)
             } else {
                 toast.success(`${publishedCount}件を公開しました。`)
             }

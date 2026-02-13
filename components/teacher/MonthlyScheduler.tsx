@@ -12,6 +12,7 @@ import {
     publishMonthlySchedule,
     replaceStudentMonthlyLessons,
 } from "@/app/lib/actions/planning"
+import { updateTeacherWorkingHours } from "@/app/lib/actions/teacher-working-hours"
 import {
     generateSuggestedSchedule,
     ScheduleSuggestion,
@@ -19,6 +20,12 @@ import {
     LockedAssignment,
 } from "@/app/lib/actions/schedule-maker"
 import { useToast } from "@/components/ui/toast"
+import {
+    getDefaultTeacherWorkingHours,
+    normalizeTeacherWorkingHourRanges,
+    type TeacherWorkingHourRange,
+    type TeacherWorkingHoursByDay,
+} from "@/lib/teacher-working-hours"
 
 type Student = {
     id: string
@@ -70,6 +77,7 @@ type Props = {
     lessons: Lesson[]
     supportShifts?: Shift[]
     closedDays?: ClosedDayRecord[]
+    workingHours: TeacherWorkingHoursByDay
     year: number
     month: number
     isPublished?: boolean
@@ -123,11 +131,54 @@ function isSameIdSet(left: Set<string>, right: Set<string>) {
     return true
 }
 
+type WorkingHourDraftByDay = Record<number, TeacherWorkingHourRange[]>
+
+const WORKING_HOUR_DAY_ORDER = [1, 2, 3, 4, 5, 6, 0] as const
+const WORKING_HOUR_DAY_LABELS: Record<number, string> = {
+    0: "日",
+    1: "月",
+    2: "火",
+    3: "水",
+    4: "木",
+    5: "金",
+    6: "土",
+}
+
+function cloneWorkingHourRangesByDay(source: TeacherWorkingHoursByDay): WorkingHourDraftByDay {
+    const next: WorkingHourDraftByDay = getDefaultTeacherWorkingHours()
+    for (let day = 0; day <= 6; day += 1) {
+        next[day] = (source[day] || []).map((range) => ({
+            startTime: range.startTime,
+            endTime: range.endTime,
+        }))
+    }
+    return next
+}
+
+function normalizeWorkingHourDraft(source: WorkingHourDraftByDay): TeacherWorkingHoursByDay {
+    const next: TeacherWorkingHoursByDay = getDefaultTeacherWorkingHours()
+    for (let day = 0; day <= 6; day += 1) {
+        next[day] = normalizeTeacherWorkingHourRanges(source[day] || [])
+    }
+    return next
+}
+
+function getWorkingHoursCompareKey(source: TeacherWorkingHoursByDay) {
+    const parts: string[] = []
+    for (let day = 0; day <= 6; day += 1) {
+        const dayRanges = normalizeTeacherWorkingHourRanges(source[day] || [])
+        const dayKey = dayRanges.map((range) => `${range.startTime}-${range.endTime}`).join(",")
+        parts.push(`${day}:${dayKey}`)
+    }
+    return parts.join("|")
+}
+
 export function MonthlyScheduler({
     students,
     lessons,
     supportShifts = [],
     closedDays = [],
+    workingHours,
     year,
     month,
     isPublished = false,
@@ -143,6 +194,11 @@ export function MonthlyScheduler({
     const [isSavingSelected, setIsSavingSelected] = useState(false)
     const [isSavingAll, setIsSavingAll] = useState(false)
     const [isPublishingMonth, setIsPublishingMonth] = useState(false)
+    const [isSavingWorkingHours, setIsSavingWorkingHours] = useState(false)
+    const [activeWorkingHours, setActiveWorkingHours] = useState<TeacherWorkingHoursByDay>(workingHours)
+    const [workingHourDraftByDay, setWorkingHourDraftByDay] = useState<WorkingHourDraftByDay>(() =>
+        cloneWorkingHourRangesByDay(workingHours)
+    )
     const [isAutoMode, setIsAutoMode] = useState(false)
     const [isGeneratingSuggestions, setIsGeneratingSuggestions] = useState(false)
     const [suggestions, setSuggestions] = useState<ScheduleSuggestion[]>([])
@@ -165,6 +221,11 @@ export function MonthlyScheduler({
     }, [lessons, month, year])
 
     useEffect(() => {
+        setActiveWorkingHours(workingHours)
+        setWorkingHourDraftByDay(cloneWorkingHourRangesByDay(workingHours))
+    }, [month, workingHours, year])
+
+    useEffect(() => {
         if (students.length === 0) return
         if (!selectedStudentId || !students.some((student) => student.id === selectedStudentId)) {
             setSelectedStudentId(students[0].id)
@@ -182,6 +243,83 @@ export function MonthlyScheduler({
             return name.includes(keyword) || email.includes(keyword)
         })
     }, [studentQuery, students])
+
+    const normalizedWorkingHourDraft = useMemo(
+        () => normalizeWorkingHourDraft(workingHourDraftByDay),
+        [workingHourDraftByDay]
+    )
+    const activeWorkingHoursKey = useMemo(
+        () => getWorkingHoursCompareKey(activeWorkingHours),
+        [activeWorkingHours]
+    )
+    const draftWorkingHoursKey = useMemo(
+        () => getWorkingHoursCompareKey(normalizedWorkingHourDraft),
+        [normalizedWorkingHourDraft]
+    )
+    const hasWorkingHourChanges = activeWorkingHoursKey !== draftWorkingHoursKey
+
+    const updateWorkingHourDayRanges = useCallback((dayOfWeek: number, ranges: TeacherWorkingHourRange[]) => {
+        setWorkingHourDraftByDay((prev) => ({
+            ...prev,
+            [dayOfWeek]: ranges,
+        }))
+    }, [])
+
+    const handleWorkingHourToggle = useCallback((dayOfWeek: number, enabled: boolean) => {
+        if (enabled) {
+            const fallback = activeWorkingHours[dayOfWeek]?.[0] || { startTime: "14:00", endTime: "20:00" }
+            updateWorkingHourDayRanges(dayOfWeek, [{ startTime: fallback.startTime, endTime: fallback.endTime }])
+            return
+        }
+        updateWorkingHourDayRanges(dayOfWeek, [])
+    }, [activeWorkingHours, updateWorkingHourDayRanges])
+
+    const handleWorkingHourRangeField = useCallback((
+        dayOfWeek: number,
+        index: number,
+        field: "startTime" | "endTime",
+        value: string
+    ) => {
+        setWorkingHourDraftByDay((prev) => {
+            const current = [...(prev[dayOfWeek] || [])]
+            while (current.length <= index) {
+                current.push({ startTime: "", endTime: "" })
+            }
+            current[index] = { ...current[index], [field]: value }
+            return { ...prev, [dayOfWeek]: current }
+        })
+    }, [])
+
+    const handleWorkingHourSecondaryToggle = useCallback((dayOfWeek: number, enabled: boolean) => {
+        setWorkingHourDraftByDay((prev) => {
+            const current = [...(prev[dayOfWeek] || [])]
+            if (!enabled) {
+                return { ...prev, [dayOfWeek]: current.slice(0, 1) }
+            }
+            if (current.length >= 2) return prev
+            return {
+                ...prev,
+                [dayOfWeek]: [...current, { startTime: "10:00", endTime: "12:00" }],
+            }
+        })
+    }, [])
+
+    const handleSaveWorkingHours = useCallback(async () => {
+        setIsSavingWorkingHours(true)
+        const payload = Array.from({ length: 7 }, (_, dayOfWeek) => ({
+            dayOfWeek,
+            ranges: normalizeTeacherWorkingHourRanges(workingHourDraftByDay[dayOfWeek] || []),
+        }))
+        const result = await updateTeacherWorkingHours({ days: payload })
+        setIsSavingWorkingHours(false)
+        if (!result.success || !result.data) {
+            toast.error(result.error || "営業時間設定の保存に失敗しました。")
+            return
+        }
+        setActiveWorkingHours(result.data)
+        setWorkingHourDraftByDay(cloneWorkingHourRangesByDay(result.data))
+        toast.success("曜日別のレッスン許可時間を保存しました。")
+    }, [toast, workingHourDraftByDay])
 
     const effectiveLessons = useMemo(() => {
         const draftStudentIds = new Set(Object.keys(draftByStudent))
@@ -609,6 +747,89 @@ export function MonthlyScheduler({
             </div>
 
             <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-white p-3">
+                <div>
+                    <div className="text-sm font-semibold text-slate-900">曜日別レッスン許可時間</div>
+                    <p className="text-xs text-slate-500">ここで設定した時間帯を月間提案・週次編集・シフト・希望入力に共通反映します。</p>
+                </div>
+                <Button
+                    variant="outline"
+                    onClick={handleSaveWorkingHours}
+                    disabled={isSavingWorkingHours || !hasWorkingHourChanges}
+                >
+                    {isSavingWorkingHours ? "保存中..." : "許可時間を保存"}
+                </Button>
+            </div>
+
+            <div className="rounded-lg border bg-white p-3">
+                <div className="grid gap-2">
+                    {WORKING_HOUR_DAY_ORDER.map((dayOfWeek) => {
+                        const dayRanges = workingHourDraftByDay[dayOfWeek] || []
+                        const enabled = dayRanges.length > 0
+                        const primary = dayRanges[0] || { startTime: "14:00", endTime: "20:00" }
+                        const hasSecondary = dayRanges.length > 1
+                        const secondary = dayRanges[1] || { startTime: "10:00", endTime: "12:00" }
+
+                        return (
+                            <div key={dayOfWeek} className="rounded border bg-slate-50 px-3 py-2">
+                                <div className="flex flex-wrap items-center gap-2 text-xs">
+                                    <label className="inline-flex items-center gap-2 font-semibold text-slate-800">
+                                        <input
+                                            type="checkbox"
+                                            checked={enabled}
+                                            onChange={(event) => handleWorkingHourToggle(dayOfWeek, event.target.checked)}
+                                        />
+                                        {WORKING_HOUR_DAY_LABELS[dayOfWeek]}曜
+                                    </label>
+
+                                    <span className="text-slate-500">第1枠</span>
+                                    <input
+                                        type="time"
+                                        value={primary.startTime}
+                                        onChange={(event) => handleWorkingHourRangeField(dayOfWeek, 0, "startTime", event.target.value)}
+                                        disabled={!enabled}
+                                        className="h-8 rounded border bg-white px-2 text-xs disabled:bg-slate-100"
+                                    />
+                                    <span className="text-slate-500">〜</span>
+                                    <input
+                                        type="time"
+                                        value={primary.endTime}
+                                        onChange={(event) => handleWorkingHourRangeField(dayOfWeek, 0, "endTime", event.target.value)}
+                                        disabled={!enabled}
+                                        className="h-8 rounded border bg-white px-2 text-xs disabled:bg-slate-100"
+                                    />
+
+                                    <label className="inline-flex items-center gap-1 text-slate-700">
+                                        <input
+                                            type="checkbox"
+                                            checked={hasSecondary}
+                                            disabled={!enabled}
+                                            onChange={(event) => handleWorkingHourSecondaryToggle(dayOfWeek, event.target.checked)}
+                                        />
+                                        第2枠
+                                    </label>
+                                    <input
+                                        type="time"
+                                        value={secondary.startTime}
+                                        onChange={(event) => handleWorkingHourRangeField(dayOfWeek, 1, "startTime", event.target.value)}
+                                        disabled={!enabled || !hasSecondary}
+                                        className="h-8 rounded border bg-white px-2 text-xs disabled:bg-slate-100"
+                                    />
+                                    <span className="text-slate-500">〜</span>
+                                    <input
+                                        type="time"
+                                        value={secondary.endTime}
+                                        onChange={(event) => handleWorkingHourRangeField(dayOfWeek, 1, "endTime", event.target.value)}
+                                        disabled={!enabled || !hasSecondary}
+                                        className="h-8 rounded border bg-white px-2 text-xs disabled:bg-slate-100"
+                                    />
+                                </div>
+                            </div>
+                        )
+                    })}
+                </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-white p-3">
                 <div className="flex items-center gap-2">
                     <Button
                         variant={isAutoMode ? "primary" : "outline"}
@@ -746,6 +967,7 @@ export function MonthlyScheduler({
                                     existingLessons={selectedStudentLessonsForEditor}
                                     supportShifts={supportShifts}
                                     closedDays={closedDays}
+                                    workingHours={activeWorkingHours}
                                     year={year}
                                     month={month}
                                     onDraftChange={handleDraftChangeForSelected}

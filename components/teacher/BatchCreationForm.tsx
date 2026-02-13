@@ -128,8 +128,9 @@ export function BatchCreationForm({ year, month, menus }: Props) {
 
         if (result.success) {
             const skippedClosed = typeof result.skippedClosedCount === "number" ? result.skippedClosedCount : 0
-            if (skippedClosed > 0) {
-                toast.info(`${result.count}件作成 / お休み重複で${skippedClosed}件スキップしました。`)
+            const skippedOutside = typeof result.skippedOutsideWorkingCount === "number" ? result.skippedOutsideWorkingCount : 0
+            if (skippedClosed > 0 || skippedOutside > 0) {
+                toast.info(`${result.count}件作成 / お休み重複${skippedClosed}件 / 時間外${skippedOutside}件をスキップしました。`)
             } else {
                 toast.success(`${result.count}件の下書き枠を作成しました。`)
             }

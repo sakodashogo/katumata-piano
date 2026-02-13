@@ -16,12 +16,14 @@ import {
 } from "date-fns"
 import { ja } from "date-fns/locale"
 import { Loader2, ChevronLeft, ChevronRight, PenLine, CheckCheck, Eraser, Copy } from "lucide-react"
+import { isWithinTeacherWorkingHours, type TeacherWorkingHoursByDay } from "@/lib/teacher-working-hours"
 
 type AvailabilityCalendarProps = {
     initialAvailableSlots: string[]
     initialUnavailableSlots: string[]
     year: number
     month: number
+    workingHours: TeacherWorkingHoursByDay
     onSave: (year: number, month: number, data: { availableSlots: string[], unavailableSlots: string[] }) => Promise<{ success: boolean, error?: string }>
     onMonthChange: (year: number, month: number) => void
     readOnly?: boolean
@@ -32,11 +34,28 @@ const END_HOUR = 22
 
 type CellPos = { row: number; col: number }
 
+function filterSlotsByWorkingHours(slotIsos: string[], workingHours: TeacherWorkingHoursByDay) {
+    const unique = new Set<string>()
+    const filtered: string[] = []
+    for (const value of slotIsos) {
+        const slotStart = new Date(value)
+        if (Number.isNaN(slotStart.getTime())) continue
+        const slotEnd = new Date(slotStart.getTime() + 30 * 60 * 1000)
+        if (!isWithinTeacherWorkingHours(workingHours, slotStart, slotEnd)) continue
+        const iso = slotStart.toISOString()
+        if (unique.has(iso)) continue
+        unique.add(iso)
+        filtered.push(iso)
+    }
+    return filtered
+}
+
 export function AvailabilityCalendar({
     initialAvailableSlots,
     initialUnavailableSlots,
     year,
     month,
+    workingHours,
     onSave,
     onMonthChange,
     readOnly = false
@@ -69,17 +88,17 @@ export function AvailabilityCalendar({
 
     // Slot state
     const [availableSlots, setAvailableSlots] = React.useState<Set<string>>(
-        () => new Set(initialAvailableSlots)
+        () => new Set(filterSlotsByWorkingHours(initialAvailableSlots, workingHours))
     )
     const [unavailableSlots, setUnavailableSlots] = React.useState<Set<string>>(
-        () => new Set(initialUnavailableSlots)
+        () => new Set(filterSlotsByWorkingHours(initialUnavailableSlots, workingHours))
     )
     const [isSaving, setIsSaving] = React.useState(false)
 
     React.useEffect(() => {
-        setAvailableSlots(new Set(initialAvailableSlots))
-        setUnavailableSlots(new Set(initialUnavailableSlots))
-    }, [initialAvailableSlots, initialUnavailableSlots, year, month])
+        setAvailableSlots(new Set(filterSlotsByWorkingHours(initialAvailableSlots, workingHours)))
+        setUnavailableSlots(new Set(filterSlotsByWorkingHours(initialUnavailableSlots, workingHours)))
+    }, [initialAvailableSlots, initialUnavailableSlots, month, workingHours, year])
 
     // --- Rectangle-based drag state ---
     const isPaintingRef = React.useRef(false)
@@ -101,6 +120,12 @@ export function AvailabilityCalendar({
 
     const getCellIso = (day: Date, hour: number, minute: number) =>
         setMinutes(setHours(startOfDay(day), hour), minute).toISOString()
+
+    const isWorkingHourCell = React.useCallback((day: Date, hour: number, minute: number) => {
+        const slotStart = setMinutes(setHours(startOfDay(day), hour), minute)
+        const slotEnd = new Date(slotStart.getTime() + 30 * 60 * 1000)
+        return isWithinTeacherWorkingHours(workingHours, slotStart, slotEnd)
+    }, [workingHours])
 
     const getSlotStatus = React.useCallback((iso: string): 'available' | 'unavailable' | 'neutral' => {
         if (availableSlots.has(iso)) return 'available'
@@ -146,13 +171,17 @@ export function AvailabilityCalendar({
                 if (!day) continue
                 const slot = currentTimeSlots[r]
                 if (!slot) continue
-                if (day.getMonth() === month - 1 && day.getFullYear() === year) {
+                if (
+                    day.getMonth() === month - 1 &&
+                    day.getFullYear() === year &&
+                    isWorkingHourCell(day, slot.hour, slot.minute)
+                ) {
                     result.push(getCellIso(day, slot.hour, slot.minute))
                 }
             }
         }
         return result
-    }, [month, year])
+    }, [isWorkingHourCell, month, year])
 
     const commitPaint = React.useCallback(() => {
         if (!isPaintingRef.current) return
@@ -197,6 +226,7 @@ export function AvailabilityCalendar({
         const day = daysRef.current[col]
         const slot = timeSlotsRef.current[row]
         if (!day || !slot) return
+        if (!isWorkingHourCell(day, slot.hour, slot.minute)) return
         const iso = getCellIso(day, slot.hour, slot.minute)
 
         isPaintingRef.current = true
@@ -204,7 +234,7 @@ export function AvailabilityCalendar({
         startCellRef.current = { row, col }
         currentCellRef.current = { row, col }
         rerender()
-    }, [readOnly])
+    }, [isWorkingHourCell, readOnly])
 
     const updateCurrentCell = React.useCallback((row: number, col: number) => {
         if (!isPaintingRef.current || readOnly) return
@@ -256,6 +286,7 @@ export function AvailabilityCalendar({
         days.forEach(day => {
             if (!isDayInMonth(day)) return
             timeSlots.forEach(({ hour, minute }) => {
+                if (!isWorkingHourCell(day, hour, minute)) return
                 const iso = getCellIso(day, hour, minute)
                 if (type === 'available') {
                     newAvailable.add(iso)
@@ -279,7 +310,11 @@ export function AvailabilityCalendar({
             const dayPattern = new Map<string, boolean>()
             timeSlots.forEach(({ hour, minute }) => {
                 const iso = getCellIso(day, hour, minute)
-                dayPattern.set(`${hour}:${minute}`, availableSlots.has(iso))
+                if (isWorkingHourCell(day, hour, minute)) {
+                    dayPattern.set(`${hour}:${minute}`, availableSlots.has(iso))
+                } else {
+                    dayPattern.set(`${hour}:${minute}`, false)
+                }
             })
             weekPattern.set(day.getDay(), dayPattern)
         })
@@ -290,6 +325,7 @@ export function AvailabilityCalendar({
             const dayPattern = weekPattern.get(d.getDay())
             if (dayPattern) {
                 timeSlots.forEach(({ hour, minute }) => {
+                    if (!isWorkingHourCell(d, hour, minute)) return
                     const iso = getCellIso(d, hour, minute)
                     if (dayPattern.get(`${hour}:${minute}`)) {
                         newAvailable.add(iso)
@@ -323,7 +359,17 @@ export function AvailabilityCalendar({
         setWeekStart(prev => addDays(prev, direction === 'next' ? 7 : -7))
     }
 
-    const getVisualState = (iso: string, row: number, col: number): 'available' | 'unavailable' | 'neutral' => {
+    const getVisualState = (
+        iso: string,
+        row: number,
+        col: number,
+        day: Date,
+        hour: number,
+        minute: number
+    ): 'available' | 'unavailable' | 'neutral' | 'outside' => {
+        if (!isWorkingHourCell(day, hour, minute)) {
+            return 'outside'
+        }
         if (isInPendingRect(row, col)) {
             return paintTypeRef.current === 'available' ? 'available' : 'neutral'
         }
@@ -382,6 +428,10 @@ export function AvailabilityCalendar({
                     <div className="flex items-center gap-1">
                         <div className="w-3 h-3 rounded border border-slate-300" />
                         <span>未設定</span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                        <div className="w-3 h-3 rounded bg-slate-200 border border-slate-300" />
+                        <span>営業時間外</span>
                     </div>
                     {!readOnly && (
                         <div className="flex items-center gap-1 text-slate-500 bg-slate-100 px-2 py-0.5 rounded">
@@ -478,7 +528,8 @@ export function AvailabilityCalendar({
                                 {days.map((day, colIndex) => {
                                     const iso = getCellIso(day, hour, minute)
                                     const inMonth = isDayInMonth(day)
-                                    const visual = getVisualState(iso, rowIndex, colIndex)
+                                    const visual = getVisualState(iso, rowIndex, colIndex, day, hour, minute)
+                                    const isOutside = visual === "outside"
 
                                     return (
                                         <td
@@ -492,18 +543,19 @@ export function AvailabilityCalendar({
                                                 data-row={rowIndex}
                                                 data-col={colIndex}
                                                 onMouseDown={(e) => {
-                                                    if (e.button === 0 && inMonth) handleCellStart(rowIndex, colIndex)
+                                                    if (e.button === 0 && inMonth && !isOutside) handleCellStart(rowIndex, colIndex)
                                                 }}
                                                 onMouseEnter={() => {
-                                                    if (inMonth) updateCurrentCell(rowIndex, colIndex)
+                                                    if (inMonth && !isOutside) updateCurrentCell(rowIndex, colIndex)
                                                 }}
                                                 onTouchStart={() => {
-                                                    if (inMonth) handleCellStart(rowIndex, colIndex)
+                                                    if (inMonth && !isOutside) handleCellStart(rowIndex, colIndex)
                                                 }}
                                                 className={cn(
                                                     "w-full h-[28px] flex items-center justify-center transition-colors duration-75",
                                                     !inMonth && "bg-slate-50 opacity-30",
-                                                    inMonth && !readOnly && "cursor-pointer",
+                                                    inMonth && !readOnly && !isOutside && "cursor-pointer",
+                                                    inMonth && isOutside && "cursor-default bg-slate-100/80 text-slate-400",
                                                     inMonth && visual === 'available' && "bg-green-500 text-white",
                                                     inMonth && visual === 'unavailable' && "bg-red-400 text-white",
                                                     inMonth && visual === 'neutral' && !readOnly && "hover:bg-green-50",
@@ -511,6 +563,9 @@ export function AvailabilityCalendar({
                                             >
                                                 {inMonth && visual === 'available' && (
                                                     <span className="text-[10px] font-bold leading-none">◯</span>
+                                                )}
+                                                {inMonth && isOutside && (
+                                                    <span className="text-[9px] font-semibold leading-none">対象外</span>
                                                 )}
                                             </div>
                                         </td>

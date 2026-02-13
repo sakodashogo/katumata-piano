@@ -12,6 +12,7 @@ import { LESSON_TYPE_LABELS, ROOMS } from "@/lib/constants"
 import { bulkUpdateOpenSlots } from "@/app/lib/actions/schedule"
 import { useRouter } from "next/navigation"
 import { isSlotClosed, type ClosedDayRecord } from "@/lib/closed-days"
+import { isWithinTeacherWorkingHours, type TeacherWorkingHoursByDay } from "@/lib/teacher-working-hours"
 
 // Types
 type OpenSlot = {
@@ -39,6 +40,7 @@ type Props = {
     lessons: Lesson[]
     supportShifts?: Array<{ id: string; startTime: Date | string; endTime: Date | string }>
     closedDays?: ClosedDayRecord[]
+    workingHours: TeacherWorkingHoursByDay
 }
 
 type ScheduleListItem = {
@@ -73,6 +75,7 @@ export function AdminCalendar({
     lessons: initialLessons,
     supportShifts: initialSupportShifts = [],
     closedDays = [],
+    workingHours,
 }: Props) {
     const router = useRouter()
     const { toast } = useToast()
@@ -253,6 +256,12 @@ export function AdminCalendar({
         return isSlotClosed(closedDays, start, end)
     }
 
+    const isCellWithinWorkingHours = (day: Date, hour: number, minute: number) => {
+        const start = setMinutes(setHours(day, hour), minute)
+        const end = addMinutes(start, 30)
+        return isWithinTeacherWorkingHours(workingHours, start, end)
+    }
+
     const hasSupportAt = (day: Date, hour: number, minute: number) => {
         const start = setMinutes(setHours(day, hour), minute)
         const end = addMinutes(start, 30)
@@ -265,7 +274,11 @@ export function AdminCalendar({
 
     const isEditableCellKey = (cellKey: string, draftMap: Map<string, SlotDraftAction>) => {
         const effective = getEffectiveItemsByCellKey(cellKey, draftMap)
-        return !effective.lesson && !effective.slot?.isBooked
+        if (effective.lesson || effective.slot?.isBooked) return false
+        const { time } = parseCellKey(cellKey)
+        const start = new Date(time)
+        const end = addMinutes(start, 30)
+        return isWithinTeacherWorkingHours(workingHours, start, end)
     }
 
     const commitDraftActionForCell = (next: Map<string, SlotDraftAction>, cellKey: string, mode: PaintMode) => {
@@ -505,9 +518,10 @@ export function AdminCalendar({
         const gridCol = colIndex * 2 + (roomId === ROOMS.B.id ? 1 : 0)
 
         const cellClosed = isCellClosed(day, hour, minute)
+        const cellOutsideWorkingHours = !isCellWithinWorkingHours(day, hour, minute)
         const hasItem = items.slot || items.lesson
         const isPendingPaint = isPainting && paintedCellKeys.has(cellKey)
-        const canPaint = editMode && !items.lesson && !items.slot?.isBooked && !cellClosed
+        const canPaint = editMode && !items.lesson && !items.slot?.isBooked && !cellClosed && !cellOutsideWorkingHours
         const showDraftPreview = !!items.isDraftAdded && !items.lesson
         const showRemovedPreview = !!items.isDraftRemoved && !items.lesson
         const roomBWithoutSupport = roomId === ROOMS.B.id && !hasSupportAt(day, hour, minute)
@@ -525,6 +539,19 @@ export function AdminCalendar({
                 </div>
             )
         }
+        if (cellOutsideWorkingHours && !hasItem) {
+            return (
+                <div
+                    data-cell-key={cellKey}
+                    data-row={rowIndex}
+                    data-col={colIndex}
+                    data-room={roomId}
+                    className="rounded min-h-[30px] flex items-center justify-center relative text-xs select-none bg-slate-200/70 border border-slate-300 cursor-default"
+                >
+                    <span className="text-[9px] font-bold text-slate-500 pointer-events-none">対象外</span>
+                </div>
+            )
+        }
 
         return (
             <div
@@ -535,12 +562,15 @@ export function AdminCalendar({
                 onMouseDown={(e) => {
                     if (e.button !== 0) return
                     e.preventDefault()
+                    if (cellOutsideWorkingHours) return
                     startPaint({ row: rowIndex, col: colIndex, roomId, gridCol, key: cellKey })
                 }}
                 onMouseEnter={() => {
+                    if (cellOutsideWorkingHours) return
                     updatePaint({ row: rowIndex, col: colIndex, roomId, gridCol, key: cellKey })
                 }}
                 onTouchStart={() => {
+                    if (cellOutsideWorkingHours) return
                     startPaint({ row: rowIndex, col: colIndex, roomId, gridCol, key: cellKey })
                 }}
                 className={cn(
@@ -699,6 +729,7 @@ export function AdminCalendar({
                 <span className="inline-flex items-center gap-1 rounded-full bg-green-50 px-2 py-1 text-green-700">予約済み</span>
                 <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-1 text-amber-800">公開前</span>
                 <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-1 text-slate-700">RoomB サポート不在帯: 自主練のみ想定</span>
+                <span className="inline-flex items-center gap-1 rounded-full bg-slate-200 px-2 py-1 text-slate-700">営業時間外: 編集対象外</span>
                 <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-1 text-slate-700">ドラッグ: 矩形選択</span>
                 <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-1 text-rose-700">お休み</span>
                 <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-1 text-rose-700">保存で確定</span>

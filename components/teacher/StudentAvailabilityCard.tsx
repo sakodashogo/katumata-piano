@@ -2,18 +2,20 @@
 
 import { AvailabilityCalendar } from "@/components/availability/AvailabilityCalendar"
 import { saveMonthlyAvailability } from "@/app/lib/actions/availability"
-import { useRouter, useSearchParams } from "next/navigation"
+import { useRouter } from "next/navigation"
 import { useToast } from "@/components/ui/toast"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
+import { type TeacherWorkingHoursByDay } from "@/lib/teacher-working-hours"
 
 type Props = {
     studentId: string
     year: number
     month: number
     initialData: any
+    workingHours: TeacherWorkingHoursByDay
 }
 
-export function StudentAvailabilityCard({ studentId, year, month, initialData }: Props) {
+export function StudentAvailabilityCard({ studentId, year, month, initialData, workingHours }: Props) {
     const router = useRouter()
     const { toast } = useToast()
 
@@ -61,6 +63,7 @@ export function StudentAvailabilityCard({ studentId, year, month, initialData }:
                     initialUnavailableSlots={unavailableSlots}
                     onSave={onSave}
                     onMonthChange={onMonthChange}
+                    workingHours={workingHours}
                 />
             </CardContent>
         </Card>

@@ -16,6 +16,7 @@ import {
     LayoutGrid,
 } from "lucide-react"
 import { isSlotClosed, type ClosedDayRecord } from "@/lib/closed-days"
+import { isWithinTeacherWorkingHours, type TeacherWorkingHoursByDay } from "@/lib/teacher-working-hours"
 
 type OpenSlot = {
     id: string
@@ -65,9 +66,18 @@ type Props = {
     closedDays?: ClosedDayRecord[]
     year: number
     month: number
+    workingHours: TeacherWorkingHoursByDay
 }
 
-export function ResourceManager({ initialSlots, initialLessons, supportShifts, closedDays = [], year, month }: Props) {
+export function ResourceManager({
+    initialSlots,
+    initialLessons,
+    supportShifts,
+    closedDays = [],
+    year,
+    month,
+    workingHours,
+}: Props) {
     const slots = useMemo<OpenSlot[]>(
         () =>
             initialSlots.map((slot) => ({
@@ -137,6 +147,18 @@ export function ResourceManager({ initialSlots, initialLessons, supportShifts, c
     const lessonCount = filteredLessons.length
 
     const roomIds = [ROOMS.A.id, ROOMS.B.id] as const
+    const hasWorkingSlotAt = (day: Date, hour: number) => {
+        const firstStart = new Date(day)
+        firstStart.setHours(hour, 0, 0, 0)
+        const firstEnd = new Date(firstStart.getTime() + 30 * 60 * 1000)
+        const secondStart = new Date(day)
+        secondStart.setHours(hour, 30, 0, 0)
+        const secondEnd = new Date(secondStart.getTime() + 30 * 60 * 1000)
+        return (
+            isWithinTeacherWorkingHours(workingHours, firstStart, firstEnd) ||
+            isWithinTeacherWorkingHours(workingHours, secondStart, secondEnd)
+        )
+    }
 
     return (
         <div className="space-y-6">
@@ -183,6 +205,9 @@ export function ResourceManager({ initialSlots, initialLessons, supportShifts, c
                         </div>
                         <div className="rounded-lg border border-slate-300 bg-slate-100/60 px-3 py-2 text-slate-700">
                             第2レッスン室のグレー帯: サポート不在（通常レッスン不可）
+                        </div>
+                        <div className="rounded-lg border border-slate-300 bg-slate-200/70 px-3 py-2 text-slate-700">
+                            両室の濃いグレー帯: 曜日別レッスン許可時間外
                         </div>
                     </div>
                 </div>
@@ -264,6 +289,17 @@ export function ResourceManager({ initialSlots, initialLessons, supportShifts, c
                                                 key={`no-support-${hour}`}
                                                 className="pointer-events-none absolute left-1 right-1 border border-dashed border-slate-300/70 bg-slate-100/40"
                                                 style={{ top: `${(hour - hourRange.minHour) * 96}px`, height: "96px" }}
+                                            />
+                                        )
+                                    })}
+
+                                    {HOURS.map((hour) => {
+                                        if (hasWorkingSlotAt(selectedDate, hour)) return null
+                                        return (
+                                            <div
+                                                key={`outside-working-${roomId}-${hour}`}
+                                                className="pointer-events-none absolute left-1 right-1 border border-slate-300/80 bg-slate-200/60"
+                                                style={{ top: `${(hour - hourRange.minHour) * 96}px`, height: "96px", zIndex: 4 }}
                                             />
                                         )
                                     })}

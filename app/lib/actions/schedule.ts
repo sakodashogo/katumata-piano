@@ -6,6 +6,7 @@ import { revalidatePath } from "next/cache"
 import { addMinutes } from "date-fns"
 import { getSupportShiftsInRangeSafe, hasSupportShiftInRange } from "@/lib/support-shifts"
 import { getClosedDaysInRangeSafe, isSlotClosed } from "@/lib/closed-days"
+import { getTeacherWorkingHoursSafe, isWithinTeacherWorkingHours } from "@/lib/teacher-working-hours"
 
 function revalidateTeacherViews() {
     revalidatePath("/teacher/schedule")
@@ -124,6 +125,7 @@ export async function toggleOpenSlot(roomId: string, startTimeIso: string) {
     const endTime = addMinutes(startTime, 30)
 
     try {
+        const workingHours = await getTeacherWorkingHoursSafe()
         // Check if slot exists
         const existingSlot = await prisma.openSlot.findFirst({
             where: {
@@ -142,6 +144,9 @@ export async function toggleOpenSlot(roomId: string, startTimeIso: string) {
                 where: { id: existingSlot.id },
             })
         } else {
+            if (!isWithinTeacherWorkingHours(workingHours, startTime, endTime)) {
+                return { success: false, error: "曜日ごとのレッスン許可時間外のため空き枠を追加できません。" }
+            }
             const closedDays = await getClosedDaysInRangeSafe(startTime, endTime, { scope: "teacher" })
             if (isSlotClosed(closedDays, startTime, endTime)) {
                 return { success: false, error: "お休み時間帯のため空き枠を追加できません。" }
@@ -182,6 +187,7 @@ export async function bulkUpdateOpenSlots(roomId: string, slots: string[], actio
 
     try {
         if (action === 'add') {
+            const workingHours = await getTeacherWorkingHoursSafe()
             const candidateStarts = Array.from(
                 new Set(slots.map((value) => new Date(value).toISOString()))
             )
@@ -221,9 +227,16 @@ export async function bulkUpdateOpenSlots(roomId: string, slots: string[], actio
                 existingLessons.some((lesson) => lesson.startTime < end && lesson.endTime > start)
 
             const candidateStartsForCreate = candidateStarts.filter((start) =>
-                !isSlotClosed(closedDays, start, addMinutes(start, 30))
+                !isSlotClosed(closedDays, start, addMinutes(start, 30)) &&
+                isWithinTeacherWorkingHours(workingHours, start, addMinutes(start, 30))
             )
-            const skippedClosed = candidateStarts.length - candidateStartsForCreate.length
+            const skippedClosed = candidateStarts.filter((start) =>
+                isSlotClosed(closedDays, start, addMinutes(start, 30))
+            ).length
+            const skippedOutsideWorkingHours = candidateStarts.filter((start) =>
+                !isSlotClosed(closedDays, start, addMinutes(start, 30)) &&
+                !isWithinTeacherWorkingHours(workingHours, start, addMinutes(start, 30))
+            ).length
 
             const newSlots = candidateStartsForCreate
                 .filter((start) => !hasOverlap(start, addMinutes(start, 30)))
@@ -240,7 +253,7 @@ export async function bulkUpdateOpenSlots(roomId: string, slots: string[], actio
                 })
             }
             revalidateTeacherViews()
-            return { success: true, skippedClosed, created: newSlots.length }
+            return { success: true, skippedClosed, skippedOutsideWorkingHours, created: newSlots.length }
         } else {
             await prisma.openSlot.deleteMany({
                 where: {
@@ -305,6 +318,10 @@ export async function moveLesson(lessonId: string, newStartTime: Date, newRoomId
 
         const duration = lesson.endTime.getTime() - lesson.startTime.getTime()
         const newEndTime = new Date(newStartTime.getTime() + duration)
+        const workingHours = await getTeacherWorkingHoursSafe()
+        if (!isWithinTeacherWorkingHours(workingHours, newStartTime, newEndTime)) {
+            return { success: false, error: "曜日ごとのレッスン許可時間外には移動できません。" }
+        }
 
         const closedDays = await getClosedDaysInRangeSafe(newStartTime, newEndTime, { scope: "teacher" })
         if (isSlotClosed(closedDays, newStartTime, newEndTime)) {
@@ -418,6 +435,10 @@ export async function moveOpenSlot(slotId: string, newStartTime: Date, newRoomId
 
         const duration = slot.endTime.getTime() - slot.startTime.getTime()
         const newEndTime = new Date(newStartTime.getTime() + duration)
+        const workingHours = await getTeacherWorkingHoursSafe()
+        if (!isWithinTeacherWorkingHours(workingHours, newStartTime, newEndTime)) {
+            return { success: false, error: "曜日ごとのレッスン許可時間外には空き枠を移動できません。" }
+        }
 
         const closedDays = await getClosedDaysInRangeSafe(newStartTime, newEndTime, { scope: "teacher" })
         if (isSlotClosed(closedDays, newStartTime, newEndTime)) {

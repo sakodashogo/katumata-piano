@@ -229,3 +229,13 @@ model PublishedClosedDay {
   @@index([date])
   @@unique([publicationId, date, startTime, endTime])
 }
+
+model TeacherWorkingHour {
+  id        String   @id @default(cuid())
+  dayOfWeek Int      // 0-6 (Sun-Sat)
+  timeRanges Json    // [{ startTime: "HH:mm", endTime: "HH:mm" }, ...]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([dayOfWeek])
+}

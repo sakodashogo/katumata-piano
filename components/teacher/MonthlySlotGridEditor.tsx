@@ -9,6 +9,7 @@ import { Loader2, ChevronLeft, ChevronRight, PenLine, Copy } from "lucide-react"
 import { getStudentColorClasses } from "@/lib/student-color"
 import { useToast } from "@/components/ui/toast"
 import { isSlotClosed } from "@/lib/closed-days"
+import { isWithinTeacherWorkingHours, type TeacherWorkingHoursByDay } from "@/lib/teacher-working-hours"
 
 type Lesson = {
     id: string
@@ -51,6 +52,7 @@ type Props = {
     month: number
     supportShifts?: Array<{ startTime: Date | string; endTime: Date | string }>
     closedDays?: ClosedDayRecord[]
+    workingHours: TeacherWorkingHoursByDay
     onSave?: (lessons: DraftLesson[]) => Promise<boolean>
     onDraftChange?: (lessons: DraftLesson[]) => void
     readOnly?: boolean
@@ -94,6 +96,7 @@ export function MonthlySlotGridEditor({
     month,
     supportShifts = [],
     closedDays = [],
+    workingHours,
     onSave,
     onDraftChange,
     readOnly = false,
@@ -246,6 +249,12 @@ export function MonthlySlotGridEditor({
     const getCellIso = (day: Date, hour: number, minute: number) =>
         setMinutes(setHours(startOfDay(day), hour), minute).toISOString()
 
+    const isWorkingHourCell = React.useCallback((day: Date, hour: number, minute: number) => {
+        const slotStart = setMinutes(setHours(startOfDay(day), hour), minute)
+        const slotEnd = new Date(slotStart.getTime() + 30 * 60 * 1000)
+        return isWithinTeacherWorkingHours(workingHours, slotStart, slotEnd)
+    }, [workingHours])
+
     const isBooked = React.useCallback(
         (iso: string, roomId: "A" | "B") => nonEditableByRoom.get(roomId)?.has(new Date(iso).getTime()) ?? false,
         [nonEditableByRoom]
@@ -266,6 +275,13 @@ export function MonthlySlotGridEditor({
     const isDayInMonth = (day: Date) => day.getMonth() === month - 1 && day.getFullYear() === year
 
     const getSlotStatus = (iso: string, roomId: "A" | "B"): string => {
+        const slotStart = new Date(iso)
+        if (
+            Number.isNaN(slotStart.getTime()) ||
+            !isWorkingHourCell(slotStart, slotStart.getHours(), slotStart.getMinutes())
+        ) {
+            return "outside_working_hours"
+        }
         if (isBooked(iso, roomId)) return `booked:${nonEditableTypeByRoomIso.get(`${roomId}:${iso}`) || "REGULAR"}`
         if (draftSlots.has(iso) && (draftRooms.get(iso) || "A") === roomId) {
             return `draft:${draftTypes.get(iso) || "REGULAR"}`
@@ -304,6 +320,7 @@ export function MonthlySlotGridEditor({
                 const slot = timeSlotsRef.current[row]
                 if (!day || !slot) continue
                 if (day.getMonth() !== month - 1 || day.getFullYear() !== year) continue
+                if (!isWorkingHourCell(day, slot.hour, slot.minute)) continue
                 const iso = getCellIso(day, slot.hour, slot.minute)
                 if (!isBooked(iso, roomId)) {
                     results.push({ iso, roomId })
@@ -311,7 +328,7 @@ export function MonthlySlotGridEditor({
             }
         }
         return results
-    }, [isBooked, month, year])
+    }, [isBooked, isWorkingHourCell, month, year])
 
     const commitPaint = React.useCallback(() => {
         if (!isPaintingRef.current) return
@@ -354,6 +371,7 @@ export function MonthlySlotGridEditor({
         const day = daysRef.current[dayIndex]
         const slot = timeSlotsRef.current[row]
         if (!day || !slot) return
+        if (!isWorkingHourCell(day, slot.hour, slot.minute)) return
         const iso = getCellIso(day, slot.hour, slot.minute)
         if (isBooked(iso, roomId)) return
         const hasDraftInCurrentRoom = draftSlotsRef.current.has(iso) && (draftRoomsRef.current.get(iso) || "A") === roomId
@@ -363,7 +381,7 @@ export function MonthlySlotGridEditor({
         startCellRef.current = { row, gridCol }
         currentCellRef.current = { row, gridCol }
         rerender()
-    }, [isBooked, isBlockedBySupport, readOnly, selectedLessonType])
+    }, [isBooked, isBlockedBySupport, isWorkingHourCell, readOnly, selectedLessonType])
 
     const updateCurrentCell = React.useCallback((row: number, gridCol: number) => {
         if (!isPaintingRef.current || readOnly) return
@@ -520,6 +538,9 @@ export function MonthlySlotGridEditor({
                 skippedDuplicate += 1
                 return
             }
+            if (!isWorkingHourCell(target, target.getHours(), target.getMinutes())) {
+                return
+            }
             if (isBooked(targetIso, roomId)) {
                 skippedBooked += 1
                 return
@@ -563,7 +584,7 @@ export function MonthlySlotGridEditor({
         setDraftTypes(nextTypes)
         setDraftRooms(nextRooms)
         toast.success(`他週へ${addedCount}件配置しました（重複${skippedDuplicate} / 予約済み${skippedBooked} / サポート不在${skippedSupport}）。`)
-    }, [days, isBlockedBySupport, isBooked, month, readOnly, studentName, toast, year])
+    }, [days, isBlockedBySupport, isBooked, isWorkingHourCell, month, readOnly, studentName, toast, year])
 
     const handleSave = async () => {
         if (!onSave) return
@@ -641,6 +662,7 @@ export function MonthlySlotGridEditor({
                     <div className="flex items-center gap-1"><div className="h-2.5 w-2.5 rounded bg-green-200 border border-green-400" />希望</div>
                     <div className="flex items-center gap-1"><div className="h-2.5 w-2.5 rounded bg-red-200 border border-red-400" />不可</div>
                     <div className="flex items-center gap-1"><div className="h-2.5 w-2.5 rounded bg-slate-200 border border-slate-400" />RoomB不在</div>
+                    <div className="flex items-center gap-1"><div className="h-2.5 w-2.5 rounded bg-slate-300 border border-slate-400" />営業時間外</div>
                     <div className="flex items-center gap-1"><div className="h-2.5 w-2.5 rounded bg-slate-400" />予約済</div>
                     {!readOnly && (
                         <div className="flex items-center gap-1 rounded bg-slate-100 px-1.5 py-0.5 text-slate-500">
@@ -702,6 +724,7 @@ export function MonthlySlotGridEditor({
                                                     const visual = getVisualState(iso, rowIndex, gridCol, roomId)
                                                     const isClosed = visual === "closed"
                                                     const isNoSupport = visual === "no_support"
+                                                    const isOutsideWorkingHours = visual === "outside_working_hours"
                                                     const bookedStudent = nonEditableStudentByRoomIso.get(`${roomId}:${iso}`)
                                                     const color = visual.startsWith("booked:")
                                                         ? getStudentColorClasses(bookedStudent?.studentId)
@@ -731,6 +754,7 @@ export function MonthlySlotGridEditor({
                                                                 inMonth && visual === "neutral" && !readOnly && "cursor-pointer bg-white hover:bg-slate-50",
                                                                 inMonth && visual === "neutral" && readOnly && "bg-white",
                                                                 inMonth && isNoSupport && "bg-slate-100 border-dashed border-slate-300",
+                                                                inMonth && isOutsideWorkingHours && "bg-slate-200 border-slate-300 cursor-default text-slate-500",
                                                                 inMonth && isClosed && "bg-rose-100 border-rose-200 cursor-default"
                                                             )}
                                                             title={
@@ -754,6 +778,7 @@ export function MonthlySlotGridEditor({
                                                             {inMonth && visual === "available" && <span className="text-[9px] font-medium text-green-600">◯</span>}
                                                             {inMonth && visual === "unavailable" && <span className="text-[9px] text-red-400">✕</span>}
                                                             {inMonth && isNoSupport && <span className="rounded bg-slate-200 px-1 text-[9px] text-slate-600">自主練</span>}
+                                                            {inMonth && isOutsideWorkingHours && <span className="text-[9px] font-bold text-slate-500">対象外</span>}
                                                             {inMonth && isClosed && <span className="text-[9px] font-bold text-rose-500">お休み</span>}
                                                         </div>
                                                     )

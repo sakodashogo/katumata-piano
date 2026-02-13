@@ -2,6 +2,7 @@ import { auth } from "@/auth"
 import { prisma } from "@/lib/prisma"
 import { redirect } from "next/navigation"
 import { TeacherMonthlyAvailabilityManager } from "@/components/teacher/TeacherMonthlyAvailabilityManager"
+import { getTeacherWorkingHoursSafe } from "@/lib/teacher-working-hours"
 
 export default async function AvailabilitiesPage({
     searchParams,
@@ -18,20 +19,23 @@ export default async function AvailabilitiesPage({
     const year = params.year ? Number.parseInt(params.year, 10) : now.getFullYear()
     const month = params.month ? Number.parseInt(params.month, 10) : now.getMonth() + 1
 
-    const students = await prisma.user.findMany({
-        where: { role: "STUDENT" },
-        select: {
-            id: true,
-            name: true,
-            email: true,
-            monthlyAvailabilities: {
-                where: { year, month },
-                orderBy: { updatedAt: "desc" },
-                take: 1,
+    const [students, workingHours] = await Promise.all([
+        prisma.user.findMany({
+            where: { role: "STUDENT" },
+            select: {
+                id: true,
+                name: true,
+                email: true,
+                monthlyAvailabilities: {
+                    where: { year, month },
+                    orderBy: { updatedAt: "desc" },
+                    take: 1,
+                },
             },
-        },
-        orderBy: [{ name: "asc" }, { email: "asc" }],
-    })
+            orderBy: [{ name: "asc" }, { email: "asc" }],
+        }),
+        getTeacherWorkingHoursSafe(),
+    ])
 
     const initialStudentId =
         (params.student && students.some((student) => student.id === params.student) ? params.student : undefined) ??
@@ -57,6 +61,7 @@ export default async function AvailabilitiesPage({
                 month={month}
                 students={formattedStudents}
                 initialStudentId={initialStudentId}
+                workingHours={workingHours}
             />
         </div>
     )

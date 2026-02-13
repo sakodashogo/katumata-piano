@@ -2,6 +2,7 @@
 
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { MonthlySlotGridEditor } from "@/components/teacher/MonthlySlotGridEditor"
+import { type TeacherWorkingHoursByDay } from "@/lib/teacher-working-hours"
 
 type Lesson = {
     id: string
@@ -19,6 +20,7 @@ type Props = {
     availableSlots: string[]
     unavailableSlots: string[]
     existingLessons: Lesson[]
+    workingHours: TeacherWorkingHoursByDay
     year: number
     month: number
     onSave: (lessons: {
@@ -37,6 +39,7 @@ export function SchedulingCalendar({
     availableSlots,
     unavailableSlots,
     existingLessons,
+    workingHours,
     year,
     month,
     onSave,
@@ -55,6 +58,7 @@ export function SchedulingCalendar({
                     availableSlots={availableSlots}
                     unavailableSlots={unavailableSlots}
                     existingLessons={existingLessons}
+                    workingHours={workingHours}
                     year={year}
                     month={month}
                     onSave={onSave}

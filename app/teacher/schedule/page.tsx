@@ -7,6 +7,7 @@ import { auth } from "@/auth"
 import { redirect } from "next/navigation"
 import Link from "next/link"
 import { getClosedDaysInRangeSafe } from "@/lib/closed-days"
+import { getTeacherWorkingHoursSafe } from "@/lib/teacher-working-hours"
 
 type ScheduleSlot = {
     id: string
@@ -66,11 +67,12 @@ export default async function SchedulePage({
     const month = date.getMonth() + 1
     const monthStart = startOfMonth(new Date(monthYear, month - 1, 1))
     const monthEndExclusive = addDays(endOfMonth(monthStart), 1)
-    const [scheduleResult, monthlyCalendarResult, closedDays, monthClosedDays] = await Promise.all([
+    const [scheduleResult, monthlyCalendarResult, closedDays, monthClosedDays, workingHours] = await Promise.all([
         getScheduleData(undefined, start, end),
         getMonthlyLessonCalendarData(monthYear, month),
         getClosedDaysInRangeSafe(start, end),
         getClosedDaysInRangeSafe(monthStart, monthEndExclusive),
+        getTeacherWorkingHoursSafe(),
     ])
 
     if (!scheduleResult.success || !scheduleResult.data) {
@@ -156,6 +158,7 @@ export default async function SchedulePage({
                     ...cd,
                     date: new Date(cd.date),
                 }))}
+                workingHours={workingHours}
             />
 
             <section className="rounded-xl border border-slate-200 bg-slate-50 p-3">

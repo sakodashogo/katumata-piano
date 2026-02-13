@@ -6,6 +6,7 @@ import { revalidatePath } from "next/cache"
 import { addMinutes } from "date-fns"
 import { getSupportShiftsInRangeSafe } from "@/lib/support-shifts"
 import { getClosedDaysInRangeSafe, isSlotClosed } from "@/lib/closed-days"
+import { getTeacherWorkingHoursSafe, isWithinTeacherWorkingHours } from "@/lib/teacher-working-hours"
 
 async function hasRoomTimeConflict(args: {
     roomId: string
@@ -97,6 +98,10 @@ export async function createOpenSlot(data: { roomId: string, startTime: Date, en
         if (data.startTime >= data.endTime) {
             return { success: false, error: "開始時刻は終了時刻より前に設定してください。" }
         }
+        const workingHours = await getTeacherWorkingHoursSafe()
+        if (!isWithinTeacherWorkingHours(workingHours, data.startTime, data.endTime)) {
+            return { success: false, error: "曜日ごとのレッスン許可時間外のため空き枠を作成できません。" }
+        }
 
         const closedDays = await getClosedDaysInRangeSafe(data.startTime, data.endTime, { scope: "teacher" })
         if (isSlotClosed(closedDays, data.startTime, data.endTime)) {
@@ -154,6 +159,10 @@ export async function updateOpenSlot(id: string, data: { roomId?: string, startT
 
         if (nextStartTime >= nextEndTime) {
             return { success: false, error: "開始時刻は終了時刻より前に設定してください。" }
+        }
+        const workingHours = await getTeacherWorkingHoursSafe()
+        if (!isWithinTeacherWorkingHours(workingHours, nextStartTime, nextEndTime)) {
+            return { success: false, error: "曜日ごとのレッスン許可時間外のため更新できません。" }
         }
 
         const closedDays = await getClosedDaysInRangeSafe(nextStartTime, nextEndTime, { scope: "teacher" })
@@ -219,7 +228,7 @@ export async function publishOpenSlots(ids: string[]) {
 
     try {
         if (ids.length === 0) {
-            return { success: true, publishedCount: 0, skippedClosedCount: 0 }
+            return { success: true, publishedCount: 0, skippedClosedCount: 0, skippedOutsideWorkingCount: 0 }
         }
 
         const slots = await prisma.openSlot.findMany({
@@ -235,17 +244,29 @@ export async function publishOpenSlots(ids: string[]) {
         })
 
         if (slots.length === 0) {
-            return { success: true, publishedCount: 0, skippedClosedCount: 0 }
+            return { success: true, publishedCount: 0, skippedClosedCount: 0, skippedOutsideWorkingCount: 0 }
         }
 
         const minStart = slots.reduce((acc, slot) => (slot.startTime < acc ? slot.startTime : acc), slots[0].startTime)
         const maxEnd = slots.reduce((acc, slot) => (slot.endTime > acc ? slot.endTime : acc), slots[0].endTime)
-        const closedDays = await getClosedDaysInRangeSafe(minStart, maxEnd, { scope: "teacher" })
+        const [closedDays, workingHours] = await Promise.all([
+            getClosedDaysInRangeSafe(minStart, maxEnd, { scope: "teacher" }),
+            getTeacherWorkingHoursSafe(),
+        ])
 
         const publishableIds = slots
-            .filter((slot) => !isSlotClosed(closedDays, slot.startTime, slot.endTime))
+            .filter((slot) =>
+                !isSlotClosed(closedDays, slot.startTime, slot.endTime) &&
+                isWithinTeacherWorkingHours(workingHours, slot.startTime, slot.endTime)
+            )
             .map((slot) => slot.id)
-        const skippedClosedCount = slots.length - publishableIds.length
+        const skippedClosedCount = slots.filter((slot) =>
+            isSlotClosed(closedDays, slot.startTime, slot.endTime)
+        ).length
+        const skippedOutsideWorkingCount = slots.filter((slot) =>
+            !isSlotClosed(closedDays, slot.startTime, slot.endTime) &&
+            !isWithinTeacherWorkingHours(workingHours, slot.startTime, slot.endTime)
+        ).length
 
         const result = publishableIds.length > 0
             ? await prisma.openSlot.updateMany({
@@ -260,7 +281,7 @@ export async function publishOpenSlots(ids: string[]) {
         revalidatePath('/teacher/resources')
         revalidatePath('/teacher/slots')
         revalidatePath('/student/book') // Revalidate student booking page
-        return { success: true, publishedCount: result.count, skippedClosedCount }
+        return { success: true, publishedCount: result.count, skippedClosedCount, skippedOutsideWorkingCount }
     } catch {
         return { success: false, error: "Failed to publish slots" }
     }

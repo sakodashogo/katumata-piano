@@ -113,8 +113,9 @@ export function RoomScheduler({ initialDate = new Date(), slots, lessons }: Prop
         if (result.success) {
             const publishedCount = typeof result.publishedCount === "number" ? result.publishedCount : 0
             const skippedClosed = typeof result.skippedClosedCount === "number" ? result.skippedClosedCount : 0
-            if (skippedClosed > 0) {
-                toast.info(`公開${publishedCount}件 / お休み重複で${skippedClosed}件スキップしました。`)
+            const skippedOutside = typeof result.skippedOutsideWorkingCount === "number" ? result.skippedOutsideWorkingCount : 0
+            if (skippedClosed > 0 || skippedOutside > 0) {
+                toast.info(`公開${publishedCount}件 / お休み重複${skippedClosed}件 / 時間外${skippedOutside}件をスキップしました。`)
             } else {
                 toast.success(`${publishedCount}件の枠を公開しました。`)
             }

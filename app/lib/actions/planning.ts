@@ -7,6 +7,7 @@ import { addDays, startOfMonth, endOfMonth, getDay, setHours, setMinutes } from 
 import { notifyEvent } from "@/lib/notifications"
 import { getSupportShiftsInRangeSafe, hasSupportShiftInRange } from "@/lib/support-shifts"
 import { getClosedDaysInRangeSafe, isSlotClosed } from "@/lib/closed-days"
+import { getTeacherWorkingHoursSafe, isWithinTeacherWorkingHours } from "@/lib/teacher-working-hours"
 
 function getMonthBounds(year: number, month: number) {
     const start = new Date(year, month - 1, 1, 0, 0, 0, 0)
@@ -103,6 +104,7 @@ export async function publishFixedSchedule(monthStr: string, assignments: Assign
     const targetDate = new Date(monthStr + "-01") // "2026-03" -> Date
     const start = startOfMonth(targetDate)
     const end = endOfMonth(targetDate)
+    const workingHours = await getTeacherWorkingHoursSafe()
 
     try {
         await prisma.$transaction(async (tx) => {
@@ -117,6 +119,9 @@ export async function publishFixedSchedule(monthStr: string, assignments: Assign
                 for (const assignment of daysAssignments) {
                     const lessonStart = setMinutes(setHours(current, assignment.hour), assignment.minute)
                     const lessonEnd = setMinutes(setHours(current, assignment.hour), assignment.minute + assignment.duration)
+                    if (!isWithinTeacherWorkingHours(workingHours, lessonStart, lessonEnd)) {
+                        throw new Error("曜日別のレッスン許可時間外のため公開できません。")
+                    }
 
                     // Check for conflicts? For now, trust the teacher's "Puzzle"
 
@@ -222,6 +227,7 @@ export async function bulkCreateLessons(lessons: LessonDraft[]) {
     }
 
     try {
+        const workingHours = await getTeacherWorkingHoursSafe()
         const parsedRanges = lessons
             .map((lesson) => ({
                 startTime: new Date(lesson.startTime),
@@ -244,6 +250,9 @@ export async function bulkCreateLessons(lessons: LessonDraft[]) {
 
                 if (Number.isNaN(startTime.getTime()) || Number.isNaN(endTime.getTime()) || endTime <= startTime) {
                     throw new Error("レッスン日時が不正です。")
+                }
+                if (!isWithinTeacherWorkingHours(workingHours, startTime, endTime)) {
+                    throw new Error("曜日ごとのレッスン許可時間外です。")
                 }
                 if (isSlotClosed(closedDays, startTime, endTime)) {
                     throw new Error("お休み時間帯にレッスンを作成できません。")
@@ -335,7 +344,10 @@ export async function replaceStudentMonthlyLessons(input: ReplaceMonthlyLessonsI
     }
 
     const { start: monthStart, end: monthEnd } = getMonthBounds(input.year, input.month)
-    const closedDays = await getClosedDaysInRangeSafe(monthStart, monthEnd, { scope: "teacher" })
+    const [closedDays, workingHours] = await Promise.all([
+        getClosedDaysInRangeSafe(monthStart, monthEnd, { scope: "teacher" }),
+        getTeacherWorkingHoursSafe(),
+    ])
 
     const normalizedLessons = input.lessons
         .map((lesson) => ({
@@ -356,6 +368,9 @@ export async function replaceStudentMonthlyLessons(input: ReplaceMonthlyLessonsI
         }
         if (lesson.startTime < monthStart || lesson.startTime >= monthEnd) {
             return { success: false as const, error: "対象月以外の日時は保存できません。" }
+        }
+        if (!isWithinTeacherWorkingHours(workingHours, lesson.startTime, lesson.endTime)) {
+            return { success: false as const, error: "曜日ごとのレッスン許可時間外のため保存できません。" }
         }
         if (isSlotClosed(closedDays, lesson.startTime, lesson.endTime)) {
             return { success: false as const, error: "お休み時間帯のため保存できません。" }
@@ -517,6 +532,10 @@ export async function appendStudentMonthlyLesson(input: {
         const type = input.type || "REGULAR"
         if (Number.isNaN(startTime.getTime()) || Number.isNaN(endTime.getTime()) || endTime <= startTime) {
             return { success: false as const, error: "日時が不正です。" }
+        }
+        const workingHours = await getTeacherWorkingHoursSafe()
+        if (!isWithinTeacherWorkingHours(workingHours, startTime, endTime)) {
+            return { success: false as const, error: "曜日ごとのレッスン許可時間外のため設定できません。" }
         }
         const closedDays = await getClosedDaysInRangeSafe(startTime, endTime, { scope: "teacher" })
         if (isSlotClosed(closedDays, startTime, endTime)) {
