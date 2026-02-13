@@ -29,6 +29,7 @@ import {
     setSupportStaffActive,
 } from "@/app/lib/actions/support"
 import { CheckCheck, ChevronLeft, ChevronRight, Copy, Eraser, RotateCcw, Save } from "lucide-react"
+import { isSlotClosed } from "@/lib/closed-days"
 
 type SupportStaff = {
     id: string
@@ -44,11 +45,20 @@ type SupportShift = {
     staff?: { id: string; name: string; active: boolean } | null
 }
 
+type ClosedDayRecord = {
+    id: string
+    date: Date
+    startTime: string | null
+    endTime: string | null
+    reason: string | null
+}
+
 type Props = {
     initialYear: number
     initialMonth: number
     staff: SupportStaff[]
     shifts: SupportShift[]
+    closedDays?: ClosedDayRecord[]
 }
 
 type CellPos = { row: number; col: number }
@@ -78,7 +88,7 @@ function explodeShiftToSlots(start: Date, end: Date) {
     return slots
 }
 
-export function SupportShiftPlanner({ initialYear, initialMonth, staff, shifts }: Props) {
+export function SupportShiftPlanner({ initialYear, initialMonth, staff, shifts, closedDays = [] }: Props) {
     const router = useRouter()
     const { toast } = useToast()
 
@@ -559,6 +569,9 @@ export function SupportShiftPlanner({ initialYear, initialMonth, staff, shifts }
                                                 const hasBase = baseSlotSet.has(iso)
                                                 const hasDraft = draftSlots.has(iso)
                                                 const inRect = pendingRect.has(iso)
+                                                const cellStart = setMinutes(setHours(new Date(day), hour), minute)
+                                                const cellEnd = addMinutes(cellStart, 30)
+                                                const cellClosed = inMonth && isSlotClosed(closedDays, cellStart, cellEnd)
                                                 return (
                                                     <td key={day.toISOString()} className="border-r p-0.5 last:border-r-0">
                                                         <div
@@ -566,31 +579,33 @@ export function SupportShiftPlanner({ initialYear, initialMonth, staff, shifts }
                                                             data-col={colIndex}
                                                             onMouseDown={(e) => {
                                                                 if (e.button !== 0) return
-                                                                if (!inMonth) return
+                                                                if (!inMonth || cellClosed) return
                                                                 e.preventDefault()
                                                                 startPaint(rowIndex, colIndex)
                                                             }}
                                                             onMouseEnter={() => {
                                                                 if (!isPainting) return
-                                                                if (!inMonth) return
+                                                                if (!inMonth || cellClosed) return
                                                                 setCurrentCell({ row: rowIndex, col: colIndex })
                                                             }}
                                                             onTouchStart={() => {
-                                                                if (!inMonth) return
+                                                                if (!inMonth || cellClosed) return
                                                                 startPaint(rowIndex, colIndex)
                                                             }}
                                                             className={cn(
                                                                 "relative h-8 rounded border transition-colors",
                                                                 !inMonth && "border-slate-100 bg-slate-50 opacity-40",
-                                                                hasDraft ? "border-cyan-300 bg-cyan-50" : "border-dashed border-slate-200",
-                                                                inRect && paintMode === "add" && "border-emerald-300 bg-emerald-100",
-                                                                inRect && paintMode === "remove" && "border-rose-300 bg-rose-100",
+                                                                cellClosed && "border-rose-200 bg-rose-100/70",
+                                                                !cellClosed && hasDraft ? "border-cyan-300 bg-cyan-50" : !cellClosed && "border-dashed border-slate-200",
+                                                                !cellClosed && inRect && paintMode === "add" && "border-emerald-300 bg-emerald-100",
+                                                                !cellClosed && inRect && paintMode === "remove" && "border-rose-300 bg-rose-100",
                                                             )}
                                                         >
-                                                            {inMonth && hasDraft && !inRect && <span className="text-[10px] font-semibold text-cyan-700">勤務</span>}
-                                                            {inMonth && inRect && paintMode === "add" && <span className="text-[10px] font-semibold text-emerald-700">追加</span>}
-                                                            {inMonth && inRect && paintMode === "remove" && <span className="text-[10px] font-semibold text-rose-700">削除</span>}
-                                                            {inMonth && !hasDraft && hasBase && !inRect && (
+                                                            {cellClosed && <span className="text-[9px] font-bold text-rose-500">お休み</span>}
+                                                            {!cellClosed && inMonth && hasDraft && !inRect && <span className="text-[10px] font-semibold text-cyan-700">勤務</span>}
+                                                            {!cellClosed && inMonth && inRect && paintMode === "add" && <span className="text-[10px] font-semibold text-emerald-700">追加</span>}
+                                                            {!cellClosed && inMonth && inRect && paintMode === "remove" && <span className="text-[10px] font-semibold text-rose-700">削除</span>}
+                                                            {!cellClosed && inMonth && !hasDraft && hasBase && !inRect && (
                                                                 <span className="text-[10px] font-semibold text-rose-600">削除予定</span>
                                                             )}
                                                         </div>

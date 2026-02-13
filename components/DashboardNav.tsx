@@ -17,6 +17,7 @@ const teacherLinks = [
     { href: "/teacher/resources", label: "リソース可視化" },
     { href: "/teacher/availabilities", label: "生徒の希望" },
     { href: "/teacher/schedule/monthly", label: "月間スケジュール" },
+    { href: "/teacher/closed-days", label: "お休み設定" },
 ]
 
 const studentLinks = [

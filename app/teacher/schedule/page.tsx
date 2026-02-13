@@ -6,6 +6,7 @@ import { SyncButton } from "@/components/teacher/SyncButton"
 import { auth } from "@/auth"
 import { redirect } from "next/navigation"
 import Link from "next/link"
+import { getClosedDaysInRangeSafe } from "@/lib/closed-days"
 
 type ScheduleSlot = {
     id: string
@@ -63,9 +64,10 @@ export default async function SchedulePage({
 
     const monthYear = date.getFullYear()
     const month = date.getMonth() + 1
-    const [scheduleResult, monthlyCalendarResult] = await Promise.all([
+    const [scheduleResult, monthlyCalendarResult, closedDays] = await Promise.all([
         getScheduleData(undefined, start, end),
         getMonthlyLessonCalendarData(monthYear, month),
+        getClosedDaysInRangeSafe(start, end),
     ])
 
     if (!scheduleResult.success || !scheduleResult.data) {
@@ -147,6 +149,10 @@ export default async function SchedulePage({
                 slots={slots}
                 lessons={lessons}
                 supportShifts={supportShifts}
+                closedDays={closedDays.map((cd) => ({
+                    ...cd,
+                    date: new Date(cd.date),
+                }))}
             />
 
             <section className="rounded-xl border border-slate-200 bg-slate-50 p-3">

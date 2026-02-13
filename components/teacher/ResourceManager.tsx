@@ -15,6 +15,7 @@ import {
     ChevronRight,
     LayoutGrid,
 } from "lucide-react"
+import { isSlotClosed, type ClosedDayRecord } from "@/lib/closed-days"
 
 type OpenSlot = {
     id: string
@@ -61,11 +62,12 @@ type Props = {
         student?: { name: string | null } | null
     }>
     supportShifts: SupportShift[]
+    closedDays?: ClosedDayRecord[]
     year: number
     month: number
 }
 
-export function ResourceManager({ initialSlots, initialLessons, supportShifts, year, month }: Props) {
+export function ResourceManager({ initialSlots, initialLessons, supportShifts, closedDays = [], year, month }: Props) {
     const slots = useMemo<OpenSlot[]>(
         () =>
             initialSlots.map((slot) => ({
@@ -264,6 +266,54 @@ export function ResourceManager({ initialSlots, initialLessons, supportShifts, y
                                                 style={{ top: `${(hour - hourRange.minHour) * 96}px`, height: "96px" }}
                                             />
                                         )
+                                    })}
+
+                                    {HOURS.map((hour) => {
+                                        const slotStart0 = new Date(selectedDate)
+                                        slotStart0.setHours(hour, 0, 0, 0)
+                                        const slotEnd0 = new Date(selectedDate)
+                                        slotEnd0.setHours(hour, 30, 0, 0)
+                                        const slotStart30 = new Date(selectedDate)
+                                        slotStart30.setHours(hour, 30, 0, 0)
+                                        const slotEnd30 = new Date(selectedDate)
+                                        slotEnd30.setHours(hour + 1, 0, 0, 0)
+                                        const closed0 = isSlotClosed(closedDays, slotStart0, slotEnd0)
+                                        const closed30 = isSlotClosed(closedDays, slotStart30, slotEnd30)
+
+                                        if (!closed0 && !closed30) return null
+
+                                        if (closed0 && closed30) {
+                                            return (
+                                                <div
+                                                    key={`closed-${roomId}-${hour}`}
+                                                    className="pointer-events-none absolute left-1 right-1 rounded-lg border border-rose-200 bg-rose-100/60 flex items-center justify-center"
+                                                    style={{ top: `${(hour - hourRange.minHour) * 96}px`, height: "96px", zIndex: 5 }}
+                                                >
+                                                    <span className="text-[10px] font-bold text-rose-500">お休み</span>
+                                                </div>
+                                            )
+                                        }
+
+                                        return [
+                                            closed0 && (
+                                                <div
+                                                    key={`closed-${roomId}-${hour}-0`}
+                                                    className="pointer-events-none absolute left-1 right-1 rounded-lg border border-rose-200 bg-rose-100/60 flex items-center justify-center"
+                                                    style={{ top: `${(hour - hourRange.minHour) * 96}px`, height: "48px", zIndex: 5 }}
+                                                >
+                                                    <span className="text-[10px] font-bold text-rose-500">お休み</span>
+                                                </div>
+                                            ),
+                                            closed30 && (
+                                                <div
+                                                    key={`closed-${roomId}-${hour}-30`}
+                                                    className="pointer-events-none absolute left-1 right-1 rounded-lg border border-rose-200 bg-rose-100/60 flex items-center justify-center"
+                                                    style={{ top: `${(hour - hourRange.minHour) * 96 + 48}px`, height: "48px", zIndex: 5 }}
+                                                >
+                                                    <span className="text-[10px] font-bold text-rose-500">お休み</span>
+                                                </div>
+                                            ),
+                                        ]
                                     })}
 
                                     {roomSlots.map((slot) => {

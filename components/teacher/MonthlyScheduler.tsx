@@ -57,10 +57,19 @@ type DraftLesson = {
 
 type LessonTypeValue = Lesson["type"] | DraftLesson["type"] | null | undefined
 
+type ClosedDayRecord = {
+    id: string
+    date: Date
+    startTime: string | null
+    endTime: string | null
+    reason: string | null
+}
+
 type Props = {
     students: Student[]
     lessons: Lesson[]
     supportShifts?: Shift[]
+    closedDays?: ClosedDayRecord[]
     year: number
     month: number
     isPublished?: boolean
@@ -118,6 +127,7 @@ export function MonthlyScheduler({
     students,
     lessons,
     supportShifts = [],
+    closedDays = [],
     year,
     month,
     isPublished = false,
@@ -735,6 +745,7 @@ export function MonthlyScheduler({
                                     }
                                     existingLessons={selectedStudentLessonsForEditor}
                                     supportShifts={supportShifts}
+                                    closedDays={closedDays}
                                     year={year}
                                     month={month}
                                     onDraftChange={handleDraftChangeForSelected}

@@ -8,6 +8,7 @@ import { ja } from "date-fns/locale"
 import { Loader2, ChevronLeft, ChevronRight, PenLine, Copy } from "lucide-react"
 import { getStudentColorClasses } from "@/lib/student-color"
 import { useToast } from "@/components/ui/toast"
+import { isSlotClosed } from "@/lib/closed-days"
 
 type Lesson = {
     id: string
@@ -32,6 +33,14 @@ type DraftLessonType = "REGULAR" | "AD_HOC" | "PRACTICE" | "SOLO_ADDITIONAL" | "
 
 type CellPos = { row: number; gridCol: number }
 
+type ClosedDayRecord = {
+    id: string
+    date: Date
+    startTime: string | null
+    endTime: string | null
+    reason: string | null
+}
+
 type Props = {
     studentId: string
     studentName: string
@@ -41,6 +50,7 @@ type Props = {
     year: number
     month: number
     supportShifts?: Array<{ startTime: Date | string; endTime: Date | string }>
+    closedDays?: ClosedDayRecord[]
     onSave?: (lessons: DraftLesson[]) => Promise<boolean>
     onDraftChange?: (lessons: DraftLesson[]) => void
     readOnly?: boolean
@@ -83,6 +93,7 @@ export function MonthlySlotGridEditor({
     year,
     month,
     supportShifts = [],
+    closedDays = [],
     onSave,
     onDraftChange,
     readOnly = false,
@@ -569,6 +580,9 @@ export function MonthlySlotGridEditor({
     }
 
     const getVisualState = (iso: string, row: number, gridCol: number, roomId: "A" | "B") => {
+        const isoDate = new Date(iso)
+        const isoEnd = new Date(isoDate.getTime() + 30 * 60 * 1000)
+        if (isSlotClosed(closedDays, isoDate, isoEnd)) return "closed"
         if (isBooked(iso, roomId)) return `booked:${nonEditableTypeByRoomIso.get(`${roomId}:${iso}`) || "REGULAR"}`
         if (isInPendingRect(row, gridCol)) {
             if (paintTypeRef.current === "draft") return `draft:${selectedLessonType}`
@@ -686,6 +700,7 @@ export function MonthlySlotGridEditor({
                                                 {(["A", "B"] as const).map((roomId, roomOffset) => {
                                                     const gridCol = colIndex * 2 + roomOffset
                                                     const visual = getVisualState(iso, rowIndex, gridCol, roomId)
+                                                    const isClosed = visual === "closed"
                                                     const isNoSupport = visual === "no_support"
                                                     const bookedStudent = nonEditableStudentByRoomIso.get(`${roomId}:${iso}`)
                                                     const color = visual.startsWith("booked:")
@@ -715,7 +730,8 @@ export function MonthlySlotGridEditor({
                                                                 inMonth && visual === "unavailable" && `${readOnly ? "cursor-default" : "cursor-pointer"} bg-red-100`,
                                                                 inMonth && visual === "neutral" && !readOnly && "cursor-pointer bg-white hover:bg-slate-50",
                                                                 inMonth && visual === "neutral" && readOnly && "bg-white",
-                                                                inMonth && isNoSupport && "bg-slate-100 border-dashed border-slate-300"
+                                                                inMonth && isNoSupport && "bg-slate-100 border-dashed border-slate-300",
+                                                                inMonth && isClosed && "bg-rose-100 border-rose-200 cursor-default"
                                                             )}
                                                             title={
                                                                 visual.startsWith("booked:")
@@ -738,6 +754,7 @@ export function MonthlySlotGridEditor({
                                                             {inMonth && visual === "available" && <span className="text-[9px] font-medium text-green-600">◯</span>}
                                                             {inMonth && visual === "unavailable" && <span className="text-[9px] text-red-400">✕</span>}
                                                             {inMonth && isNoSupport && <span className="rounded bg-slate-200 px-1 text-[9px] text-slate-600">自主練</span>}
+                                                            {inMonth && isClosed && <span className="text-[9px] font-bold text-rose-500">お休み</span>}
                                                         </div>
                                                     )
                                                 })}

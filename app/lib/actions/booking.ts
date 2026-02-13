@@ -7,6 +7,7 @@ import { BOOKING_RULES } from "@/lib/constants"
 import { isStudentBookableMenu, toLessonTypeFromMenu } from "@/lib/menu-category"
 import { notifyEvent } from "@/lib/notifications"
 import { getSupportShiftsInRangeSafe } from "@/lib/support-shifts"
+import { getClosedDaysInRangeSafe, isSlotClosed } from "@/lib/closed-days"
 import {
     buildBookableStartTimes,
     filterSlotsBySupport,
@@ -178,8 +179,12 @@ export async function getBookableStartTimes(dateStr: string, menuId: string, dat
             orderBy: { startTime: "asc" },
         })
 
-        const supportShifts = await getSupportShiftsInRangeSafe(start, end)
+        const [supportShifts, closedDays] = await Promise.all([
+            getSupportShiftsInRangeSafe(start, end),
+            getClosedDaysInRangeSafe(start, end),
+        ])
         const filtered = filterSlotsBySupport(slots, supportShifts, lessonType)
+            .filter((slot) => !isSlotClosed(closedDays, new Date(slot.startTime), new Date(slot.endTime)))
 
         const candidates = buildBookableStartTimes(filtered, menu.durationMin)
         return { success: true, data: candidates }
@@ -223,8 +228,12 @@ export async function getBookableDaysInRange(startStr: string, endStr: string, m
             orderBy: { startTime: "asc" },
         })
 
-        const supportShifts = await getSupportShiftsInRangeSafe(start, end)
+        const [supportShifts, closedDays] = await Promise.all([
+            getSupportShiftsInRangeSafe(start, end),
+            getClosedDaysInRangeSafe(start, end),
+        ])
         const filtered = filterSlotsBySupport(slots, supportShifts, lessonType)
+            .filter((slot) => !isSlotClosed(closedDays, new Date(slot.startTime), new Date(slot.endTime)))
 
         const dates = new Set(
             buildBookableStartTimes(filtered, menu.durationMin).map((slot) =>
@@ -276,8 +285,12 @@ export async function getBookableSlotsInRange(startStr: string, endStr: string, 
             orderBy: { startTime: "asc" },
         })
 
-        const supportShifts = await getSupportShiftsInRangeSafe(start, end)
+        const [supportShifts, closedDays] = await Promise.all([
+            getSupportShiftsInRangeSafe(start, end),
+            getClosedDaysInRangeSafe(start, end),
+        ])
         const filtered = filterSlotsBySupport(slots, supportShifts, lessonType)
+            .filter((slot) => !isSlotClosed(closedDays, new Date(slot.startTime), new Date(slot.endTime)))
 
         const candidates = buildBookableStartTimes(filtered, menu.durationMin)
         return { success: true, data: candidates }

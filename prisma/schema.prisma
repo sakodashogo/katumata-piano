@@ -177,12 +177,25 @@ model Availability {
   id        String   @id @default(cuid())
   studentId String
   student   User     @relation("StudentAvailability", fields: [studentId], references: [id])
-  
+
   days      Json      // Array of preferred days e.g. ["monday", "wednesday"]
   startTime String?   // General preferred start time e.g. "16:00"
   endTime   String?   // General preferred end time e.g. "19:00"
   note      String?
-  
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+model ClosedDay {
+  id        String   @id @default(cuid())
+  date      DateTime // Calendar date, normalized to midnight
+  startTime String?  // "HH:mm" or null = whole day
+  endTime   String?  // "HH:mm" or null = whole day
+  reason    String?  // e.g. "祝日", "発表会準備"
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([date])
+  @@unique([date, startTime, endTime])
 }

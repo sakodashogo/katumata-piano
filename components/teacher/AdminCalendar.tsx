@@ -11,6 +11,7 @@ import { useToast } from "@/components/ui/toast"
 import { LESSON_TYPE_LABELS, ROOMS } from "@/lib/constants"
 import { bulkUpdateOpenSlots } from "@/app/lib/actions/schedule"
 import { useRouter } from "next/navigation"
+import { isSlotClosed, type ClosedDayRecord } from "@/lib/closed-days"
 
 // Types
 type OpenSlot = {
@@ -37,6 +38,7 @@ type Props = {
     slots: OpenSlot[]
     lessons: Lesson[]
     supportShifts?: Array<{ id: string; startTime: Date | string; endTime: Date | string }>
+    closedDays?: ClosedDayRecord[]
 }
 
 type ScheduleListItem = {
@@ -70,6 +72,7 @@ export function AdminCalendar({
     slots: initialSlots,
     lessons: initialLessons,
     supportShifts: initialSupportShifts = [],
+    closedDays = [],
 }: Props) {
     const router = useRouter()
     const { toast } = useToast()
@@ -242,6 +245,12 @@ export function AdminCalendar({
     const getCellItems = (day: Date, hour: number, minute: number, roomId: string) => {
         const time = setMinutes(setHours(day, hour), minute).getTime()
         return getEffectiveItemsByCellKey(getCellKey(roomId, time), slotDraftMap)
+    }
+
+    const isCellClosed = (day: Date, hour: number, minute: number) => {
+        const start = setMinutes(setHours(day, hour), minute)
+        const end = addMinutes(start, 30)
+        return isSlotClosed(closedDays, start, end)
     }
 
     const hasSupportAt = (day: Date, hour: number, minute: number) => {
@@ -495,12 +504,27 @@ export function AdminCalendar({
         const cellKey = getCellKey(roomId, time)
         const gridCol = colIndex * 2 + (roomId === ROOMS.B.id ? 1 : 0)
 
+        const cellClosed = isCellClosed(day, hour, minute)
         const hasItem = items.slot || items.lesson
         const isPendingPaint = isPainting && paintedCellKeys.has(cellKey)
-        const canPaint = editMode && !items.lesson && !items.slot?.isBooked
+        const canPaint = editMode && !items.lesson && !items.slot?.isBooked && !cellClosed
         const showDraftPreview = !!items.isDraftAdded && !items.lesson
         const showRemovedPreview = !!items.isDraftRemoved && !items.lesson
         const roomBWithoutSupport = roomId === ROOMS.B.id && !hasSupportAt(day, hour, minute)
+
+        if (cellClosed) {
+            return (
+                <div
+                    data-cell-key={cellKey}
+                    data-row={rowIndex}
+                    data-col={colIndex}
+                    data-room={roomId}
+                    className="rounded min-h-[30px] flex items-center justify-center relative text-xs select-none bg-rose-100/70 border border-rose-200 cursor-default"
+                >
+                    <span className="text-[9px] font-bold text-rose-500 pointer-events-none">お休み</span>
+                </div>
+            )
+        }
 
         return (
             <div
@@ -676,6 +700,7 @@ export function AdminCalendar({
                 <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-1 text-amber-800">公開前</span>
                 <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-1 text-slate-700">RoomB サポート不在帯: 自主練のみ想定</span>
                 <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-1 text-slate-700">ドラッグ: 矩形選択</span>
+                <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-1 text-rose-700">お休み</span>
                 <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-1 text-rose-700">保存で確定</span>
             </div>
 

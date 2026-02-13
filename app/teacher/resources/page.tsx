@@ -1,6 +1,7 @@
 import { getOpenSlots } from "@/app/lib/actions/resource"
 import { ResourceManager } from "@/components/teacher/ResourceManager"
-import { getYear, getMonth } from "date-fns"
+import { getYear, getMonth, startOfMonth, endOfMonth, addDays } from "date-fns"
+import { getClosedDaysInRangeSafe } from "@/lib/closed-days"
 
 export default async function ResourcesPage({
     searchParams,
@@ -12,7 +13,14 @@ export default async function ResourcesPage({
     const year = params.year ? parseInt(params.year) : getYear(now)
     const month = params.month ? parseInt(params.month) : getMonth(now) + 1
 
-    const result = await getOpenSlots(year, month)
+    const monthStart = startOfMonth(new Date(year, month - 1, 1))
+    const monthEndExclusive = addDays(endOfMonth(monthStart), 1)
+
+    const [result, closedDays] = await Promise.all([
+        getOpenSlots(year, month),
+        getClosedDaysInRangeSafe(monthStart, monthEndExclusive),
+    ])
+
     const slots = result.success ? (result.data?.slots ?? []) : []
     const lessons = result.success ? (result.data?.lessons ?? []) : []
     const supportShifts = result.success ? (result.data?.supportShifts ?? []) : []
@@ -30,6 +38,10 @@ export default async function ResourcesPage({
                 initialSlots={slots}
                 initialLessons={lessons}
                 supportShifts={supportShifts}
+                closedDays={closedDays.map((cd) => ({
+                    ...cd,
+                    date: new Date(cd.date),
+                }))}
                 year={year}
                 month={month}
             />

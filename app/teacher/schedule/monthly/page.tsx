@@ -2,6 +2,8 @@ import { auth } from "@/auth"
 import { getMonthlyPlanningData } from "@/app/lib/actions/planning"
 import { MonthlyScheduler } from "@/components/teacher/MonthlyScheduler"
 import { redirect } from "next/navigation"
+import { getClosedDaysInRangeSafe } from "@/lib/closed-days"
+import { startOfMonth, endOfMonth, addDays } from "date-fns"
 
 export default async function MonthlyPlanningPage({
     searchParams
@@ -29,7 +31,13 @@ export default async function MonthlyPlanningPage({
     // If today is late in the month (e.g. > 20th), suggest next month?
     // For now, simple default.
 
-    const result = await getMonthlyPlanningData(year, month)
+    const monthStart = startOfMonth(new Date(year, month - 1, 1))
+    const monthEndExclusive = addDays(endOfMonth(monthStart), 1)
+
+    const [result, closedDays] = await Promise.all([
+        getMonthlyPlanningData(year, month),
+        getClosedDaysInRangeSafe(monthStart, monthEndExclusive),
+    ])
 
     if (!result.success || !result.data) {
         return <div>データの取得に失敗しました</div>
@@ -50,6 +58,10 @@ export default async function MonthlyPlanningPage({
                 students={students}
                 lessons={lessons}
                 supportShifts={supportShifts}
+                closedDays={closedDays.map((cd) => ({
+                    ...cd,
+                    date: new Date(cd.date),
+                }))}
                 year={year}
                 month={month}
                 isPublished={isPublished}

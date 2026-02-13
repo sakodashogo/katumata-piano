@@ -3,6 +3,7 @@ import { getSupportShiftsInRange, getSupportStaff } from "@/app/lib/actions/supp
 import { SupportShiftPlanner } from "@/components/teacher/SupportShiftPlanner"
 import { addDays, endOfMonth, startOfMonth } from "date-fns"
 import { redirect } from "next/navigation"
+import { getClosedDaysInRangeSafe } from "@/lib/closed-days"
 
 type ShiftRow = {
     id: string
@@ -41,9 +42,10 @@ export default async function SupportPage({
     const monthStart = startOfMonth(new Date(currentYear, currentMonth - 1, 1))
     const monthEndExclusive = addDays(endOfMonth(monthStart), 1)
 
-    const [staffRes, shiftsRes] = await Promise.all([
+    const [staffRes, shiftsRes, closedDays] = await Promise.all([
         getSupportStaff(),
         getSupportShiftsInRange(monthStart.toISOString(), monthEndExclusive.toISOString()),
+        getClosedDaysInRangeSafe(monthStart, monthEndExclusive),
     ])
 
     const staff = staffRes.success ? (staffRes.data ?? []) : []
@@ -64,6 +66,10 @@ export default async function SupportPage({
                     ...shift,
                     startTime: new Date(shift.startTime),
                     endTime: new Date(shift.endTime),
+                }))}
+                closedDays={closedDays.map((cd) => ({
+                    ...cd,
+                    date: new Date(cd.date),
                 }))}
             />
         </div>

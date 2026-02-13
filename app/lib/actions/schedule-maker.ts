@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma"
 import { auth } from "@/auth"
 import { addDays, format, getDay, setHours, setMinutes } from "date-fns"
 import { getSupportShiftsInRangeSafe } from "@/lib/support-shifts"
+import { getClosedDaysInRangeSafe, isSlotClosed } from "@/lib/closed-days"
 
 // Types
 type LessonTypeValue = "REGULAR" | "AD_HOC" | "PRACTICE" | "SOLO_ADDITIONAL" | "DUET_ADDITIONAL" | null | undefined
@@ -222,7 +223,7 @@ export async function generateSuggestedSchedule(
     const overriddenStudentIds = new Set(options?.overrideStudentIds || [])
 
     // 1. Fetch Data
-    const [students, existingLessons, previousMonthLessons, supportShifts] = await Promise.all([
+    const [students, existingLessons, previousMonthLessons, supportShifts, closedDays] = await Promise.all([
         prisma.user.findMany({
             where: { role: "STUDENT" },
             include: {
@@ -257,6 +258,7 @@ export async function generateSuggestedSchedule(
             }
         }),
         getSupportShiftsInRangeSafe(start, end),
+        getClosedDaysInRangeSafe(start, end),
     ])
     const typedSupportShifts = supportShifts as Array<{ startTime: Date; endTime: Date }>
 
@@ -299,8 +301,10 @@ export async function generateSuggestedSchedule(
         lockedAssignments.map((locked) => `${locked.startTime.getTime()}__${locked.roomId}`)
     )
 
-    // 2. Generate All Possible Teacher Slots
-    const teacherSlotsA = generateTeacherSlots(year, month)
+    // 2. Generate All Possible Teacher Slots (filter out closed periods)
+    const teacherSlotsA = generateTeacherSlots(year, month).filter(
+        (slot) => !isSlotClosed(closedDays, slot.startTime, slot.endTime)
+    )
     const teacherSlotsB = teacherSlotsA.filter((slot) =>
         typedSupportShifts.some((shift) => shift.startTime < slot.endTime && shift.endTime > slot.startTime)
     ).map((slot) => ({ ...slot, roomId: "B" }))

@@ -7,7 +7,7 @@ import { redirect } from "next/navigation"
 import { format, startOfDay, endOfDay, startOfWeek, endOfWeek, addWeeks } from "date-fns"
 import { ja } from "date-fns/locale"
 import { LESSON_TYPE_LABELS, LESSON_STATUS_LABELS } from "@/lib/constants"
-import { CalendarDays, Users, Clock, BookOpen, CalendarCheck, ListChecks, Monitor, ClipboardList, UserRoundCog } from "lucide-react"
+import { CalendarDays, Users, Clock, BookOpen, CalendarCheck, ListChecks, Monitor, ClipboardList, UserRoundCog, CalendarOff } from "lucide-react"
 import Link from "next/link"
 
 export default async function TeacherDashboard() {
@@ -185,7 +185,7 @@ export default async function TeacherDashboard() {
             </div>
 
             {/* Quick Links */}
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4">
                 <Link href="/teacher/schedule" className="block">
                     <Card className="hover:border-blue-300 transition-colors cursor-pointer">
                         <CardContent className="pt-6 text-center">
@@ -239,6 +239,14 @@ export default async function TeacherDashboard() {
                         <CardContent className="pt-6 text-center">
                             <Users className="h-8 w-8 mx-auto mb-2 text-purple-600" />
                             <p className="font-medium">生徒管理</p>
+                        </CardContent>
+                    </Card>
+                </Link>
+                <Link href="/teacher/closed-days" className="block">
+                    <Card className="hover:border-blue-300 transition-colors cursor-pointer">
+                        <CardContent className="pt-6 text-center">
+                            <CalendarOff className="h-8 w-8 mx-auto mb-2 text-rose-600" />
+                            <p className="font-medium">お休み設定</p>
                         </CardContent>
                     </Card>
                 </Link>
