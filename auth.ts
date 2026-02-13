@@ -9,21 +9,15 @@ function normalizeEmail(email: string) {
 }
 
 async function getUser(email: string) {
-    try {
-        const normalizedEmail = normalizeEmail(email)
-        const user = await prisma.user.findFirst({
-            where: {
-                email: {
-                    equals: normalizedEmail,
-                    mode: "insensitive",
-                },
+    const normalizedEmail = normalizeEmail(email)
+    return prisma.user.findFirst({
+        where: {
+            email: {
+                equals: normalizedEmail,
+                mode: "insensitive",
             },
-        })
-        return user
-    } catch (error) {
-        console.error('Failed to fetch user:', error)
-        throw new Error('Failed to fetch user.')
-    }
+        },
+    })
 }
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
@@ -35,33 +29,43 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
                 password: { label: "Password", type: "password" },
             },
             async authorize(credentials) {
-                const parsedCredentials = z
-                    .object({
-                        email: z.preprocess(
-                            (value) => typeof value === "string" ? value.trim() : value,
-                            z.string().email()
-                        ),
-                        password: z.string().min(6),
-                    })
-                    .safeParse(credentials)
+                try {
+                    const parsedCredentials = z
+                        .object({
+                            email: z.preprocess(
+                                (value) => typeof value === "string" ? value.trim() : value,
+                                z.string().email()
+                            ),
+                            password: z.string().min(6),
+                        })
+                        .safeParse(credentials)
 
-                if (parsedCredentials.success) {
-                    const { password } = parsedCredentials.data
-                    const email = normalizeEmail(parsedCredentials.data.email)
-                    console.log("Authorize called for:", email)
-                    const user = await getUser(email)
-                    if (!user) {
-                        console.log("User not found")
+                    if (!parsedCredentials.success) {
                         return null
                     }
-                    console.log("User found:", user.id)
 
-                    const passwordsMatch = await bcrypt.compare(password, user.password || "")
-                    if (passwordsMatch) return user
+                    const { password } = parsedCredentials.data
+                    const email = normalizeEmail(parsedCredentials.data.email)
+                    const user = await getUser(email)
+                    if (!user?.password) {
+                        return null
+                    }
+
+                    const passwordsMatch = await bcrypt.compare(password, user.password)
+                    if (!passwordsMatch) {
+                        return null
+                    }
+
+                    return {
+                        id: user.id,
+                        name: user.name,
+                        email: user.email,
+                        role: user.role,
+                    }
+                } catch (error) {
+                    console.error("Credentials authorize failed:", error)
+                    return null
                 }
-
-                console.log('Invalid credentials')
-                return null
             },
         }),
     ],
@@ -80,8 +84,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         },
         async jwt({ token, user }) {
             if (user) {
+                const userWithRole = user as typeof user & { role?: string }
                 token.id = user.id
-                token.role = (user as any).role
+                token.role = userWithRole.role
             }
             return token
         }

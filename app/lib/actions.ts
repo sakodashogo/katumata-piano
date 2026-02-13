@@ -2,6 +2,7 @@
 
 import { signIn } from '@/auth'
 import { AuthError } from 'next-auth'
+import { isRedirectError } from "next/dist/client/components/redirect-error"
 
 export async function authenticate(
     prevState: string | undefined,
@@ -13,6 +14,10 @@ export async function authenticate(
             redirectTo: '/dashboard',
         })
     } catch (error) {
+        if (isRedirectError(error)) {
+            throw error
+        }
+
         if (error instanceof AuthError) {
             switch (error.type) {
                 case 'CredentialsSignin':
@@ -21,6 +26,7 @@ export async function authenticate(
                     return 'Something went wrong.'
             }
         }
-        throw error
+        console.error("Authenticate action failed:", error)
+        return "Something went wrong."
     }
 }
