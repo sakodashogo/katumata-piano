@@ -448,6 +448,7 @@ export async function createBulkLessons(suggestions: ScheduleSuggestion[]) {
                     startTime: s.slot.startTime,
                     endTime: s.slot.endTime,
                     studentId: s.studentId,
+                    teacherId: session.user.id!,
                     type: "REGULAR",
                     status: "BOOKED",
                     roomId: s.slot.roomId,

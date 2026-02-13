@@ -183,6 +183,7 @@ export function MonthlySlotGridEditor({
         return `${studentId}__${year}-${month}__${slotsKey}__${typeKey}__${roomKey}`
     }, [editableLessonsByIso, editableRoomByIso, editableSlotSet, month, studentId, year])
     const lastAppliedSyncKeyRef = React.useRef<string>("")
+    const lastSyncKeyForDraftRef = React.useRef<string>("")
 
     React.useEffect(() => {
         if (lastAppliedSyncKeyRef.current === editableSyncKey) return
@@ -373,35 +374,6 @@ export function MonthlySlotGridEditor({
         return () => element.removeEventListener("touchmove", handler)
     }, [updateCurrentCell])
 
-    const storageKey = React.useMemo(() => `monthly-planner:${studentId}:${year}-${month}`, [studentId, year, month])
-
-    React.useEffect(() => {
-        if (typeof window === "undefined") return
-        const raw = window.localStorage.getItem(storageKey)
-        if (!raw) return
-        try {
-                const parsed = JSON.parse(raw) as {
-                    slots?: string[]
-                    types?: Array<[string, "REGULAR" | "AD_HOC" | "PRACTICE" | "SOLO_ADDITIONAL" | "DUET_ADDITIONAL"]>
-                    rooms?: Array<[string, "A" | "B"]>
-                }
-                if (Array.isArray(parsed.slots)) setDraftSlots(new Set(parsed.slots))
-                if (Array.isArray(parsed.types)) setDraftTypes(new Map(parsed.types))
-                if (Array.isArray(parsed.rooms)) setDraftRooms(new Map(parsed.rooms))
-            } catch {
-                // ignore
-            }
-    }, [storageKey, studentId])
-
-    React.useEffect(() => {
-        if (typeof window === "undefined") return
-        const payload = JSON.stringify({
-            slots: Array.from(draftSlots),
-            types: Array.from(draftTypes.entries()),
-            rooms: Array.from(draftRooms.entries()),
-        })
-        window.localStorage.setItem(storageKey, payload)
-    }, [draftRooms, draftSlots, draftTypes, storageKey])
 
     const draftLessons = React.useMemo(() => {
         return Array.from(draftSlots).map((iso) => {
@@ -416,17 +388,18 @@ export function MonthlySlotGridEditor({
     }, [draftRooms, draftSlots, draftTypes])
 
     React.useEffect(() => {
+        if (lastSyncKeyForDraftRef.current !== editableSyncKey) {
+            lastSyncKeyForDraftRef.current = editableSyncKey
+            return
+        }
         onDraftChange?.(draftLessons)
-    }, [draftLessons, onDraftChange])
+    }, [draftLessons, editableSyncKey, onDraftChange])
 
     const handleSave = async () => {
         if (!onSave) return
         setIsSaving(true)
         try {
-            const success = await onSave(draftLessons)
-            if (success && typeof window !== "undefined") {
-                window.localStorage.removeItem(storageKey)
-            }
+            await onSave(draftLessons)
         } finally {
             setIsSaving(false)
         }

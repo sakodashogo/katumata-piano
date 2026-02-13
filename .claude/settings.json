@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C \"c:\\\\Users\\\\S6sak\\\\katumata-piano\" log --oneline -10)"
+    ]
+  }
+}

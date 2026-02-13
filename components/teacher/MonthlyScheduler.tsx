@@ -130,6 +130,7 @@ export function MonthlyScheduler({
     const [suggestions, setSuggestions] = useState<ScheduleSuggestion[]>([])
     const autoDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
     const lastSuggestionErrorRef = useRef("")
+    const lastAppliedSuggestionsKeyRef = useRef("")
 
     const [baseLessons, setBaseLessons] = useState<Lesson[]>(lessons)
     useEffect(() => {
@@ -198,19 +199,29 @@ export function MonthlyScheduler({
         return map
     }, [effectiveLessons])
 
-    const lockedAssignments = useMemo<LockedAssignment[]>(
-        () =>
-            Object.entries(draftByStudent).flatMap(([studentId, draftLessons]) =>
-                draftLessons.map((lesson) => ({
-                    studentId,
-                    roomId: lesson.roomId,
-                    startTime: lesson.startTime,
-                    endTime: lesson.endTime,
-                    type: lesson.type,
-                }))
-            ),
-        [draftByStudent]
-    )
+    const lockedAssignmentsRef = useRef<LockedAssignment[]>([])
+    const lockedAssignmentsKeyRef = useRef("")
+    const lockedAssignments = useMemo<LockedAssignment[]>(() => {
+        const next = Object.entries(draftByStudent).flatMap(([studentId, draftLessons]) =>
+            draftLessons.map((lesson) => ({
+                studentId,
+                roomId: lesson.roomId,
+                startTime: lesson.startTime,
+                endTime: lesson.endTime,
+                type: lesson.type,
+            }))
+        )
+        const nextKey = next
+            .map(a => `${a.studentId}:${a.startTime.getTime()}:${a.endTime.getTime()}:${a.roomId}:${a.type || "REGULAR"}`)
+            .sort()
+            .join("|")
+        if (nextKey === lockedAssignmentsKeyRef.current) {
+            return lockedAssignmentsRef.current
+        }
+        lockedAssignmentsKeyRef.current = nextKey
+        lockedAssignmentsRef.current = next
+        return next
+    }, [draftByStudent])
 
     const runSuggestionGeneration = useCallback(async (locks: LockedAssignment[]) => {
         setIsGeneratingSuggestions(true)
@@ -341,6 +352,7 @@ export function MonthlyScheduler({
             return next
         })
         toast.success(`${selectedStudent?.name || "生徒"}の予定を保存しました。`)
+        router.refresh()
     }
 
     const handleSaveAllDirty = async () => {
@@ -351,9 +363,8 @@ export function MonthlyScheduler({
         let failedCount = 0
         let firstError = ""
         for (const studentId of dirtyIds) {
-            const draftLessons = draftByStudent[studentId] ?? baseLessons
-                .filter((lesson) => lesson.studentId === studentId)
-                .map(normalizeLessonToDraft)
+            if (!draftByStudent[studentId]) continue
+            const draftLessons = draftByStudent[studentId]
             const result = await saveStudentDraft(studentId, draftLessons)
             if (!result.success) {
                 failedCount += 1
@@ -378,6 +389,9 @@ export function MonthlyScheduler({
             toast.success(`${successCount}人分の予定を保存しました。`)
         } else {
             toast.error(firstError || `${failedCount}人分の保存に失敗しました。`)
+        }
+        if (successCount > 0) {
+            router.refresh()
         }
     }
 
@@ -439,6 +453,9 @@ export function MonthlyScheduler({
         }
     }, [baseLessons, draftByStudent, studentById, students, toast])
 
+    const applyRecommendedToDraftsRef = useRef(applyRecommendedToDrafts)
+    applyRecommendedToDraftsRef.current = applyRecommendedToDrafts
+
     const handleApplyRecommendedToDrafts = () => {
         applyRecommendedToDrafts(suggestions, true)
     }
@@ -455,8 +472,20 @@ export function MonthlyScheduler({
     useEffect(() => {
         if (!isAutoMode) return
         if (isGeneratingSuggestions) return
-        applyRecommendedToDrafts(suggestions, false)
-    }, [applyRecommendedToDrafts, isAutoMode, isGeneratingSuggestions, suggestions])
+        if (suggestions.length === 0) {
+            lastAppliedSuggestionsKeyRef.current = ""
+            return
+        }
+        const key = suggestions
+            .filter(s => s.isRecommended && !s.conflict)
+            .map(s => s.id)
+            .sort()
+            .join("|")
+        if (key === lastAppliedSuggestionsKeyRef.current) return
+        lastAppliedSuggestionsKeyRef.current = key
+        applyRecommendedToDraftsRef.current(suggestions, false)
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [isAutoMode, isGeneratingSuggestions, suggestions])
 
     const draftLessons = useMemo(
         () => effectiveLessons.filter((lesson) => lesson.status === "DRAFT"),

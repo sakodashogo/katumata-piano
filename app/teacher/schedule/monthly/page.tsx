@@ -6,10 +6,9 @@ import { redirect } from "next/navigation"
 export default async function MonthlyPlanningPage({
     searchParams
 }: {
-    searchParams: { year?: string, month?: string }
+    searchParams: Promise<{ year?: string, month?: string }>
 }) {
-    // Await searchParams
-    const params = await Promise.resolve(searchParams)
+    const params = await searchParams
 
     const session = await auth()
     if (!session?.user || session.user.role !== "TEACHER") {
