@@ -125,7 +125,7 @@ export function AdminCalendar({
                 roomId: lesson.roomId || ROOMS.A.id,
                 studentName: lesson.student?.name || "名前未設定",
                 lessonType: lesson.type,
-                statusLabel: lesson.status === "DRAFT" ? "振替待ち" : "予約済み",
+                statusLabel: lesson.status === "DRAFT" ? "公開前" : "予約済み",
                 statusClass: lesson.status === "DRAFT"
                     ? "text-amber-700 bg-amber-50 border-amber-200"
                     : "text-green-700 bg-green-50 border-green-200",
@@ -581,7 +581,7 @@ export function AdminCalendar({
                     <span className="mt-0.5 inline-block rounded bg-white/70 px-1 text-[8px] font-semibold text-slate-700">
                         {theme.short}
                     </span>
-                    {isDraft && <span className="text-[8px] bg-amber-200 text-amber-800 px-1 rounded inline-block mt-0.5">未公開</span>}
+                    {isDraft && <span className="text-[8px] bg-amber-200 text-amber-800 px-1 rounded inline-block mt-0.5">公開前</span>}
                 </div>
             )
         } else {
@@ -673,7 +673,7 @@ export function AdminCalendar({
                 <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-1 text-blue-700">空き枠（公開）</span>
                 <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-1 text-amber-700">空き枠（下書き）</span>
                 <span className="inline-flex items-center gap-1 rounded-full bg-green-50 px-2 py-1 text-green-700">予約済み</span>
-                <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-1 text-amber-800">振替待ち</span>
+                <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-1 text-amber-800">公開前</span>
                 <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-1 text-slate-700">RoomB サポート不在帯: 自主練のみ想定</span>
                 <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-1 text-slate-700">ドラッグ: 矩形選択</span>
                 <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-1 text-rose-700">保存で確定</span>

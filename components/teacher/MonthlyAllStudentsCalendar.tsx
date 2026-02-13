@@ -6,6 +6,7 @@ import { ja } from "date-fns/locale"
 import { ChevronLeft, ChevronRight } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
+import { getStudentColorClasses } from "@/lib/student-color"
 
 type LessonRow = {
     id: string
@@ -34,24 +35,8 @@ const START_HOUR = 9
 const END_HOUR = 22
 
 type LessonCell = {
+    studentId: string
     studentName: string
-    type: string
-}
-
-function typeColor(type: string) {
-    if (type === "PRACTICE") return "bg-slate-500 text-white"
-    if (type === "SOLO_ADDITIONAL") return "bg-indigo-500 text-white"
-    if (type === "DUET_ADDITIONAL") return "bg-rose-500 text-white"
-    if (type === "AD_HOC") return "bg-amber-500 text-white"
-    return "bg-blue-500 text-white"
-}
-
-function typeShort(type: string) {
-    if (type === "PRACTICE") return "自"
-    if (type === "SOLO_ADDITIONAL") return "ソ"
-    if (type === "DUET_ADDITIONAL") return "連"
-    if (type === "AD_HOC") return "追"
-    return "通"
 }
 
 export function MonthlyAllStudentsCalendar({
@@ -98,8 +83,8 @@ export function MonthlyAllStudentsCalendar({
             const key = `${roomId}:${iso}`
             const row = map.get(key) || []
             row.push({
+                studentId: lesson.studentId,
                 studentName: lesson.studentName || "名前未設定",
-                type: lesson.type || "REGULAR",
             })
             map.set(key, row)
         }
@@ -198,17 +183,21 @@ export function MonthlyAllStudentsCalendar({
                                                                 "flex h-full w-full items-center justify-center rounded-[2px] border border-slate-200 bg-white px-1 text-[9px]",
                                                                 noSupport && rows.length === 0 && "border-dashed border-slate-300 bg-slate-100 text-slate-500"
                                                             )}
-                                                            title={rows.map((row) => `${row.studentName}(${row.type})`).join(", ")}
+                                                            title={rows.map((row) => row.studentName).join(", ")}
                                                         >
                                                             {!top ? (
                                                                 noSupport ? "補助不在" : ""
                                                             ) : (
-                                                                <div className={cn("flex w-full flex-col items-center justify-center rounded px-1 py-0.5 leading-tight", typeColor(top.type))}>
+                                                                <div
+                                                                    className={cn(
+                                                                        "flex w-full flex-col items-center justify-center rounded border px-1 py-0.5 leading-tight",
+                                                                        getStudentColorClasses(top.studentId).bg,
+                                                                        getStudentColorClasses(top.studentId).border,
+                                                                        getStudentColorClasses(top.studentId).text
+                                                                    )}
+                                                                >
                                                                     <span className="w-full truncate text-center font-bold">{top.studentName}</span>
-                                                                    <span className="text-[8px] font-semibold">
-                                                                        {typeShort(top.type)}
-                                                                        {remaining > 0 ? ` +${remaining}` : ""}
-                                                                    </span>
+                                                                    {remaining > 0 && <span className="text-[8px] font-semibold">+{remaining}</span>}
                                                                 </div>
                                                             )}
                                                         </div>

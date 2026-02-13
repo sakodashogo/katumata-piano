@@ -175,7 +175,7 @@ function getFragmentationPenalty(intervals: Interval[] | undefined, start: numbe
 export async function generateSuggestedSchedule(
     year: number,
     month: number,
-    options?: { lockedAssignments?: LockedAssignment[] }
+    options?: { lockedAssignments?: LockedAssignment[]; overrideStudentIds?: string[] }
 ) {
     const session = await auth()
     if (!session?.user || session.user.role !== "TEACHER") {
@@ -186,6 +186,7 @@ export async function generateSuggestedSchedule(
     const end = new Date(year, month, 0, 23, 59, 59)
     const previousStart = new Date(year, month - 2, 1)
     const previousEnd = new Date(year, month - 1, 0, 23, 59, 59)
+    const overriddenStudentIds = new Set(options?.overrideStudentIds || [])
 
     // 1. Fetch Data
     const [students, existingLessons, previousMonthLessons, supportShifts] = await Promise.all([
@@ -206,7 +207,10 @@ export async function generateSuggestedSchedule(
         prisma.lesson.findMany({
             where: {
                 startTime: { gte: start, lte: end },
-                status: { not: "CANCELLED" }
+                status: { not: "CANCELLED" },
+                ...(overriddenStudentIds.size > 0
+                    ? { studentId: { notIn: Array.from(overriddenStudentIds) } }
+                    : {}),
             }
         }),
         prisma.lesson.findMany({
@@ -501,6 +505,8 @@ export async function generateSuggestedSchedule(
         const adjacentCount = (contiguity.before ? 1 : 0) + (contiguity.after ? 1 : 0)
         score += adjacentCount * 140
         if (adjacentCount === 2) score += 60
+
+        if (candidate.slot.roomId === "B") score += 20
 
         const fragmentationPenalty = getFragmentationPenalty(intervals, startMs, endMs, SLOT_DURATION_MS)
         score -= fragmentationPenalty * 180

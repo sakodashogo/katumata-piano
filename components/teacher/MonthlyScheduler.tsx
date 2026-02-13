@@ -35,6 +35,7 @@ type Lesson = {
     startTime: string | Date
     endTime: string | Date
     studentId: string
+    studentName?: string
     roomId: string | null
     status: string
     type?: "REGULAR" | "AD_HOC" | "PRACTICE" | "SOLO_ADDITIONAL" | "DUET_ADDITIONAL"
@@ -186,9 +187,10 @@ export function MonthlyScheduler({
         () =>
             effectiveLessons.map((lesson) => ({
                 ...lesson,
+                studentName: studentById.get(lesson.studentId)?.name || studentById.get(lesson.studentId)?.email || "名前未設定",
                 isEditable: lesson.studentId === selectedStudentId,
             })),
-        [effectiveLessons, selectedStudentId]
+        [effectiveLessons, selectedStudentId, studentById]
     )
 
     const draftLessonsCountByStudent = useMemo(() => {
@@ -226,7 +228,10 @@ export function MonthlyScheduler({
     const runSuggestionGeneration = useCallback(async (locks: LockedAssignment[]) => {
         setIsGeneratingSuggestions(true)
         try {
-            const result = await generateSuggestedSchedule(year, month, { lockedAssignments: locks })
+            const result = await generateSuggestedSchedule(year, month, {
+                lockedAssignments: locks,
+                overrideStudentIds: Object.keys(draftByStudent),
+            })
             if (!result.success || !result.suggestions) {
                 setSuggestions([])
                 const message = result.error || "提案の作成に失敗しました。"
@@ -248,7 +253,7 @@ export function MonthlyScheduler({
         } finally {
             setIsGeneratingSuggestions(false)
         }
-    }, [month, toast, year])
+    }, [draftByStudent, month, toast, year])
 
     useEffect(() => {
         if (!isAutoMode) return
@@ -484,7 +489,6 @@ export function MonthlyScheduler({
         if (key === lastAppliedSuggestionsKeyRef.current) return
         lastAppliedSuggestionsKeyRef.current = key
         applyRecommendedToDraftsRef.current(suggestions, false)
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [isAutoMode, isGeneratingSuggestions, suggestions])
 
     const draftLessons = useMemo(

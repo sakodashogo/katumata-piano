@@ -6,9 +6,12 @@ import { cn } from "@/lib/utils"
 import { format, addDays, startOfWeek, setHours, setMinutes, startOfDay } from "date-fns"
 import { ja } from "date-fns/locale"
 import { Loader2, ChevronLeft, ChevronRight, PenLine } from "lucide-react"
+import { getStudentColorClasses } from "@/lib/student-color"
 
 type Lesson = {
     id: string
+    studentId?: string
+    studentName?: string
     startTime: Date | string
     endTime: Date | string
     roomId?: string | null
@@ -136,6 +139,19 @@ export function MonthlySlotGridEditor({
             const roomId = lesson.roomId === "B" ? "B" : "A"
             const iso = new Date(lesson.startTime).toISOString()
             map.set(`${roomId}:${iso}`, lesson.type || "REGULAR")
+        }
+        return map
+    }, [existingLessons])
+
+    const nonEditableStudentByRoomIso = React.useMemo(() => {
+        const map = new Map<string, { studentId: string; studentName: string }>()
+        for (const lesson of existingLessons.filter((item) => !item.isEditable)) {
+            const roomId = lesson.roomId === "B" ? "B" : "A"
+            const iso = new Date(lesson.startTime).toISOString()
+            map.set(`${roomId}:${iso}`, {
+                studentId: lesson.studentId || "unknown",
+                studentName: lesson.studentName || "名前未設定",
+            })
         }
         return map
     }, [existingLessons])
@@ -395,6 +411,56 @@ export function MonthlySlotGridEditor({
         onDraftChange?.(draftLessons)
     }, [draftLessons, editableSyncKey, onDraftChange])
 
+    const clearRangeDrafts = React.useCallback((rangeStart: Date, rangeEnd: Date, label: string) => {
+        if (readOnly) return
+        if (!window.confirm(`${studentName}の${label}レッスンをすべて削除しますか？`)) return
+
+        setDraftSlots((prev) => {
+            const next = new Set<string>()
+            for (const iso of prev) {
+                const time = new Date(iso).getTime()
+                if (Number.isNaN(time)) continue
+                if (time >= rangeStart.getTime() && time < rangeEnd.getTime()) continue
+                next.add(iso)
+            }
+            return next
+        })
+        setDraftTypes((prev) => {
+            const next = new Map(prev)
+            for (const [iso] of prev) {
+                const time = new Date(iso).getTime()
+                if (Number.isNaN(time)) continue
+                if (time >= rangeStart.getTime() && time < rangeEnd.getTime()) {
+                    next.delete(iso)
+                }
+            }
+            return next
+        })
+        setDraftRooms((prev) => {
+            const next = new Map(prev)
+            for (const [iso] of prev) {
+                const time = new Date(iso).getTime()
+                if (Number.isNaN(time)) continue
+                if (time >= rangeStart.getTime() && time < rangeEnd.getTime()) {
+                    next.delete(iso)
+                }
+            }
+            return next
+        })
+    }, [readOnly, studentName])
+
+    const handleClearCurrentWeek = React.useCallback(() => {
+        const start = startOfDay(days[0])
+        const end = addDays(start, 7)
+        clearRangeDrafts(start, end, "この1週間の")
+    }, [clearRangeDrafts, days])
+
+    const handleClearMonth = React.useCallback(() => {
+        const start = new Date(year, month - 1, 1, 0, 0, 0, 0)
+        const end = new Date(year, month, 1, 0, 0, 0, 0)
+        clearRangeDrafts(start, end, `${year}年${month}月の`)
+    }, [clearRangeDrafts, month, year])
+
     const handleSave = async () => {
         if (!onSave) return
         setIsSaving(true)
@@ -420,22 +486,6 @@ export function MonthlySlotGridEditor({
         return getSlotStatus(iso, roomId)
     }
 
-    const typeColor = (type: string) => {
-        if (type === "PRACTICE") return "bg-slate-500 text-white"
-        if (type === "SOLO_ADDITIONAL") return "bg-indigo-500 text-white"
-        if (type === "DUET_ADDITIONAL") return "bg-rose-500 text-white"
-        if (type === "AD_HOC") return "bg-amber-500 text-white"
-        return "bg-blue-500 text-white"
-    }
-
-    const typeShort = (type: string) => {
-        if (type === "PRACTICE") return "自"
-        if (type === "SOLO_ADDITIONAL") return "ソ"
-        if (type === "DUET_ADDITIONAL") return "連"
-        if (type === "AD_HOC") return "追"
-        return "通"
-    }
-
     return (
         <div className={cn("flex h-full flex-col gap-3", className)}>
             <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-white px-3 py-2">
@@ -451,6 +501,16 @@ export function MonthlySlotGridEditor({
                     </Button>
                 </div>
                 <div className="flex flex-wrap items-center gap-2 text-[11px]">
+                    {!readOnly && (
+                        <>
+                            <Button variant="outline" size="sm" className="h-7 px-2 text-[11px]" onClick={handleClearCurrentWeek}>
+                                この週を削除
+                            </Button>
+                            <Button variant="outline" size="sm" className="h-7 px-2 text-[11px]" onClick={handleClearMonth}>
+                                この月を削除
+                            </Button>
+                        </>
+                    )}
                     <div className="flex items-center gap-2 rounded border bg-white px-2 py-1">
                         <span className="text-slate-500">種別</span>
                         <select
@@ -530,6 +590,12 @@ export function MonthlySlotGridEditor({
                                                     const gridCol = colIndex * 2 + roomOffset
                                                     const visual = getVisualState(iso, rowIndex, gridCol, roomId)
                                                     const isNoSupport = visual === "no_support"
+                                                    const bookedStudent = nonEditableStudentByRoomIso.get(`${roomId}:${iso}`)
+                                                    const color = visual.startsWith("booked:")
+                                                        ? getStudentColorClasses(bookedStudent?.studentId)
+                                                        : visual.startsWith("draft:")
+                                                            ? getStudentColorClasses(studentId)
+                                                            : null
                                                     return (
                                                         <div
                                                             key={`${day.toISOString()}-${roomId}`}
@@ -546,17 +612,32 @@ export function MonthlySlotGridEditor({
                                                             }}
                                                             className={cn(
                                                                 "flex h-full w-full items-center justify-center rounded-[2px] border border-slate-200 transition-colors duration-75",
-                                                                inMonth && visual.startsWith("booked:") && "cursor-not-allowed bg-slate-400 text-white",
-                                                                inMonth && visual.startsWith("draft:") && `${readOnly ? "cursor-default" : "cursor-pointer"} ${typeColor(visual.split(":")[1] || "REGULAR")}`,
+                                                                inMonth && visual.startsWith("booked:") && color && `cursor-not-allowed ${color.bg} ${color.border} ${color.text}`,
+                                                                inMonth && visual.startsWith("draft:") && color && `${readOnly ? "cursor-default" : "cursor-pointer"} ${color.bg} ${color.border} ${color.text}`,
                                                                 inMonth && visual === "available" && `${readOnly ? "cursor-default" : "cursor-pointer"} bg-green-100`,
                                                                 inMonth && visual === "unavailable" && `${readOnly ? "cursor-default" : "cursor-pointer"} bg-red-100`,
                                                                 inMonth && visual === "neutral" && !readOnly && "cursor-pointer bg-white hover:bg-slate-50",
                                                                 inMonth && visual === "neutral" && readOnly && "bg-white",
                                                                 inMonth && isNoSupport && "bg-slate-100 border-dashed border-slate-300"
                                                             )}
+                                                            title={
+                                                                visual.startsWith("booked:")
+                                                                    ? bookedStudent?.studentName || "名前未設定"
+                                                                    : visual.startsWith("draft:")
+                                                                        ? studentName
+                                                                        : undefined
+                                                            }
                                                         >
-                                                            {inMonth && visual.startsWith("booked:") && <span className="text-[9px] font-bold">済</span>}
-                                                            {inMonth && visual.startsWith("draft:") && <span className="text-[9px] font-bold">{typeShort(visual.split(":")[1] || "REGULAR")}</span>}
+                                                            {inMonth && visual.startsWith("booked:") && (
+                                                                <span className="w-full truncate px-1 text-center text-[9px] font-bold">
+                                                                    {bookedStudent?.studentName || "名前未設定"}
+                                                                </span>
+                                                            )}
+                                                            {inMonth && visual.startsWith("draft:") && (
+                                                                <span className="w-full truncate px-1 text-center text-[9px] font-bold">
+                                                                    {studentName}
+                                                                </span>
+                                                            )}
                                                             {inMonth && visual === "available" && <span className="text-[9px] font-medium text-green-600">◯</span>}
                                                             {inMonth && visual === "unavailable" && <span className="text-[9px] text-red-400">✕</span>}
                                                             {inMonth && isNoSupport && <span className="rounded bg-slate-200 px-1 text-[9px] text-slate-600">自主練</span>}
