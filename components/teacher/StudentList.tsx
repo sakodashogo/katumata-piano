@@ -14,7 +14,7 @@ export type StudentListItem = {
     name: string | null
     email: string
     createdAt: Date
-    isArchived: boolean // 追加
+    isArchived?: boolean
 }
 
 export function StudentList({ 
