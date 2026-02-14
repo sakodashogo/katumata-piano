@@ -3,6 +3,46 @@ import { redirect } from "next/navigation"
 import { TeacherMonthlyAvailabilityManager } from "@/components/teacher/TeacherMonthlyAvailabilityManager"
 import { getTeacherWorkingHoursSafe } from "@/lib/teacher-working-hours"
 import { getCachedSession } from "@/lib/session"
+import { unstable_cache } from "next/cache"
+import { TEACHER_AVAILABILITIES_PAGE_CACHE_TAG } from "@/lib/cache-tags"
+
+const TEACHER_AVAILABILITIES_REVALIDATE_SECONDS = 60
+
+const getTeacherAvailabilitiesPageData = unstable_cache(
+    async (year: number, month: number) => {
+        const [students, workingHours] = await Promise.all([
+            prisma.user.findMany({
+                where: { role: "STUDENT" },
+                select: {
+                    id: true,
+                    name: true,
+                    email: true,
+                    monthlyAvailabilities: {
+                        where: { year, month },
+                        orderBy: { updatedAt: "desc" },
+                        take: 1,
+                    },
+                },
+                orderBy: [{ name: "asc" }, { email: "asc" }],
+            }),
+            getTeacherWorkingHoursSafe(),
+        ])
+
+        const formattedStudents = students.map((student) => ({
+            id: student.id,
+            name: student.name,
+            email: student.email,
+            availability: student.monthlyAvailabilities[0] ?? null,
+        }))
+
+        return { students: formattedStudents, workingHours }
+    },
+    ["teacher-availabilities-page:v1"],
+    {
+        revalidate: TEACHER_AVAILABILITIES_REVALIDATE_SECONDS,
+        tags: [TEACHER_AVAILABILITIES_PAGE_CACHE_TAG],
+    }
+)
 
 export default async function AvailabilitiesPage({
     searchParams,
@@ -19,35 +59,12 @@ export default async function AvailabilitiesPage({
     const year = params.year ? Number.parseInt(params.year, 10) : now.getFullYear()
     const month = params.month ? Number.parseInt(params.month, 10) : now.getMonth() + 1
 
-    const [students, workingHours] = await Promise.all([
-        prisma.user.findMany({
-            where: { role: "STUDENT" },
-            select: {
-                id: true,
-                name: true,
-                email: true,
-                monthlyAvailabilities: {
-                    where: { year, month },
-                    orderBy: { updatedAt: "desc" },
-                    take: 1,
-                },
-            },
-            orderBy: [{ name: "asc" }, { email: "asc" }],
-        }),
-        getTeacherWorkingHoursSafe(),
-    ])
+    const { students, workingHours } = await getTeacherAvailabilitiesPageData(year, month)
 
     const initialStudentId =
         (params.student && students.some((student) => student.id === params.student) ? params.student : undefined) ??
         students[0]?.id ??
         null
-
-    const formattedStudents = students.map((student) => ({
-        id: student.id,
-        name: student.name,
-        email: student.email,
-        availability: student.monthlyAvailabilities[0] ?? null,
-    }))
 
     return (
         <div className="space-y-6">
@@ -59,7 +76,7 @@ export default async function AvailabilitiesPage({
             <TeacherMonthlyAvailabilityManager
                 year={year}
                 month={month}
-                students={formattedStudents}
+                students={students}
                 initialStudentId={initialStudentId}
                 workingHours={workingHours}
             />

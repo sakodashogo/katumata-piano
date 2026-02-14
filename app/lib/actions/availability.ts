@@ -2,9 +2,10 @@
 
 import { prisma } from "@/lib/prisma"
 import { auth } from "@/auth"
-import { revalidatePath } from "next/cache"
+import { revalidatePath, revalidateTag } from "next/cache"
 import { z } from "zod"
 import { filterSlotIsoListByTeacherWorkingHours, getTeacherWorkingHoursSafe } from "@/lib/teacher-working-hours"
+import { TEACHER_AVAILABILITIES_PAGE_CACHE_TAG } from "@/lib/cache-tags"
 
 const AvailabilitySchema = z.object({
     days: z.array(z.string()),
@@ -174,8 +175,10 @@ export async function saveMonthlyAvailability(
 
         revalidatePath(`/teacher/schedule/monthly`)
         revalidatePath(`/teacher/students/${targetStudentId}`)
+        revalidatePath(`/teacher/availabilities`)
         revalidatePath(`/student`)
         revalidatePath(`/student/availability`)
+        revalidateTag(TEACHER_AVAILABILITIES_PAGE_CACHE_TAG, "max")
         return { success: true, data: availability }
     } catch (error) {
         console.error("Failed to save availability:", error)

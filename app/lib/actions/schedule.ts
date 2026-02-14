@@ -2,16 +2,26 @@
 
 import { prisma } from "@/lib/prisma"
 import { auth } from "@/auth"
-import { revalidatePath } from "next/cache"
+import { revalidatePath, revalidateTag, unstable_cache } from "next/cache"
 import { addMinutes } from "date-fns"
 import { getSupportShiftsInRangeSafe, hasSupportShiftInRange } from "@/lib/support-shifts"
 import { getClosedDaysInRangeSafe, isSlotClosed } from "@/lib/closed-days"
 import { getTeacherWorkingHoursSafe, isWithinTeacherWorkingHours } from "@/lib/teacher-working-hours"
+import {
+    OPEN_SLOTS_CACHE_TAG,
+    SCHEDULE_DATA_CACHE_TAG,
+    SLOT_MANAGER_MONTH_CACHE_TAG,
+} from "@/lib/cache-tags"
+
+const SCHEDULE_DATA_REVALIDATE_SECONDS = 60
 
 function revalidateTeacherViews() {
     revalidatePath("/teacher/schedule")
     revalidatePath("/teacher/slots")
     revalidatePath("/teacher/resources")
+    revalidateTag(SCHEDULE_DATA_CACHE_TAG, "max")
+    revalidateTag(OPEN_SLOTS_CACHE_TAG, "max")
+    revalidateTag(SLOT_MANAGER_MONTH_CACHE_TAG, "max")
 }
 
 async function requireTeacher() {
@@ -81,16 +91,13 @@ async function hasLessonConflict(options: {
     return !!lessonConflict
 }
 
-export async function getScheduleData(roomId: string | undefined, start: Date, end: Date) {
-    const session = await requireTeacher()
-    if (!session) {
-        return { success: false, error: "Unauthorized" }
-    }
-
-    try {
+const getScheduleDataCached = unstable_cache(
+    async (roomId: string | null, startIso: string, endIso: string) => {
+        const start = new Date(startIso)
+        const end = new Date(endIso)
         const whereClause = {
             startTime: { gte: start, lt: end },
-            ...(roomId ? { roomId } : {})
+            ...(roomId ? { roomId } : {}),
         }
 
         const [slots, lessons, supportShifts] = await Promise.all([
@@ -100,15 +107,30 @@ export async function getScheduleData(roomId: string | undefined, start: Date, e
             prisma.lesson.findMany({
                 where: {
                     ...whereClause,
-                    status: { not: "CANCELLED" }
+                    status: { not: "CANCELLED" },
                 },
                 include: {
-                    student: { select: { name: true } }
-                }
+                    student: { select: { name: true } },
+                },
             }),
             getSupportShiftsInRangeSafe(start, end),
         ])
-        return { success: true, data: { slots, lessons, supportShifts } }
+
+        return { slots, lessons, supportShifts }
+    },
+    ["schedule-data:v1"],
+    { revalidate: SCHEDULE_DATA_REVALIDATE_SECONDS, tags: [SCHEDULE_DATA_CACHE_TAG] }
+)
+
+export async function getScheduleData(roomId: string | undefined, start: Date, end: Date) {
+    const session = await requireTeacher()
+    if (!session) {
+        return { success: false, error: "Unauthorized" }
+    }
+
+    try {
+        const data = await getScheduleDataCached(roomId ?? null, start.toISOString(), end.toISOString())
+        return { success: true, data }
     } catch (error) {
         console.error("Failed to fetch schedule data:", error)
         return { success: false, error: "Failed to fetch schedule data" }

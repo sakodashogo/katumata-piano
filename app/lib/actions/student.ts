@@ -2,10 +2,13 @@
 
 import { prisma } from "@/lib/prisma"
 import { auth } from "@/auth"
-import { revalidatePath } from "next/cache"
+import { revalidatePath, revalidateTag, unstable_cache } from "next/cache"
 import bcrypt from "bcryptjs"
 import { Prisma } from "@prisma/client"
 import { z } from "zod"
+import { STUDENTS_CACHE_TAG, TEACHER_AVAILABILITIES_PAGE_CACHE_TAG } from "@/lib/cache-tags"
+
+const STUDENTS_REVALIDATE_SECONDS = 60
 
 const StudentSchema = z.object({
     name: z.string().min(1, "Name is required"),
@@ -28,6 +31,22 @@ async function requireTeacher() {
     return session
 }
 
+const getStudentsCached = unstable_cache(
+    async () => prisma.user.findMany({
+        where: { role: "STUDENT" },
+        select: {
+            id: true,
+            name: true,
+            email: true,
+            createdAt: true,
+            defaultLessonCount: true,
+        },
+        orderBy: { createdAt: "desc" },
+    }),
+    ["students:v1"],
+    { revalidate: STUDENTS_REVALIDATE_SECONDS, tags: [STUDENTS_CACHE_TAG] }
+)
+
 export async function getStudents() {
     const session = await requireTeacher()
     if (!session) {
@@ -35,17 +54,7 @@ export async function getStudents() {
     }
 
     try {
-        const students = await prisma.user.findMany({
-            where: { role: "STUDENT" },
-            select: {
-                id: true,
-                name: true,
-                email: true,
-                createdAt: true,
-                defaultLessonCount: true,
-            },
-            orderBy: { createdAt: "desc" },
-        })
+        const students = await getStudentsCached()
         return { success: true, data: students }
     } catch (error) {
         console.error("Failed to fetch students:", error)
@@ -86,6 +95,8 @@ export async function createStudent(formData: FormData) {
             },
         })
         revalidatePath("/teacher/students")
+        revalidateTag(STUDENTS_CACHE_TAG, "max")
+        revalidateTag(TEACHER_AVAILABILITIES_PAGE_CACHE_TAG, "max")
         return { success: true }
     } catch (error) {
         console.error("Failed to create student:", error)
@@ -122,6 +133,8 @@ export async function deleteStudent(id: string) {
             where: { id },
         })
         revalidatePath("/teacher/students")
+        revalidateTag(STUDENTS_CACHE_TAG, "max")
+        revalidateTag(TEACHER_AVAILABILITIES_PAGE_CACHE_TAG, "max")
         return { success: true }
     } catch (error) {
         console.error("Failed to delete student:", error)
@@ -158,6 +171,8 @@ export async function updateStudent(id: string, formData: FormData) {
         })
         revalidatePath(`/teacher/students/${id}`)
         revalidatePath("/teacher/students")
+        revalidateTag(STUDENTS_CACHE_TAG, "max")
+        revalidateTag(TEACHER_AVAILABILITIES_PAGE_CACHE_TAG, "max")
         return { success: true }
     } catch (error) {
         console.error("Failed to update student:", error)

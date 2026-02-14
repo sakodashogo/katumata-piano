@@ -2,11 +2,14 @@
 
 import { prisma } from "@/lib/prisma"
 import { auth } from "@/auth"
-import { revalidatePath } from "next/cache"
+import { revalidatePath, revalidateTag, unstable_cache } from "next/cache"
 import { addMinutes } from "date-fns"
 import { getSupportShiftsInRangeSafe } from "@/lib/support-shifts"
 import { getClosedDaysInRangeSafe, isSlotClosed } from "@/lib/closed-days"
 import { getTeacherWorkingHoursSafe, isWithinTeacherWorkingHours } from "@/lib/teacher-working-hours"
+import { OPEN_SLOTS_CACHE_TAG, SCHEDULE_DATA_CACHE_TAG, SLOT_MANAGER_MONTH_CACHE_TAG } from "@/lib/cache-tags"
+
+const OPEN_SLOTS_REVALIDATE_SECONDS = 60
 
 async function hasRoomTimeConflict(args: {
     roomId: string
@@ -38,21 +41,26 @@ async function hasRoomTimeConflict(args: {
     return !!slotConflict || !!lessonConflict
 }
 
-export async function getOpenSlots(year: number, month: number) {
-    const session = await auth()
-    if (session?.user?.role !== "TEACHER") return { success: false, error: "Unauthorized" }
+function revalidateResourceViews() {
+    revalidatePath('/teacher/resources')
+    revalidatePath('/teacher/schedule')
+    revalidateTag(OPEN_SLOTS_CACHE_TAG, "max")
+    revalidateTag(SCHEDULE_DATA_CACHE_TAG, "max")
+    revalidateTag(SLOT_MANAGER_MONTH_CACHE_TAG, "max")
+}
 
-    const start = new Date(year, month - 1, 1)
-    const end = new Date(year, month, 0, 23, 59, 59, 999)
+const getOpenSlotsCached = unstable_cache(
+    async (year: number, month: number) => {
+        const start = new Date(year, month - 1, 1)
+        const end = new Date(year, month, 0, 23, 59, 59, 999)
 
-    try {
         const [slots, lessons, supportShifts] = await Promise.all([
             prisma.openSlot.findMany({
                 where: {
                     startTime: {
                         gte: start,
                         lte: end,
-                    }
+                    },
                 },
                 include: {
                     menu: {
@@ -65,7 +73,7 @@ export async function getOpenSlots(year: number, month: number) {
                         },
                     },
                 },
-                orderBy: { startTime: 'asc' }
+                orderBy: { startTime: 'asc' },
             }),
             prisma.lesson.findMany({
                 where: {
@@ -77,14 +85,26 @@ export async function getOpenSlots(year: number, month: number) {
                 },
                 include: {
                     student: {
-                        select: { name: true }
-                    }
+                        select: { name: true },
+                    },
                 },
                 orderBy: { startTime: "asc" },
             }),
             getSupportShiftsInRangeSafe(start, end),
         ])
-        return { success: true, data: { slots, lessons, supportShifts } }
+        return { slots, lessons, supportShifts }
+    },
+    ["open-slots:v1"],
+    { revalidate: OPEN_SLOTS_REVALIDATE_SECONDS, tags: [OPEN_SLOTS_CACHE_TAG] }
+)
+
+export async function getOpenSlots(year: number, month: number) {
+    const session = await auth()
+    if (session?.user?.role !== "TEACHER") return { success: false, error: "Unauthorized" }
+
+    try {
+        const data = await getOpenSlotsCached(year, month)
+        return { success: true, data }
     } catch {
         return { success: false, error: "Failed to fetch slots" }
     }
@@ -127,8 +147,7 @@ export async function createOpenSlot(data: { roomId: string, startTime: Date, en
                 ...(data.durationMin && { durationMin: data.durationMin }),
             }
         })
-        revalidatePath('/teacher/resources')
-        revalidatePath('/teacher/schedule')
+        revalidateResourceViews()
         return { success: true, data: slot }
     } catch {
         return { success: false, error: "Failed to create slot" }
@@ -194,8 +213,7 @@ export async function updateOpenSlot(id: string, data: { roomId?: string, startT
                 ...(data.durationMin !== undefined && !data.endTime ? { endTime: nextEndTime } : {}),
             }
         })
-        revalidatePath('/teacher/resources')
-        revalidatePath('/teacher/schedule')
+        revalidateResourceViews()
         return { success: true, data: slot }
     } catch {
         return { success: false, error: "Failed to update slot" }
@@ -214,8 +232,7 @@ export async function deleteOpenSlot(id: string) {
         await prisma.openSlot.delete({
             where: { id }
         })
-        revalidatePath('/teacher/resources')
-        revalidatePath('/teacher/schedule')
+        revalidateResourceViews()
         return { success: true }
     } catch {
         return { success: false, error: "Failed to delete slot" }
@@ -281,6 +298,9 @@ export async function publishOpenSlots(ids: string[]) {
         revalidatePath('/teacher/resources')
         revalidatePath('/teacher/slots')
         revalidatePath('/student/book') // Revalidate student booking page
+        revalidateTag(OPEN_SLOTS_CACHE_TAG, "max")
+        revalidateTag(SCHEDULE_DATA_CACHE_TAG, "max")
+        revalidateTag(SLOT_MANAGER_MONTH_CACHE_TAG, "max")
         return { success: true, publishedCount: result.count, skippedClosedCount, skippedOutsideWorkingCount }
     } catch {
         return { success: false, error: "Failed to publish slots" }

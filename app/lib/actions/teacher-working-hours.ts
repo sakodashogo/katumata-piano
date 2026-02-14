@@ -2,6 +2,7 @@
 
 import { auth } from "@/auth"
 import { revalidatePath, revalidateTag } from "next/cache"
+import { TEACHER_AVAILABILITIES_PAGE_CACHE_TAG } from "@/lib/cache-tags"
 import {
     TEACHER_WORKING_HOURS_CACHE_TAG,
     getDefaultTeacherWorkingHours,
@@ -39,8 +40,10 @@ function revalidateWorkingHourRelatedViews() {
     revalidatePath("/teacher/support")
     revalidatePath("/teacher/resources")
     revalidatePath("/teacher/students")
+    revalidatePath("/teacher/availabilities")
     revalidatePath("/student/availability")
     revalidateTag(TEACHER_WORKING_HOURS_CACHE_TAG, "max")
+    revalidateTag(TEACHER_AVAILABILITIES_PAGE_CACHE_TAG, "max")
 }
 
 export async function updateTeacherWorkingHours(input: TeacherWorkingHoursUpdateInput) {

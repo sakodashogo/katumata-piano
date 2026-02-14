@@ -3,6 +3,8 @@ import { redirect } from "next/navigation"
 import { prisma } from "@/lib/prisma"
 import { isStudentBookableMenu } from "@/lib/menu-category"
 import { getCachedSession } from "@/lib/session"
+import { unstable_cache } from "next/cache"
+import { SLOT_MANAGER_MONTH_CACHE_TAG } from "@/lib/cache-tags"
 
 type SlotManagerMenu = {
     id: string
@@ -24,6 +26,8 @@ type SlotManagerSlot = {
     menu: SlotManagerMenu | null
 }
 
+const SLOT_MANAGER_MONTH_REVALIDATE_SECONDS = 60
+
 function getSingleParam(value: string | string[] | undefined) {
     if (Array.isArray(value)) {
         return value[0]
@@ -31,30 +35,31 @@ function getSingleParam(value: string | string[] | undefined) {
     return value
 }
 
-export default async function SlotsPage({
-    searchParams,
-}: {
-    searchParams: Promise<{ [key: string]: string | string[] | undefined }>
-}) {
-    const session = await getCachedSession()
-    if (!session?.user || session.user.role !== "TEACHER") {
-        redirect("/login")
-    }
-
-    const params = await searchParams
-    const yearParam = getSingleParam(params.year)
-    const monthParam = getSingleParam(params.month)
-    const hasExplicitMonthSelection = Boolean(yearParam || monthParam)
-    const now = new Date()
-    const initialYear = Number(yearParam) || now.getFullYear()
-    const initialMonth = Number(monthParam) || now.getMonth() + 1
-
-    const getMonthRange = (year: number, month: number) => ({
+function getMonthRange(year: number, month: number) {
+    return {
         start: new Date(year, month - 1, 1),
         end: new Date(year, month, 0, 23, 59, 59, 999),
-    })
+    }
+}
 
-    const loadMonthData = async (year: number, month: number) => {
+function normalizeMenu(menu: {
+    id: string
+    name: string
+    durationMin: number
+    price: number
+    description: string | null
+}): SlotManagerMenu {
+    return {
+        id: menu.id,
+        name: menu.name,
+        durationMin: menu.durationMin,
+        price: menu.price,
+        description: menu.description,
+    }
+}
+
+const getSlotManagerMonthData = unstable_cache(
+    async (year: number, month: number) => {
         const { start, end } = getMonthRange(year, month)
         const menusRaw = await prisma.menu.findMany({
             select: {
@@ -98,20 +103,6 @@ export default async function SlotsPage({
                 orderBy: { startTime: "asc" },
             }) as Array<Record<string, unknown>>
         }
-
-        const normalizeMenu = (menu: {
-            id: string
-            name: string
-            durationMin: number
-            price: number
-            description: string | null
-        }): SlotManagerMenu => ({
-            id: menu.id,
-            name: menu.name,
-            durationMin: menu.durationMin,
-            price: menu.price,
-            description: menu.description,
-        })
 
         const allMenusForJoin = menusRaw.map(normalizeMenu)
         const menuById = new Map(allMenusForJoin.map((menu) => [menu.id, menu]))
@@ -168,11 +159,35 @@ export default async function SlotsPage({
         const draftSlots = allSlots.filter((slot) => !slot.isBooked && !slot.isPublic)
 
         return { menus, allSlots, draftSlots }
+    },
+    ["slot-manager-month-data:v1"],
+    {
+        revalidate: SLOT_MANAGER_MONTH_REVALIDATE_SECONDS,
+        tags: [SLOT_MANAGER_MONTH_CACHE_TAG],
     }
+)
+
+export default async function SlotsPage({
+    searchParams,
+}: {
+    searchParams: Promise<{ [key: string]: string | string[] | undefined }>
+}) {
+    const session = await getCachedSession()
+    if (!session?.user || session.user.role !== "TEACHER") {
+        redirect("/login")
+    }
+
+    const params = await searchParams
+    const yearParam = getSingleParam(params.year)
+    const monthParam = getSingleParam(params.month)
+    const hasExplicitMonthSelection = Boolean(yearParam || monthParam)
+    const now = new Date()
+    const initialYear = Number(yearParam) || now.getFullYear()
+    const initialMonth = Number(monthParam) || now.getMonth() + 1
 
     let year = initialYear
     let month = initialMonth
-    let { menus, allSlots, draftSlots } = await loadMonthData(year, month)
+    let { menus, allSlots, draftSlots } = await getSlotManagerMonthData(year, month)
 
     if (!hasExplicitMonthSelection && draftSlots.length === 0) {
         const { start } = getMonthRange(year, month)
@@ -199,7 +214,7 @@ export default async function SlotsPage({
         if (nearestDraft) {
             year = nearestDraft.startTime.getFullYear()
             month = nearestDraft.startTime.getMonth() + 1
-            const reloaded = await loadMonthData(year, month)
+            const reloaded = await getSlotManagerMonthData(year, month)
             menus = reloaded.menus
             allSlots = reloaded.allSlots
             draftSlots = reloaded.draftSlots

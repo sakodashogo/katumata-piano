@@ -3,9 +3,10 @@
 import { getCalendarClient } from "@/lib/google-calendar"; // Note: Adjust import if file location is different
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
-import { revalidatePath } from "next/cache";
+import { revalidatePath, revalidateTag } from "next/cache";
 import { addDays, setHours, setMinutes, startOfDay, endOfDay, areIntervalsOverlapping, addMinutes } from "date-fns";
 import { getTeacherWorkingHourRangesForDay, getTeacherWorkingHoursSafe } from "@/lib/teacher-working-hours";
+import { OPEN_SLOTS_CACHE_TAG, SCHEDULE_DATA_CACHE_TAG, SLOT_MANAGER_MONTH_CACHE_TAG } from "@/lib/cache-tags";
 
 const SLOT_DURATION_MINUTES = 30; // 30 minutes slots
 
@@ -165,6 +166,11 @@ export async function syncScheduleFromGoogle(startDateStr: string, endDateStr: s
         });
 
         revalidatePath("/teacher/schedule");
+        revalidatePath("/teacher/resources");
+        revalidatePath("/teacher/slots");
+        revalidateTag(SCHEDULE_DATA_CACHE_TAG, "max");
+        revalidateTag(OPEN_SLOTS_CACHE_TAG, "max");
+        revalidateTag(SLOT_MANAGER_MONTH_CACHE_TAG, "max");
         return { success: true, count: newSlotsToCreate.length };
 
     } catch (error) {

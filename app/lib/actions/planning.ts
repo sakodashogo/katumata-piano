@@ -2,17 +2,28 @@
 
 import { prisma } from "@/lib/prisma"
 import { auth } from "@/auth"
-import { revalidatePath } from "next/cache"
+import { revalidatePath, revalidateTag } from "next/cache"
 import { addDays, startOfMonth, endOfMonth, getDay, setHours, setMinutes } from "date-fns"
 import { notifyEvent } from "@/lib/notifications"
 import { getSupportShiftsInRangeSafe, hasSupportShiftInRange } from "@/lib/support-shifts"
 import { getClosedDaysInRangeSafe, isSlotClosed } from "@/lib/closed-days"
 import { getTeacherWorkingHoursSafe, isWithinTeacherWorkingHours } from "@/lib/teacher-working-hours"
+import { OPEN_SLOTS_CACHE_TAG, SCHEDULE_DATA_CACHE_TAG, SLOT_MANAGER_MONTH_CACHE_TAG } from "@/lib/cache-tags"
 
 function getMonthBounds(year: number, month: number) {
     const start = new Date(year, month - 1, 1, 0, 0, 0, 0)
     const end = new Date(year, month, 1, 0, 0, 0, 0) // exclusive
     return { start, end }
+}
+
+function revalidatePlanningViews() {
+    revalidatePath("/teacher")
+    revalidatePath("/teacher/schedule")
+    revalidatePath("/teacher/schedule/monthly")
+    revalidatePath("/student")
+    revalidateTag(SCHEDULE_DATA_CACHE_TAG, "max")
+    revalidateTag(OPEN_SLOTS_CACHE_TAG, "max")
+    revalidateTag(SLOT_MANAGER_MONTH_CACHE_TAG, "max")
 }
 
 export async function getPlanningData() {
@@ -165,7 +176,7 @@ export async function publishFixedSchedule(monthStr: string, assignments: Assign
             }
         })
 
-        revalidatePath("/teacher")
+        revalidatePlanningViews()
         return { success: true }
     } catch (error) {
         console.error("Failed to publish schedule:", error)
@@ -220,9 +231,7 @@ export async function publishMonthlySchedule(year: number, month: number) {
             return Number(insertedCount)
         })
 
-        revalidatePath("/teacher/schedule/monthly")
-        revalidatePath("/teacher/schedule")
-        revalidatePath("/student")
+        revalidatePlanningViews()
         if (inserted > 0) {
             void notifyEvent("MONTHLY_SCHEDULE_FINALIZED", {
                 year,
@@ -334,9 +343,7 @@ export async function bulkCreateLessons(lessons: LessonDraft[]) {
             }
         })
 
-        revalidatePath("/teacher")
-        revalidatePath("/teacher/schedule")
-        revalidatePath("/teacher/schedule/monthly")
+        revalidatePlanningViews()
         return { success: true }
     } catch (error) {
         console.error("Failed to bulk create lessons:", error)
@@ -521,8 +528,7 @@ export async function replaceStudentMonthlyLessons(input: ReplaceMonthlyLessonsI
             return normalizedLessons.length
         })
 
-        revalidatePath("/teacher/schedule")
-        revalidatePath("/teacher/schedule/monthly")
+        revalidatePlanningViews()
 
         return { success: true as const, count: savedCount }
     } catch (error) {
@@ -612,9 +618,7 @@ export async function appendStudentMonthlyLesson(input: {
             },
         })
 
-        revalidatePath("/teacher/schedule/monthly")
-        revalidatePath("/teacher/schedule")
-        revalidatePath("/student")
+        revalidatePlanningViews()
         return { success: true as const }
     } catch (error) {
         console.error("appendStudentMonthlyLesson error", error)

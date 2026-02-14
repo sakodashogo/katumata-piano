@@ -1,16 +1,18 @@
 import { PrismaClient } from "@prisma/client"
 
-const globalForPrisma = globalThis as unknown as { prisma: PrismaClient }
-
-type SupabasePoolMode = "transaction" | "session"
+const globalForPrisma = globalThis as unknown as {
+    prisma?: PrismaClient
+    prismaSupabasePoolerWarningShown?: boolean
+}
 
 function parsePositiveInt(value: string | undefined, fallback: number) {
     const parsed = Number.parseInt(value || "", 10)
     return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback
 }
 
-function parseSupabasePoolMode(value: string | undefined): SupabasePoolMode {
-    return value?.trim().toLowerCase() === "session" ? "session" : "transaction"
+function appendQueryParam(url: string, key: string, value: string) {
+    if (new RegExp(`[?&]${key}=`).test(url)) return url
+    return `${url}${url.includes("?") ? "&" : "?"}${key}=${value}`
 }
 
 const isVercelRuntime = process.env.VERCEL === "1"
@@ -21,30 +23,32 @@ const defaultConnectionLimit = parsePositiveInt(
     isServerlessProductionRuntime ? 1 : 3
 )
 const defaultPoolTimeout = parsePositiveInt(process.env.PRISMA_POOL_TIMEOUT, 20)
-const supabasePoolMode = parseSupabasePoolMode(process.env.PRISMA_SUPABASE_POOL_MODE)
-const allowSessionPoolModeInServerlessProduction =
-    process.env.PRISMA_ALLOW_SESSION_POOL_MODE_IN_PRODUCTION === "1"
+
+function logSessionToTransactionNormalization(hostname: string, fromPort: string) {
+    if (globalForPrisma.prismaSupabasePoolerWarningShown) {
+        return
+    }
+    globalForPrisma.prismaSupabasePoolerWarningShown = true
+    console.warn(
+        `[prisma] Normalized Supabase pooler from session mode to transaction mode: ${hostname}:${fromPort} -> ${hostname}:6543`
+    )
+}
 
 function normalizeDatabaseUrl(databaseUrl: string) {
     try {
         const url = new URL(databaseUrl)
-        const isSupabasePooler = url.hostname.endsWith("pooler.supabase.com")
+        const isSupabasePooler = url.hostname.toLowerCase().endsWith("pooler.supabase.com")
         const isSessionPooler = isSupabasePooler && (url.port === "5432" || url.port === "")
-        const forceTransactionPoolerByEnv = process.env.PRISMA_FORCE_TRANSACTION_MODE === "1"
-        const shouldUseSessionMode =
-            supabasePoolMode === "session" &&
-            (!isServerlessProductionRuntime || allowSessionPoolModeInServerlessProduction)
-        const shouldPreferTransactionPooler =
-            !shouldUseSessionMode &&
-            (isSupabasePooler || forceTransactionPoolerByEnv || isServerlessProductionRuntime)
 
-        if (isSessionPooler && shouldPreferTransactionPooler) {
-            // On serverless, transaction mode avoids Supabase session-mode client ceilings.
+        if (isSessionPooler) {
+            const fromPort = url.port || "5432"
             url.port = "6543"
+            logSessionToTransactionNormalization(url.hostname, fromPort)
         }
 
         const isTransactionPooler = isSupabasePooler && url.port === "6543"
-        if (isTransactionPooler && !url.searchParams.has("pgbouncer")) {
+        if (isTransactionPooler) {
+            // Ensure Prisma uses PgBouncer-compatible mode on Supabase transaction pooler.
             url.searchParams.set("pgbouncer", "true")
         }
 
@@ -60,14 +64,27 @@ function normalizeDatabaseUrl(databaseUrl: string) {
 
         return url.toString()
     } catch {
-        let url = databaseUrl
-        if (!/[?&]connection_limit=/.test(url)) {
-            url += `${url.includes("?") ? "&" : "?"}connection_limit=${defaultConnectionLimit}`
+        let normalizedUrl = databaseUrl
+        const isSupabasePooler = /pooler\.supabase\.com/i.test(normalizedUrl)
+        const hasSessionModePort = /pooler\.supabase\.com(?::5432)?/i.test(normalizedUrl)
+
+        if (isSupabasePooler && hasSessionModePort) {
+            normalizedUrl = normalizedUrl.replace(/(pooler\.supabase\.com)(:5432)?/i, "$1:6543")
+            logSessionToTransactionNormalization("pooler.supabase.com", "5432")
         }
-        if (!/[?&]pool_timeout=/.test(url)) {
-            url += `${url.includes("?") ? "&" : "?"}pool_timeout=${defaultPoolTimeout}`
+
+        if (isSupabasePooler && !/[?&]pgbouncer=/.test(normalizedUrl)) {
+            normalizedUrl = appendQueryParam(normalizedUrl, "pgbouncer", "true")
         }
-        return url
+
+        const connectionLimit = isSupabasePooler ? 1 : defaultConnectionLimit
+        if (!/[?&]connection_limit=/.test(normalizedUrl)) {
+            normalizedUrl = appendQueryParam(normalizedUrl, "connection_limit", String(connectionLimit))
+        }
+        if (!/[?&]pool_timeout=/.test(normalizedUrl)) {
+            normalizedUrl = appendQueryParam(normalizedUrl, "pool_timeout", String(defaultPoolTimeout))
+        }
+        return normalizedUrl
     }
 }
 

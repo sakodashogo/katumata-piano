@@ -236,7 +236,7 @@ export default async function TeacherDashboard() {
 
             {/* Quick Links */}
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4">
-                <Link href="/teacher/schedule" className="block">
+                <Link href="/teacher/schedule" prefetch={false} className="block">
                     <Card className="hover:border-blue-300 transition-colors cursor-pointer">
                         <CardContent className="pt-6 text-center">
                             <CalendarDays className="h-8 w-8 mx-auto mb-2 text-blue-600" />
@@ -244,7 +244,7 @@ export default async function TeacherDashboard() {
                         </CardContent>
                     </Card>
                 </Link>
-                <Link href="/teacher/slots" className="block">
+                <Link href="/teacher/slots" prefetch={false} className="block">
                     <Card className="hover:border-blue-300 transition-colors cursor-pointer">
                         <CardContent className="pt-6 text-center">
                             <ListChecks className="h-8 w-8 mx-auto mb-2 text-indigo-600" />
@@ -252,7 +252,7 @@ export default async function TeacherDashboard() {
                         </CardContent>
                     </Card>
                 </Link>
-                <Link href="/teacher/resources" className="block">
+                <Link href="/teacher/resources" prefetch={false} className="block">
                     <Card className="hover:border-blue-300 transition-colors cursor-pointer">
                         <CardContent className="pt-6 text-center">
                             <Monitor className="h-8 w-8 mx-auto mb-2 text-cyan-600" />
@@ -260,7 +260,7 @@ export default async function TeacherDashboard() {
                         </CardContent>
                     </Card>
                 </Link>
-                <Link href="/teacher/support" className="block">
+                <Link href="/teacher/support" prefetch={false} className="block">
                     <Card className="hover:border-blue-300 transition-colors cursor-pointer">
                         <CardContent className="pt-6 text-center">
                             <UserRoundCog className="h-8 w-8 mx-auto mb-2 text-sky-600" />
@@ -268,7 +268,7 @@ export default async function TeacherDashboard() {
                         </CardContent>
                     </Card>
                 </Link>
-                <Link href="/teacher/availabilities" className="block">
+                <Link href="/teacher/availabilities" prefetch={false} className="block">
                     <Card className="hover:border-blue-300 transition-colors cursor-pointer">
                         <CardContent className="pt-6 text-center">
                             <ClipboardList className="h-8 w-8 mx-auto mb-2 text-emerald-600" />
@@ -276,7 +276,7 @@ export default async function TeacherDashboard() {
                         </CardContent>
                     </Card>
                 </Link>
-                <Link href="/teacher/schedule/monthly" className="block">
+                <Link href="/teacher/schedule/monthly" prefetch={false} className="block">
                     <Card className="hover:border-blue-300 transition-colors cursor-pointer">
                         <CardContent className="pt-6 text-center">
                             <CalendarCheck className="h-8 w-8 mx-auto mb-2 text-green-600" />
@@ -284,7 +284,7 @@ export default async function TeacherDashboard() {
                         </CardContent>
                     </Card>
                 </Link>
-                <Link href="/teacher/students" className="block">
+                <Link href="/teacher/students" prefetch={false} className="block">
                     <Card className="hover:border-blue-300 transition-colors cursor-pointer">
                         <CardContent className="pt-6 text-center">
                             <Users className="h-8 w-8 mx-auto mb-2 text-purple-600" />
@@ -292,7 +292,7 @@ export default async function TeacherDashboard() {
                         </CardContent>
                     </Card>
                 </Link>
-                <Link href="/teacher/closed-days" className="block">
+                <Link href="/teacher/closed-days" prefetch={false} className="block">
                     <Card className="hover:border-blue-300 transition-colors cursor-pointer">
                         <CardContent className="pt-6 text-center">
                             <CalendarOff className="h-8 w-8 mx-auto mb-2 text-rose-600" />

@@ -2,11 +2,17 @@
 
 import { auth } from "@/auth"
 import { prisma } from "@/lib/prisma"
-import { revalidatePath, revalidateTag } from "next/cache"
+import { revalidatePath, revalidateTag, unstable_cache } from "next/cache"
 import { addDays, eachDayOfInterval, endOfMonth, getDay, setHours, setMinutes, startOfMonth } from "date-fns"
 import { getClosedDaysInRangeSafe, isSlotClosed } from "@/lib/closed-days"
 import { SUPPORT_SHIFTS_CACHE_TAG } from "@/lib/support-shifts"
 import { getTeacherWorkingHoursSafe, isWithinTeacherWorkingHours } from "@/lib/teacher-working-hours"
+import {
+    SUPPORT_SHIFT_RANGE_CACHE_TAG,
+    SUPPORT_STAFF_CACHE_TAG,
+} from "@/lib/cache-tags"
+
+const SUPPORT_DATA_REVALIDATE_SECONDS = 60
 
 type DelegateMethod = (args: unknown) => Promise<unknown>
 
@@ -47,6 +53,8 @@ function revalidateSupportViews() {
     revalidatePath("/teacher/schedule/monthly")
     revalidatePath("/student/book")
     revalidateTag(SUPPORT_SHIFTS_CACHE_TAG, "max")
+    revalidateTag(SUPPORT_STAFF_CACHE_TAG, "max")
+    revalidateTag(SUPPORT_SHIFT_RANGE_CACHE_TAG, "max")
 }
 
 async function requireTeacher() {
@@ -57,18 +65,79 @@ async function requireTeacher() {
     return session
 }
 
+const getSupportStaffCached = unstable_cache(
+    async () => {
+        const supportStaff = getSupportStaffDelegate()
+        if (!supportStaff || typeof supportStaff.findMany !== "function") {
+            return [] as Array<{ id: string; name: string; active: boolean }>
+        }
+        try {
+            const staff = await supportStaff.findMany({
+                orderBy: [{ active: "desc" }, { name: "asc" }],
+            }) as Array<{ id: string; name: string; active: boolean }>
+            return staff
+        } catch (error) {
+            if (isMissingRelationError(error)) return []
+            throw error
+        }
+    },
+    ["support-staff:v1"],
+    { revalidate: SUPPORT_DATA_REVALIDATE_SECONDS, tags: [SUPPORT_STAFF_CACHE_TAG] }
+)
+
+const getSupportShiftsInRangeCached = unstable_cache(
+    async (startIso: string, endIso: string) => {
+        const startTime = new Date(startIso)
+        const endTime = new Date(endIso)
+        const supportShift = getSupportShiftDelegate()
+        if (!supportShift || typeof supportShift.findMany !== "function") {
+            return [] as Array<{
+                id: string
+                staffId: string
+                startTime: Date
+                endTime: Date
+                staff?: { id: string; name: string; active: boolean } | null
+            }>
+        }
+        try {
+            const shifts = await supportShift.findMany({
+                where: {
+                    startTime: { lt: endTime },
+                    endTime: { gt: startTime },
+                },
+                include: {
+                    staff: {
+                        select: {
+                            id: true,
+                            name: true,
+                            active: true,
+                        },
+                    },
+                },
+                orderBy: { startTime: "asc" },
+            }) as Array<{
+                id: string
+                staffId: string
+                startTime: Date
+                endTime: Date
+                staff?: { id: string; name: string; active: boolean } | null
+            }>
+            return shifts
+        } catch (error) {
+            if (isMissingRelationError(error)) return []
+            throw error
+        }
+    },
+    ["support-shifts-range:v1"],
+    { revalidate: SUPPORT_DATA_REVALIDATE_SECONDS, tags: [SUPPORT_SHIFT_RANGE_CACHE_TAG] }
+)
+
 export async function getSupportStaff() {
     const session = await requireTeacher()
     if (!session) return { success: false as const, error: "Unauthorized" }
 
     try {
-        const supportStaff = getSupportStaffDelegate()
-        if (!supportStaff || typeof supportStaff.findMany !== "function") {
-            return { success: true as const, data: [] }
-        }
-        const staff = await supportStaff.findMany({
-            orderBy: [{ active: "desc" }, { name: "asc" }],
-        }) as Array<{ id: string; name: string; active: boolean }>
+        const staff = await getSupportStaffCached()
         return { success: true as const, data: staff }
     } catch (error) {
         if (isMissingRelationError(error)) return { success: true as const, data: [] }
@@ -136,34 +205,7 @@ export async function getSupportShiftsInRange(startIso: string, endIso: string) 
     if (!session) return { success: false as const, error: "Unauthorized" }
 
     try {
-        const startTime = new Date(startIso)
-        const endTime = new Date(endIso)
-        const supportShift = getSupportShiftDelegate()
-        if (!supportShift || typeof supportShift.findMany !== "function") {
-            return { success: true as const, data: [] }
-        }
-        const shifts = await supportShift.findMany({
-            where: {
-                startTime: { lt: endTime },
-                endTime: { gt: startTime },
-            },
-            include: {
-                staff: {
-                    select: {
-                        id: true,
-                        name: true,
-                        active: true,
-                    },
-                },
-            },
-            orderBy: { startTime: "asc" },
-        }) as Array<{
-            id: string
-            staffId: string
-            startTime: Date
-            endTime: Date
-            staff?: { id: string; name: string; active: boolean } | null
-        }>
+        const shifts = await getSupportShiftsInRangeCached(startIso, endIso)
         return { success: true as const, data: shifts }
     } catch (error) {
         if (isMissingRelationError(error)) return { success: true as const, data: [] }

@@ -2,13 +2,14 @@
 
 import { prisma } from "@/lib/prisma"
 import { auth } from "@/auth"
-import { revalidatePath } from "next/cache"
+import { revalidatePath, revalidateTag } from "next/cache"
 import { BOOKING_RULES } from "@/lib/constants"
 import { isStudentBookableMenu, toLessonTypeFromMenu } from "@/lib/menu-category"
 import { notifyEvent } from "@/lib/notifications"
 import { getSupportShiftsInRangeSafe } from "@/lib/support-shifts"
 import { getClosedDaysInRangeSafe, isSlotClosed } from "@/lib/closed-days"
 import { getTeacherWorkingHoursSafe, isWithinTeacherWorkingHours } from "@/lib/teacher-working-hours"
+import { OPEN_SLOTS_CACHE_TAG, SCHEDULE_DATA_CACHE_TAG, SLOT_MANAGER_MONTH_CACHE_TAG } from "@/lib/cache-tags"
 import {
     buildBookableStartTimes,
     filterSlotsBySupport,
@@ -30,6 +31,16 @@ type SlotLike = {
 
 function filterByTeacherWorkingHours<T extends SlotLike>(slots: T[], workingHours: Awaited<ReturnType<typeof getTeacherWorkingHoursSafe>>) {
     return slots.filter((slot) => isWithinTeacherWorkingHours(workingHours, slot.startTime, slot.endTime))
+}
+
+function revalidateBookingViews() {
+    revalidatePath("/student")
+    revalidatePath("/student/book")
+    revalidatePath("/teacher/schedule")
+    revalidatePath("/teacher/resources")
+    revalidateTag(SCHEDULE_DATA_CACHE_TAG, "max")
+    revalidateTag(OPEN_SLOTS_CACHE_TAG, "max")
+    revalidateTag(SLOT_MANAGER_MONTH_CACHE_TAG, "max")
 }
 
 export async function getMenus() {
@@ -534,11 +545,7 @@ export async function bookLesson(slotIds: string[], menuId: string, useCredit: b
                 },
             })
 
-            revalidatePath("/student")
-            revalidatePath("/student/book")
-            revalidatePath("/teacher/schedule")
-            revalidatePath("/teacher/resources")
-            revalidatePath("/teacher/resources")
+            revalidateBookingViews()
 
             // Send Notification (Fire and forget)
             void notifyEvent("BOOKING_COMPLETED", {
@@ -683,10 +690,7 @@ export async function rescheduleLesson(lessonId: string, slotIds: string[]) {
                 })
             }
 
-            revalidatePath("/student")
-            revalidatePath("/student/book")
-            revalidatePath("/teacher/schedule")
-            revalidatePath("/teacher/resources")
+            revalidateBookingViews()
 
             void notifyEvent("RESCHEDULE_COMPLETED", {
                 studentId: session.user.id,
@@ -781,9 +785,7 @@ export async function cancelLesson(lessonId: string) {
                 })
             }
 
-            revalidatePath("/student")
-            revalidatePath("/student/book")
-            revalidatePath("/teacher/schedule")
+            revalidateBookingViews()
 
             void notifyEvent("LESSON_CANCELLED", {
                 studentId: lesson.studentId,

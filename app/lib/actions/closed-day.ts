@@ -2,9 +2,13 @@
 
 import { auth } from "@/auth"
 import { prisma } from "@/lib/prisma"
-import { revalidatePath, revalidateTag } from "next/cache"
+import { revalidatePath, revalidateTag, unstable_cache } from "next/cache"
 import { CLOSED_DAYS_CACHE_TAG } from "@/lib/closed-days"
 import { addDays, eachDayOfInterval, endOfMonth, getDay, startOfDay, startOfMonth } from "date-fns"
+import {
+    CLOSED_DAY_PUBLICATION_STATUS_CACHE_TAG,
+    CLOSED_DAYS_MONTH_CACHE_TAG,
+} from "@/lib/cache-tags"
 
 type DelegateMethod = (args: unknown) => Promise<unknown>
 
@@ -15,6 +19,8 @@ type ClosedDayPayload = {
     endTime: string | null
     reason: string | null
 }
+
+const CLOSED_DAY_DATA_REVALIDATE_SECONDS = 60
 
 function isMissingRelationError(error: unknown) {
     if (!error || typeof error !== "object") return false
@@ -86,12 +92,16 @@ function revalidateClosedDayDraftViews() {
     revalidatePath("/teacher/resources")
     revalidatePath("/teacher/schedule/monthly")
     revalidateTag(CLOSED_DAYS_CACHE_TAG, "max")
+    revalidateTag(CLOSED_DAYS_MONTH_CACHE_TAG, "max")
+    revalidateTag(CLOSED_DAY_PUBLICATION_STATUS_CACHE_TAG, "max")
 }
 
 function revalidateClosedDayPublicationViews() {
     revalidatePath("/teacher/closed-days")
     revalidatePath("/student/book")
     revalidateTag(CLOSED_DAYS_CACHE_TAG, "max")
+    revalidateTag(CLOSED_DAYS_MONTH_CACHE_TAG, "max")
+    revalidateTag(CLOSED_DAY_PUBLICATION_STATUS_CACHE_TAG, "max")
 }
 
 async function requireTeacher() {
@@ -102,36 +112,33 @@ async function requireTeacher() {
     return session
 }
 
-export async function getClosedDaysForMonth(year: number, month: number) {
-    const session = await requireTeacher()
-    if (!session) return { success: false as const, error: "Unauthorized" }
-
-    try {
+const getClosedDaysForMonthCached = unstable_cache(
+    async (year: number, month: number) => {
         const closedDay = getClosedDayDelegate()
         if (!closedDay || typeof closedDay.findMany !== "function") {
-            return { success: true as const, data: [] }
+            return [] as ClosedDayPayload[]
         }
 
-        const { monthStart, monthEndExclusive } = getMonthRange(year, month)
-        const records = await closedDay.findMany({
-            where: {
-                date: { gte: monthStart, lt: monthEndExclusive },
-            },
-            orderBy: { date: "asc" },
-        }) as ClosedDayPayload[]
+        try {
+            const { monthStart, monthEndExclusive } = getMonthRange(year, month)
+            const records = await closedDay.findMany({
+                where: {
+                    date: { gte: monthStart, lt: monthEndExclusive },
+                },
+                orderBy: { date: "asc" },
+            }) as ClosedDayPayload[]
+            return records
+        } catch (error) {
+            if (isMissingRelationError(error)) return []
+            throw error
+        }
+    },
+    ["closed-days-for-month:v1"],
+    { revalidate: CLOSED_DAY_DATA_REVALIDATE_SECONDS, tags: [CLOSED_DAYS_MONTH_CACHE_TAG] }
+)
 
-        return { success: true as const, data: records }
-    } catch (error) {
-        if (isMissingRelationError(error)) return { success: true as const, data: [] }
-        return { success: false as const, error: "お休み設定の取得に失敗しました。" }
-    }
-}
-
-export async function getClosedDayPublicationStatus(year: number, month: number) {
-    const session = await requireTeacher()
-    if (!session) return { success: false as const, error: "Unauthorized" }
-
-    try {
+const getClosedDayPublicationStatusCached = unstable_cache(
+    async (year: number, month: number) => {
         const closedDay = getClosedDayDelegate()
         const publicationDelegate = getClosedDayPublicationDelegate()
         const publishedDelegate = getPublishedClosedDayDelegate()
@@ -151,14 +158,11 @@ export async function getClosedDayPublicationStatus(year: number, month: number)
             typeof publishedDelegate.findMany !== "function"
         ) {
             return {
-                success: true as const,
-                data: {
-                    publishedAt: null,
-                    publishedBy: null,
-                    draftCount: drafts.length,
-                    publishedCount: 0,
-                    hasUnpublishedChanges: drafts.length > 0,
-                },
+                publishedAt: null as Date | null,
+                publishedBy: null as string | null,
+                draftCount: drafts.length,
+                publishedCount: 0,
+                hasUnpublishedChanges: drafts.length > 0,
             }
         }
 
@@ -180,14 +184,11 @@ export async function getClosedDayPublicationStatus(year: number, month: number)
 
         if (!publication) {
             return {
-                success: true as const,
-                data: {
-                    publishedAt: null,
-                    publishedBy: null,
-                    draftCount: drafts.length,
-                    publishedCount: 0,
-                    hasUnpublishedChanges: drafts.length > 0,
-                },
+                publishedAt: null as Date | null,
+                publishedBy: null as string | null,
+                draftCount: drafts.length,
+                publishedCount: 0,
+                hasUnpublishedChanges: drafts.length > 0,
             }
         }
 
@@ -197,14 +198,42 @@ export async function getClosedDayPublicationStatus(year: number, month: number)
         }) as ClosedDayPayload[]
 
         return {
+            publishedAt: publication.publishedAt,
+            publishedBy: publication.teacher?.name || publication.teacher?.email || null,
+            draftCount: drafts.length,
+            publishedCount: published.length,
+            hasUnpublishedChanges: hasUnpublishedDifference(drafts, published),
+        }
+    },
+    ["closed-day-publication-status:v1"],
+    {
+        revalidate: CLOSED_DAY_DATA_REVALIDATE_SECONDS,
+        tags: [CLOSED_DAY_PUBLICATION_STATUS_CACHE_TAG],
+    }
+)
+
+export async function getClosedDaysForMonth(year: number, month: number) {
+    const session = await requireTeacher()
+    if (!session) return { success: false as const, error: "Unauthorized" }
+
+    try {
+        const records = await getClosedDaysForMonthCached(year, month)
+        return { success: true as const, data: records }
+    } catch (error) {
+        if (isMissingRelationError(error)) return { success: true as const, data: [] }
+        return { success: false as const, error: "お休み設定の取得に失敗しました。" }
+    }
+}
+
+export async function getClosedDayPublicationStatus(year: number, month: number) {
+    const session = await requireTeacher()
+    if (!session) return { success: false as const, error: "Unauthorized" }
+
+    try {
+        const publicationStatus = await getClosedDayPublicationStatusCached(year, month)
+        return {
             success: true as const,
-            data: {
-                publishedAt: publication.publishedAt,
-                publishedBy: publication.teacher?.name || publication.teacher?.email || null,
-                draftCount: drafts.length,
-                publishedCount: published.length,
-                hasUnpublishedChanges: hasUnpublishedDifference(drafts, published),
-            },
+            data: publicationStatus,
         }
     } catch (error) {
         if (isMissingRelationError(error)) {

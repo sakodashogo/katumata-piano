@@ -145,12 +145,12 @@ export default async function StudentDashboard() {
                     <p className="text-slate-500">レッスンの予約・確認ができます。</p>
                 </div>
                 <div className="flex gap-2">
-                    <Link href="/student/availability">
+                    <Link href="/student/availability" prefetch={false}>
                         <Button variant="outline" size="lg">
                             空き状況を登録
                         </Button>
                     </Link>
-                    <Link href="/student/book">
+                    <Link href="/student/book" prefetch={false}>
                         <Button size="lg" className="shadow-xl shadow-blue-500/20">
                             <Plus className="mr-2 h-5 w-5" /> レッスン予約
                         </Button>
@@ -250,13 +250,13 @@ export default async function StudentDashboard() {
                             追加予約や空き状況更新はここからすぐに操作できます。日時変更・キャンセルはカレンダー内の各レッスンから行えます。
                         </p>
                         <div className="flex flex-wrap gap-2">
-                            <Link href="/student/book">
+                            <Link href="/student/book" prefetch={false}>
                                 <Button>
                                     <Plus className="mr-2 h-4 w-4" />
                                     追加予約
                                 </Button>
                             </Link>
-                            <Link href="/student/availability">
+                            <Link href="/student/availability" prefetch={false}>
                                 <Button variant="outline">
                                     空き状況を更新
                                 </Button>

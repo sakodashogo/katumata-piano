@@ -2,7 +2,7 @@
 
 import { prisma } from "@/lib/prisma"
 import { auth } from "@/auth"
-import { revalidatePath } from "next/cache"
+import { revalidatePath, revalidateTag } from "next/cache"
 import {
     eachDayOfInterval,
     startOfMonth,
@@ -15,6 +15,14 @@ import {
 import { isStudentBookableMenu } from "@/lib/menu-category"
 import { getClosedDaysInRangeSafe, isSlotClosed } from "@/lib/closed-days"
 import { getTeacherWorkingHoursSafe, isWithinTeacherWorkingHours } from "@/lib/teacher-working-hours"
+import { OPEN_SLOTS_CACHE_TAG, SCHEDULE_DATA_CACHE_TAG, SLOT_MANAGER_MONTH_CACHE_TAG } from "@/lib/cache-tags"
+
+function revalidateSlotManagementViews() {
+    revalidatePath('/teacher/slots')
+    revalidateTag(SLOT_MANAGER_MONTH_CACHE_TAG, "max")
+    revalidateTag(OPEN_SLOTS_CACHE_TAG, "max")
+    revalidateTag(SCHEDULE_DATA_CACHE_TAG, "max")
+}
 
 type RoomTimeRange = {
     roomId: string
@@ -184,7 +192,7 @@ export async function batchCreateOpenSlots(input: BatchCreateInput) {
 
         await prisma.openSlot.createMany({ data: slotsToCreate })
 
-        revalidatePath('/teacher/slots')
+        revalidateSlotManagementViews()
         return { success: true as const, count: slotsToCreate.length, skippedClosedCount, skippedOutsideWorkingCount }
     } catch {
         return { success: false as const, error: "Failed to batch create slots" }
@@ -334,7 +342,7 @@ export async function updateSlotDetails(
             },
         })
 
-        revalidatePath('/teacher/slots')
+        revalidateSlotManagementViews()
         return { success: true as const, data: slot }
     } catch {
         return { success: false as const, error: "Failed to update slot" }
@@ -354,7 +362,7 @@ export async function bulkDeleteDraftSlots(slotIds: string[]) {
             }
         })
 
-        revalidatePath('/teacher/slots')
+        revalidateSlotManagementViews()
         return { success: true as const, count: result.count }
     } catch {
         return { success: false as const, error: "Failed to delete slots" }
