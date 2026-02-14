@@ -4,7 +4,8 @@
       "Bash(find:*)",
       "Bash(node -e:*)",
       "WebSearch",
-      "WebFetch(domain:platform.minimax.io)"
+      "WebFetch(domain:platform.minimax.io)",
+      "Bash(claude ide install:*)"
     ]
   }
 }

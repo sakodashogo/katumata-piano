@@ -108,7 +108,7 @@ export default async function SchedulePage({
                 <p className="mt-1">
                     生徒への公開は
                     {" "}
-                    <Link href="/teacher/slots" prefetch={false} className="font-bold underline underline-offset-2">
+                    <Link href="/teacher/slots" className="font-bold underline underline-offset-2">
                         空き枠承認画面
                     </Link>
                     {" "}

@@ -10,86 +10,125 @@ import { StudentScheduleCalendar } from "@/components/student/StudentScheduleCal
 import { getCachedSession } from "@/lib/session"
 import { unstable_cache } from "next/cache"
 
-const getStudentDashboardData = unstable_cache(
-    async (studentId: string) => {
-        const now = new Date()
-        const currentMonthStart = startOfMonth(now)
-        const currentMonthEnd = endOfMonth(now)
-        const monthRegularRangeStart = now > currentMonthStart ? now : currentMonthStart
+type StudentDashboardData = {
+    upcomingLessons: Array<{
+        id: string
+        startTime: Date
+        endTime: Date
+        type: string
+        status: string
+        menuId: string | null
+        teacher: { name: string | null } | null
+    }>
+    historyLessons: Array<{
+        id: string
+        startTime: Date
+        endTime: Date
+        type: string
+        status: string
+        report: string | null
+        homework: string | null
+    }>
+    monthlyRegularLessons: Array<{
+        id: string
+        startTime: Date
+        endTime: Date
+    }>
+    dbUnavailable: boolean
+}
 
-        const [upcomingLessons, historyLessons, monthlyRegularLessons] = await Promise.all([
-            prisma.lesson.findMany({
-                where: {
-                    studentId,
-                    status: "BOOKED",
-                    startTime: { gt: now },
-                },
-                select: {
-                    id: true,
-                    startTime: true,
-                    endTime: true,
-                    type: true,
-                    status: true,
-                    menuId: true,
-                    teacher: {
-                        select: {
-                            name: true,
+const getStudentDashboardData = unstable_cache(
+    async (studentId: string): Promise<StudentDashboardData> => {
+        try {
+            const now = new Date()
+            const currentMonthStart = startOfMonth(now)
+            const currentMonthEnd = endOfMonth(now)
+            const monthRegularRangeStart = now > currentMonthStart ? now : currentMonthStart
+
+            const [upcomingLessons, historyLessons, monthlyRegularLessons] = await Promise.all([
+                prisma.lesson.findMany({
+                    where: {
+                        studentId,
+                        status: "BOOKED",
+                        startTime: { gt: now },
+                    },
+                    select: {
+                        id: true,
+                        startTime: true,
+                        endTime: true,
+                        type: true,
+                        status: true,
+                        menuId: true,
+                        teacher: {
+                            select: {
+                                name: true,
+                            },
                         },
                     },
-                },
-                orderBy: { startTime: "asc" },
-            }),
-            prisma.lesson.findMany({
-                where: {
-                    studentId,
-                    status: { not: "DRAFT" },
-                    startTime: { lte: now },
-                },
-                select: {
-                    id: true,
-                    startTime: true,
-                    endTime: true,
-                    type: true,
-                    status: true,
-                    report: true,
-                    homework: true,
-                },
-                orderBy: { startTime: "desc" },
-            }),
-            prisma.lesson.findMany({
-                where: {
-                    studentId,
-                    status: "BOOKED",
-                    type: "REGULAR",
-                    startTime: {
-                        gte: monthRegularRangeStart,
-                        lte: currentMonthEnd,
+                    orderBy: { startTime: "asc" },
+                }),
+                prisma.lesson.findMany({
+                    where: {
+                        studentId,
+                        status: { not: "DRAFT" },
+                        startTime: { lte: now },
                     },
-                },
-                select: {
-                    id: true,
-                    startTime: true,
-                    endTime: true,
-                },
-                orderBy: { startTime: "asc" },
-            }),
-        ])
+                    select: {
+                        id: true,
+                        startTime: true,
+                        endTime: true,
+                        type: true,
+                        status: true,
+                        report: true,
+                        homework: true,
+                    },
+                    orderBy: { startTime: "desc" },
+                    take: 80,
+                }),
+                prisma.lesson.findMany({
+                    where: {
+                        studentId,
+                        status: "BOOKED",
+                        type: "REGULAR",
+                        startTime: {
+                            gte: monthRegularRangeStart,
+                            lte: currentMonthEnd,
+                        },
+                    },
+                    select: {
+                        id: true,
+                        startTime: true,
+                        endTime: true,
+                    },
+                    orderBy: { startTime: "asc" },
+                }),
+            ])
 
-        return {
-            upcomingLessons,
-            historyLessons,
-            monthlyRegularLessons,
+            return {
+                upcomingLessons,
+                historyLessons,
+                monthlyRegularLessons,
+                dbUnavailable: false,
+            }
+        } catch (error) {
+            console.error("Student dashboard query failed:", error)
+            return {
+                upcomingLessons: [],
+                historyLessons: [],
+                monthlyRegularLessons: [],
+                dbUnavailable: true,
+            }
         }
     },
-    ["student-dashboard"],
-    { revalidate: 30 }
+    ["student-dashboard:v2"],
+    { revalidate: 180 }
 )
 
 export default async function StudentDashboard() {
     const session = await getCachedSession()
     if (!session?.user?.id) return null
 
-    const { upcomingLessons, historyLessons, monthlyRegularLessons } = await getStudentDashboardData(session.user.id)
+    const { upcomingLessons, historyLessons, monthlyRegularLessons, dbUnavailable } = await getStudentDashboardData(session.user.id)
     const upcomingRegular = upcomingLessons.filter((lesson) => lesson.type === "REGULAR")
     const upcomingAdditional = upcomingLessons.filter((lesson) =>
         lesson.type === "AD_HOC" || lesson.type === "SOLO_ADDITIONAL" || lesson.type === "DUET_ADDITIONAL"
@@ -106,18 +145,24 @@ export default async function StudentDashboard() {
                     <p className="text-slate-500">レッスンの予約・確認ができます。</p>
                 </div>
                 <div className="flex gap-2">
-                    <Link href="/student/availability" prefetch={false}>
+                    <Link href="/student/availability">
                         <Button variant="outline" size="lg">
                             空き状況を登録
                         </Button>
                     </Link>
-                    <Link href="/student/book" prefetch={false}>
+                    <Link href="/student/book">
                         <Button size="lg" className="shadow-xl shadow-blue-500/20">
                             <Plus className="mr-2 h-5 w-5" /> レッスン予約
                         </Button>
                     </Link>
                 </div>
             </div>
+
+            {dbUnavailable && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                    一時的にデータ取得が混雑しています。最新状態が反映されていない可能性があります。
+                </div>
+            )}
 
             <div className="grid md:grid-cols-3 gap-6">
                 {/* Next Lesson Card */}
@@ -205,13 +250,13 @@ export default async function StudentDashboard() {
                             追加予約や空き状況更新はここからすぐに操作できます。日時変更・キャンセルはカレンダー内の各レッスンから行えます。
                         </p>
                         <div className="flex flex-wrap gap-2">
-                            <Link href="/student/book" prefetch={false}>
+                            <Link href="/student/book">
                                 <Button>
                                     <Plus className="mr-2 h-4 w-4" />
                                     追加予約
                                 </Button>
                             </Link>
-                            <Link href="/student/availability" prefetch={false}>
+                            <Link href="/student/availability">
                                 <Button variant="outline">
                                     空き状況を更新
                                 </Button>

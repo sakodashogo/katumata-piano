@@ -11,48 +11,81 @@ import { CalendarDays, Users, Clock, BookOpen, CalendarCheck, ListChecks, Monito
 import Link from "next/link"
 import { unstable_cache } from "next/cache"
 
+type TeacherDashboardData = {
+    todayLessons: Array<{
+        id: string
+        startTime: Date
+        endTime: Date
+        type: string
+        status: string
+        student: { name: string | null }
+    }>
+    weekOpenSlots: number
+    upcomingLessons: Array<{
+        id: string
+        startTime: Date
+        endTime: Date
+        type: string
+        status: string
+        student: { name: string | null }
+    }>
+    totalStudents: number
+    dbUnavailable: boolean
+}
+
 const getTeacherDashboardData = unstable_cache(
-    async () => {
-        const now = new Date()
-        const todayStart = startOfDay(now)
-        const todayEnd = endOfDay(now)
-        const weekStart = startOfWeek(now, { weekStartsOn: 1 })
-        const weekEnd = endOfWeek(now, { weekStartsOn: 1 })
-        const nextWeekEnd = addWeeks(weekEnd, 1)
+    async (): Promise<TeacherDashboardData> => {
+        try {
+            const now = new Date()
+            const todayStart = startOfDay(now)
+            const todayEnd = endOfDay(now)
+            const weekStart = startOfWeek(now, { weekStartsOn: 1 })
+            const weekEnd = endOfWeek(now, { weekStartsOn: 1 })
+            const nextWeekEnd = addWeeks(weekEnd, 1)
 
-        const [todayLessons, weekOpenSlots, upcomingLessons, totalStudents] = await Promise.all([
-            prisma.lesson.findMany({
-                where: {
-                    startTime: { gte: todayStart, lte: todayEnd },
-                    status: { not: "CANCELLED" },
-                },
-                include: { student: { select: { name: true } } },
-                orderBy: { startTime: "asc" },
-            }),
-            prisma.openSlot.count({
-                where: {
-                    startTime: { gte: weekStart, lte: weekEnd },
-                    isBooked: false,
-                },
-            }),
-            prisma.lesson.findMany({
-                where: {
-                    startTime: { gt: todayEnd, lte: nextWeekEnd },
-                    status: "BOOKED",
-                },
-                include: { student: { select: { name: true } } },
-                orderBy: { startTime: "asc" },
-                take: 10,
-            }),
-            prisma.user.count({
-                where: { role: "STUDENT" },
-            }),
-        ])
+            const [todayLessons, weekOpenSlots, upcomingLessons, totalStudents] = await Promise.all([
+                prisma.lesson.findMany({
+                    where: {
+                        startTime: { gte: todayStart, lte: todayEnd },
+                        status: { not: "CANCELLED" },
+                    },
+                    include: { student: { select: { name: true } } },
+                    orderBy: { startTime: "asc" },
+                }),
+                prisma.openSlot.count({
+                    where: {
+                        startTime: { gte: weekStart, lte: weekEnd },
+                        isBooked: false,
+                    },
+                }),
+                prisma.lesson.findMany({
+                    where: {
+                        startTime: { gt: todayEnd, lte: nextWeekEnd },
+                        status: "BOOKED",
+                    },
+                    include: { student: { select: { name: true } } },
+                    orderBy: { startTime: "asc" },
+                    take: 10,
+                }),
+                prisma.user.count({
+                    where: { role: "STUDENT" },
+                }),
+            ])
 
-        return { todayLessons, weekOpenSlots, upcomingLessons, totalStudents }
+            return { todayLessons, weekOpenSlots, upcomingLessons, totalStudents, dbUnavailable: false }
+        } catch (error) {
+            console.error("Teacher dashboard query failed:", error)
+            return {
+                todayLessons: [],
+                weekOpenSlots: 0,
+                upcomingLessons: [],
+                totalStudents: 0,
+                dbUnavailable: true,
+            }
+        }
     },
-    ["teacher-dashboard"],
-    { revalidate: 30 }
+    ["teacher-dashboard:v2"],
+    { revalidate: 180 }
 )
 
 export default async function TeacherDashboard() {
@@ -62,11 +95,16 @@ export default async function TeacherDashboard() {
     }
 
     const now = new Date()
-    const { todayLessons, weekOpenSlots, upcomingLessons, totalStudents } = await getTeacherDashboardData()
+    const { todayLessons, weekOpenSlots, upcomingLessons, totalStudents, dbUnavailable } = await getTeacherDashboardData()
 
     return (
         <main className="p-6 max-w-7xl mx-auto space-y-6">
             <h1 className="text-3xl font-bold tracking-tight text-slate-900">講師ダッシュボード</h1>
+            {dbUnavailable && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                    一時的にデータ取得が混雑しています。最新状態が反映されていない可能性があります。
+                </div>
+            )}
 
             {/* Stats Cards */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -198,7 +236,7 @@ export default async function TeacherDashboard() {
 
             {/* Quick Links */}
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4">
-                <Link href="/teacher/schedule" prefetch={false} className="block">
+                <Link href="/teacher/schedule" className="block">
                     <Card className="hover:border-blue-300 transition-colors cursor-pointer">
                         <CardContent className="pt-6 text-center">
                             <CalendarDays className="h-8 w-8 mx-auto mb-2 text-blue-600" />
@@ -206,7 +244,7 @@ export default async function TeacherDashboard() {
                         </CardContent>
                     </Card>
                 </Link>
-                <Link href="/teacher/slots" prefetch={false} className="block">
+                <Link href="/teacher/slots" className="block">
                     <Card className="hover:border-blue-300 transition-colors cursor-pointer">
                         <CardContent className="pt-6 text-center">
                             <ListChecks className="h-8 w-8 mx-auto mb-2 text-indigo-600" />
@@ -214,7 +252,7 @@ export default async function TeacherDashboard() {
                         </CardContent>
                     </Card>
                 </Link>
-                <Link href="/teacher/resources" prefetch={false} className="block">
+                <Link href="/teacher/resources" className="block">
                     <Card className="hover:border-blue-300 transition-colors cursor-pointer">
                         <CardContent className="pt-6 text-center">
                             <Monitor className="h-8 w-8 mx-auto mb-2 text-cyan-600" />
@@ -222,7 +260,7 @@ export default async function TeacherDashboard() {
                         </CardContent>
                     </Card>
                 </Link>
-                <Link href="/teacher/support" prefetch={false} className="block">
+                <Link href="/teacher/support" className="block">
                     <Card className="hover:border-blue-300 transition-colors cursor-pointer">
                         <CardContent className="pt-6 text-center">
                             <UserRoundCog className="h-8 w-8 mx-auto mb-2 text-sky-600" />
@@ -230,7 +268,7 @@ export default async function TeacherDashboard() {
                         </CardContent>
                     </Card>
                 </Link>
-                <Link href="/teacher/availabilities" prefetch={false} className="block">
+                <Link href="/teacher/availabilities" className="block">
                     <Card className="hover:border-blue-300 transition-colors cursor-pointer">
                         <CardContent className="pt-6 text-center">
                             <ClipboardList className="h-8 w-8 mx-auto mb-2 text-emerald-600" />
@@ -238,7 +276,7 @@ export default async function TeacherDashboard() {
                         </CardContent>
                     </Card>
                 </Link>
-                <Link href="/teacher/schedule/monthly" prefetch={false} className="block">
+                <Link href="/teacher/schedule/monthly" className="block">
                     <Card className="hover:border-blue-300 transition-colors cursor-pointer">
                         <CardContent className="pt-6 text-center">
                             <CalendarCheck className="h-8 w-8 mx-auto mb-2 text-green-600" />
@@ -246,7 +284,7 @@ export default async function TeacherDashboard() {
                         </CardContent>
                     </Card>
                 </Link>
-                <Link href="/teacher/students" prefetch={false} className="block">
+                <Link href="/teacher/students" className="block">
                     <Card className="hover:border-blue-300 transition-colors cursor-pointer">
                         <CardContent className="pt-6 text-center">
                             <Users className="h-8 w-8 mx-auto mb-2 text-purple-600" />
@@ -254,7 +292,7 @@ export default async function TeacherDashboard() {
                         </CardContent>
                     </Card>
                 </Link>
-                <Link href="/teacher/closed-days" prefetch={false} className="block">
+                <Link href="/teacher/closed-days" className="block">
                     <Card className="hover:border-blue-300 transition-colors cursor-pointer">
                         <CardContent className="pt-6 text-center">
                             <CalendarOff className="h-8 w-8 mx-auto mb-2 text-rose-600" />
