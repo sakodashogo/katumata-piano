@@ -2,7 +2,7 @@
 
 import { prisma } from "@/lib/prisma"
 import { auth } from "@/auth"
-import { addDays, format, getDay } from "date-fns"
+import { addDays, format, getDay } from "date-fns" // format等は使用箇所を減らしますが型定義等で維持
 import { getSupportShiftsInRangeSafe } from "@/lib/support-shifts"
 import { getClosedDaysInRangeSafe, isSlotClosed } from "@/lib/closed-days"
 import {
@@ -11,6 +11,45 @@ import {
     isWithinTeacherWorkingHours,
     type TeacherWorkingHoursByDay,
 } from "@/lib/teacher-working-hours"
+
+// --- JST Helper Functions (New) ---
+// サーバーのタイムゾーンに関わらず、強制的に日本時間として扱うためのヘルパー
+const JST_OFFSET = 9 * 60 * 60 * 1000
+
+function toJST(date: Date): Date {
+    // UTC時刻に9時間を足した時刻を持つDateオブジェクトを返す
+    // 注意: このDateオブジェクトの「UTCメソッド（getUTCHoursなど）」を使うと日本時間が取れる
+    return new Date(date.getTime() + JST_OFFSET)
+}
+
+function getJSTDayIndex(date: Date): number {
+    return toJST(date).getUTCDay()
+}
+
+function getJSTMinuteOfDay(date: Date): number {
+    const jst = toJST(date)
+    return jst.getUTCHours() * 60 + jst.getUTCMinutes()
+}
+
+function formatJSTTime(date: Date): string {
+    const jst = toJST(date)
+    const hh = String(jst.getUTCHours()).padStart(2, "0")
+    const mm = String(jst.getUTCMinutes()).padStart(2, "0")
+    return `${hh}:${mm}`
+}
+
+function formatJSTDayOfWeek(date: Date): string {
+    const days = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]
+    return days[getJSTDayIndex(date)]
+}
+
+function getDateKeyJST(date: Date): string {
+    const jst = toJST(date)
+    const y = jst.getUTCFullYear()
+    const m = String(jst.getUTCMonth() + 1).padStart(2, "0")
+    const d = String(jst.getUTCDate()).padStart(2, "0")
+    return `${y}-${m}-${d}`
+}
 
 // --- Types ---
 type LessonTypeValue = "REGULAR" | "AD_HOC" | "PRACTICE" | "SOLO_ADDITIONAL" | "DUET_ADDITIONAL" | null | undefined
@@ -62,36 +101,22 @@ const MAX_LESSONS_PER_DAY = 1
 
 /**
  * スコアリングの重み設定
- * マジックナンバーを調整可能な定数として管理
  */
 const SCORING = {
-    // 基本報酬：レッスンが割り当てられること自体の価値（何よりも優先）
     BASE_ASSIGNMENT_REWARD: 2000, 
-    URGENCY_BONUS_MULTIPLIER: 100, // 必要回数 x この値
-
-    // アンカー（前月実績や希望時間）との一致ボーナス
+    URGENCY_BONUS_MULTIPLIER: 100,
     ANCHOR_EXACT_MATCH: 300,
-    ANCHOR_NEARBY_MATCH: 150, // 近い時間
-    ANCHOR_SOURCE_PREVIOUS: 50, // 前月実績がある場合の上乗せ
-
-    // 週ごとの分散
-    WEEKLY_SKEW_PENALTY: 200, // 特定の週に偏ることへのペナルティ
-
-    // 教室・講師都合
-    ROOM_A_PRIORITY: 100, // 基本的にRoom Aを埋めたい
-    ROOM_B_PENALTY: 50,   // Room Bはサポートが必要等のコストがあるため少し下げる
-
-    // 連続性（先生の空き時間を作らない）
-    CONTIGUITY_BONUS: 200,      // 前後にレッスンがある
-    DOUBLE_CONTIGUITY_BONUS: 100, // 両隣が埋まっている（穴埋め）
-
-    // 並列稼働（サポート講師がいるなら、先生がいる時間に寄せる）
-    PARALLEL_WORK_BONUS: 300,   // メイン講師と同時刻にRoom B稼働
-    
-    // ペナルティ（負の値として計算時に減算）
-    GAP_PENALTY: 100,           // 30分の空き時間ができてしまう（重要度低減）
-    FRAGMENTATION_PENALTY: 150, // 飛び地シフトになる
-    FALLBACK_PENALTY: 150,      // フォールバック（希望度低）枠
+    ANCHOR_NEARBY_MATCH: 150,
+    ANCHOR_SOURCE_PREVIOUS: 50,
+    WEEKLY_SKEW_PENALTY: 200,
+    ROOM_A_PRIORITY: 100,
+    ROOM_B_PENALTY: 50,
+    CONTIGUITY_BONUS: 200,
+    DOUBLE_CONTIGUITY_BONUS: 100,
+    PARALLEL_WORK_BONUS: 300,
+    GAP_PENALTY: 100,
+    FRAGMENTATION_PENALTY: 150,
+    FALLBACK_PENALTY: 150,
 }
 
 type GeneratedSlot = {
@@ -111,19 +136,25 @@ type StudentAnchor = {
 
 // --- Helpers ---
 
+// 修正: タイムゾーンに依存せず、Date.UTCを使って日本時間のスロットを生成する
 function generateTeacherSlots(
     year: number,
     month: number,
     workingHoursByDay: TeacherWorkingHoursByDay
 ) {
     const slots: GeneratedSlot[] = []
-    const start = new Date(year, month - 1, 1)
-    const end = new Date(year, month, 0)
+    
+    // その月の日数を取得 (ローカル時間の影響を受けない方法)
+    const daysInMonth = new Date(year, month, 0).getDate()
 
-    let current = start
-    while (current <= end) {
-        const day = getDay(current)
-        const dayRanges = getTeacherWorkingHourRangesForDay(workingHoursByDay, day)
+    for (let day = 1; day <= daysInMonth; day++) {
+        // 日本時間での「その日」の曜日を判定
+        // Date.UTC(y, m, d) は UTC 00:00 を生成する。これは JST 09:00 なので曜日は一致する。
+        const utcDateToCheck = new Date(Date.UTC(year, month - 1, day, 0, 0, 0))
+        const dayIndex = utcDateToCheck.getUTCDay()
+        const dayOfWeekStr = formatJSTDayOfWeek(utcDateToCheck) // JSTベースの曜日文字
+
+        const dayRanges = getTeacherWorkingHourRangesForDay(workingHoursByDay, dayIndex)
         for (const range of dayRanges) {
             const [startHourRaw, startMinuteRaw] = range.startTime.split(":")
             const [endHourRaw, endMinuteRaw] = range.endTime.split(":")
@@ -145,25 +176,21 @@ function generateTeacherSlots(
             ) {
                 const slotHour = Math.floor(slotStartMin / 60)
                 const slotMinute = slotStartMin % 60
-                const slotStart = new Date(
-                    current.getFullYear(),
-                    current.getMonth(),
-                    current.getDate(),
-                    slotHour,
-                    slotMinute,
-                    0,
-                    0
-                )
-                const slotEnd = new Date(slotStart.getTime() + SLOT_DURATION_MS)
+                
+                // 【重要】日本時間(JST)を基準にUTCタイムスタンプを計算
+                // UTC時刻 = 日本時間 - 9時間
+                // Date.UTCは自動的に時間の繰り上げ・繰り下げ（マイナス値など）を処理して正しいタイムスタンプを返す
+                const slotStartTime = new Date(Date.UTC(year, month - 1, day, slotHour - 9, slotMinute, 0))
+                const slotEndTime = new Date(slotStartTime.getTime() + SLOT_DURATION_MS)
+                
                 slots.push({
-                    startTime: slotStart,
-                    endTime: slotEnd,
-                    dayOfWeek: format(current, "EEEE").toLowerCase(),
+                    startTime: slotStartTime,
+                    endTime: slotEndTime,
+                    dayOfWeek: dayOfWeekStr,
                     roomId: "A",
                 })
             }
         }
-        current = addDays(current, 1)
     }
     return slots
 }
@@ -175,11 +202,13 @@ function getWeekNumberInMonth(year: number, month: number, date: Date) {
 }
 
 function getDateKey(date: Date) {
-    return format(date, "yyyy-MM-dd")
+    // 互換性のため残すが、日付キーもJSTベースにする必要がある箇所では getDateKeyJST を使う
+    return getDateKeyJST(date)
 }
 
 function toMinuteOfDay(date: Date) {
-    return date.getHours() * 60 + date.getMinutes()
+    // 修正: UTC環境でも日本時間の「今日の何分目か」を返すようにする
+    return getJSTMinuteOfDay(date)
 }
 
 function parseHHMMToMinuteOfDay(value: string | null | undefined) {
@@ -201,10 +230,7 @@ function dayNameToIndex(value: string | null | undefined) {
 }
 
 function getWeeklyCap(defaultLessonCount: number, weekCountInMonth: number) {
-    // 少ない回数の生徒が、週数の少ない週（月初・月末）に割り当てられて不利にならないよう
-    // 単純な割り算ではなく、最低でも「月回数 / 週数」の切り上げを確保
     if (defaultLessonCount <= 0) return 0
-    // 週数が少ない月（2月など）や、曜日配置によっては4週しかない場合もあるため、最大5週とみなして計算
     return Math.ceil(defaultLessonCount / Math.max(1, weekCountInMonth - 1)) 
 }
 
@@ -246,11 +272,17 @@ function getContiguity(intervals: Interval[] | undefined, start: number, end: nu
 
 function getFragmentationPenalty(intervals: Interval[] | undefined, start: number, end: number, durationMs: number) {
     if (!intervals || intervals.length === 0) return 0
+    
+    // 日付境界の判定もJSTで行う
+    const targetDateKey = getDateKeyJST(new Date(start))
+    
     let prev: Interval | null = null
     let next: Interval | null = null
-    const startDateKey = getDateKey(new Date(start))
+    
     for (const interval of intervals) {
-        if (getDateKey(new Date(interval.start)) !== startDateKey) continue
+        // 同じ日付（JST）のものだけを対象にする
+        if (getDateKeyJST(new Date(interval.start)) !== targetDateKey) continue
+        
         if (interval.end <= start && (!prev || interval.end > prev.end)) prev = interval
         if (interval.start >= end && (!next || interval.start < next.start)) next = interval
     }
@@ -273,7 +305,6 @@ export async function generateSuggestedSchedule(
     month: number,
     options?: { lockedAssignments?: LockedAssignment[]; overrideStudentIds?: string[] }
 ) {
-    // 認証チェック
     const isDebugAuthBypassed =
         process.env.NODE_ENV === "test" &&
         process.env.SCHEDULE_MAKER_DEBUG_BYPASS_AUTH === "1"
@@ -361,7 +392,7 @@ export async function generateSuggestedSchedule(
         slot: {
             startTime: locked.startTime,
             endTime: locked.endTime,
-            dayOfWeek: format(locked.startTime, "EEEE").toLowerCase(),
+            dayOfWeek: formatJSTDayOfWeek(locked.startTime), // JST
             roomId: locked.roomId,
         },
         studentId: locked.studentId,
@@ -389,7 +420,7 @@ export async function generateSuggestedSchedule(
         )
     }
 
-    // 2. Generate Slots
+    // 2. Generate Slots (Modified to use UTC math for JST generation)
     const teacherSlotsA = generateTeacherSlots(year, month, workingHours).filter(
         (slot) => !isSlotClosed(closedDays, slot.startTime, slot.endTime)
     )
@@ -397,15 +428,13 @@ export async function generateSuggestedSchedule(
         typedSupportShifts.some((shift) => shift.startTime < slot.endTime && shift.endTime > slot.startTime)
     ).map((slot) => ({ ...slot, roomId: "B" }))
     const teacherSlots = [...teacherSlotsA, ...teacherSlotsB]
-    // const supportSlotStartSet = new Set(teacherSlotsB.map((slot) => slot.startTime.getTime())) // 未使用のため削除可
 
-    // 3. Availability Parsing (修正: Json型のキャストを追加)
+    // 3. Availability Parsing
     const availabilityProfileByStudent = new Map<string, any>()
     for (const student of students) {
         const monthly = student.monthlyAvailabilities[0]
         const general = student.availabilities[0]
         
-        // PrismaのJson型を安全に扱うために明示的にキャスト
         const monthlyAvailable = monthly?.availableSlots as unknown as any[] || []
         const monthlyUnavailable = monthly?.unavailableSlots as unknown as any[] || []
         const generalDays = general?.days as unknown as string[] || []
@@ -439,10 +468,14 @@ export async function generateSuggestedSchedule(
         const monthlyBlocked = profile.monthlyUnavailableSlotMs.has(slotStartMs)
         
         let generalMatch = false
+        // slotDay は既に JST の曜日になっている（generateTeacherSlotsで生成）
         if (profile.preferredDays.has(slotDay)) {
             if (profile.startTime && profile.endTime) {
-                const timeStr = format(slotStart, "HH:mm")
-                const endStr = format(slotEnd, "HH:mm")
+                // 修正: 比較のために slotStart を JST の時刻文字列 ("HH:mm") に変換する
+                const timeStr = formatJSTTime(slotStart)
+                const endStr = formatJSTTime(slotEnd)
+                
+                // 単純な文字比較で判定 (例: "10:00" >= "09:00")
                 if (timeStr >= profile.startTime && endStr <= profile.endTime) generalMatch = true
             } else {
                 generalMatch = true
@@ -459,9 +492,8 @@ export async function generateSuggestedSchedule(
     const studentWeeklyCounts = new Map<string, Map<number, number>>()
     const studentDailyAssignments = new Map<string, Set<string>>()
     
-    // Initial counts from existing + locked
     const countLesson = (studentId: string, date: Date, type: LessonTypeValue) => {
-        const dateKey = getDateKey(date)
+        const dateKey = getDateKeyJST(date) // JST Key
         if (!studentDailyAssignments.has(studentId)) studentDailyAssignments.set(studentId, new Set())
         studentDailyAssignments.get(studentId)?.add(dateKey)
 
@@ -474,18 +506,16 @@ export async function generateSuggestedSchedule(
         }
     }
     
-    // 修正: 配列結合を変数に受けてからforEachする（ASI対策）
     const allFixedLessons = [...existingLessons, ...lockedAssignments]
     allFixedLessons.forEach(l => countLesson(l.studentId, l.startTime, l.type))
 
-    // Analyze Anchors
+    // Analyze Anchors (Modified to use JST Analysis)
     const studentAnchors = new Map<string, StudentAnchor>()
     for (const student of students) {
-        // Previous month analysis
         const prevLessons = previousMonthLessons.filter(l => l.studentId === student.id)
         if (prevLessons.length > 0) {
-            const patterns = prevLessons.map(l => `${getDay(l.startTime)}__${toMinuteOfDay(l.startTime)}`)
-            // Simple mode
+            // 修正: JST基準で曜日と時間を集計
+            const patterns = prevLessons.map(l => `${getJSTDayIndex(l.startTime)}__${getJSTMinuteOfDay(l.startTime)}`)
             const counts: Record<string, number> = {}
             patterns.forEach(p => counts[p] = (counts[p] || 0) + 1)
             const top = Object.entries(counts).sort((a, b) => b[1] - a[1])[0]
@@ -495,9 +525,8 @@ export async function generateSuggestedSchedule(
                 continue
             }
         }
-        // General pref fallback
+        
         const general = student.availabilities[0]
-        // 修正: 型キャストを追加
         const generalDays = general?.days as unknown as string[] || []
         if (generalDays.length > 0 && general?.startTime) {
             const dayIdx = dayNameToIndex(generalDays[0])
@@ -533,7 +562,6 @@ export async function generateSuggestedSchedule(
             }
             allSuggestions.push(suggestion)
 
-            // Contention counting
             const slotKey = `${slot.startTime.getTime()}_${slot.roomId}`
             slotContentionMap.set(slotKey, (slotContentionMap.get(slotKey) || 0) + 1)
         }
@@ -549,7 +577,7 @@ export async function generateSuggestedSchedule(
         candidatePoolByStudent.get(s.studentId)?.push(s)
 
         if (!candidateDaySetByStudent.has(s.studentId)) candidateDaySetByStudent.set(s.studentId, new Set())
-        candidateDaySetByStudent.get(s.studentId)?.add(getDateKey(s.slot.startTime))
+        candidateDaySetByStudent.get(s.studentId)?.add(getDateKeyJST(s.slot.startTime))
 
         const slotKey = `${s.slot.startTime.getTime()}_${s.slot.roomId}`
         const contention = slotContentionMap.get(slotKey) || 1
@@ -562,8 +590,6 @@ export async function generateSuggestedSchedule(
     const roomIntervals = new Map<string, Interval[]>()
     const globalIntervals: Interval[] = []
     
-    // Init state with existing/locked
-    // 修正: 配列結合を変数に受けてからforEachする
     const allKnownLessons = [...existingLessons, ...lockedAssignments]
     allKnownLessons.forEach(l => {
         addInterval(roomIntervals, l.roomId || "A", l.startTime.getTime(), l.endTime.getTime())
@@ -597,36 +623,31 @@ export async function generateSuggestedSchedule(
         const weekCount = studentWeeklyCounts.get(studentId)?.get(weekIndex) || 0
         const anchor = studentAnchors.get(studentId)
         
-        // 1. Base Reward
         score += SCORING.BASE_ASSIGNMENT_REWARD
         score += need * SCORING.URGENCY_BONUS_MULTIPLIER
 
-        // 2. Anchor/Preference
-        if (anchor && getDay(candidate.slot.startTime) === anchor.dayOfWeek) {
-            const diff = Math.abs(toMinuteOfDay(candidate.slot.startTime) - anchor.minuteOfDay)
+        // 修正: Anchor比較もJSTベースで行う
+        if (anchor && getJSTDayIndex(candidate.slot.startTime) === anchor.dayOfWeek) {
+            const diff = Math.abs(getJSTMinuteOfDay(candidate.slot.startTime) - anchor.minuteOfDay)
             if (diff === 0) score += SCORING.ANCHOR_EXACT_MATCH
             else if (diff <= 60 && !hasExactAnchorInPool) score += SCORING.ANCHOR_NEARBY_MATCH
         }
         if (anchor?.source === "previous-month") score += SCORING.ANCHOR_SOURCE_PREVIOUS
 
-        // 3. Weekly Distribution (Soft Cap)
         score -= weekCount * SCORING.WEEKLY_SKEW_PENALTY
 
-        // 4. Room/Teacher Optimization
         const startMs = candidate.slot.startTime.getTime()
         const endMs = candidate.slot.endTime.getTime()
         
         if (candidate.slot.roomId === "A") score += SCORING.ROOM_A_PRIORITY
         else score -= SCORING.ROOM_B_PENALTY
 
-        // Contiguity (Teacher gaps)
         const intervals = roomIntervals.get(candidate.slot.roomId)
         const contiguity = getContiguity(intervals, startMs, endMs)
         const adj = (contiguity.before ? 1 : 0) + (contiguity.after ? 1 : 0)
         score += adj * SCORING.CONTIGUITY_BONUS
         if (adj === 2) score += SCORING.DOUBLE_CONTIGUITY_BONUS
 
-        // Parallel Work (Global gaps)
         const globalContiguity = getContiguity(globalIntervals, startMs, endMs)
         const globalAdj = (globalContiguity.before ? 1 : 0) + (globalContiguity.after ? 1 : 0)
         score += globalAdj * SCORING.PARALLEL_WORK_BONUS 
@@ -636,17 +657,14 @@ export async function generateSuggestedSchedule(
             score += SCORING.PARALLEL_WORK_BONUS
         }
 
-        // 5. Penalties
         const frag = getFragmentationPenalty(intervals, startMs, endMs, SLOT_DURATION_MS)
         score -= frag * SCORING.FRAGMENTATION_PENALTY
         
         const globalFrag = getFragmentationPenalty(globalIntervals, startMs, endMs, SLOT_DURATION_MS)
         score -= globalFrag * SCORING.GAP_PENALTY
 
-        // Fallback penalty
         if (candidate.matchReason.includes("Fallback")) score -= SCORING.FALLBACK_PENALTY
 
-        // Time breaker
         score -= startMs / 10_000_000_000
 
         return score
@@ -655,14 +673,11 @@ export async function generateSuggestedSchedule(
     const canAssign = (c: ScheduleSuggestion, ignoreWeekCap = false) => {
         if (getNeed(c.studentId) <= 0) return false
         
-        // Daily Cap
         const dailySet = studentDailyAssignments.get(c.studentId)
-        if (dailySet?.has(getDateKey(c.slot.startTime)) && MAX_LESSONS_PER_DAY <= 1) return false
+        if (dailySet?.has(getDateKeyJST(c.slot.startTime)) && MAX_LESSONS_PER_DAY <= 1) return false
 
-        // Slot Conflict Check (Dynamic)
         if (hasIntervalOverlap(roomIntervals.get(c.slot.roomId), c.slot.startTime.getTime(), c.slot.endTime.getTime())) return false
 
-        // Weekly Cap (unless ignored in Pass 3)
         if (!ignoreWeekCap) {
             const weekIndex = getWeekNumberInMonth(year, month, c.slot.startTime)
             const currentWeek = studentWeeklyCounts.get(c.studentId)?.get(weekIndex) || 0
@@ -680,7 +695,6 @@ export async function generateSuggestedSchedule(
         countLesson(c.studentId, c.slot.startTime, c.type)
     }
 
-    // Execution Loops
     const runPass = (ignoreWeekCap: boolean) => {
         let changed = true
         while (changed) {
@@ -695,9 +709,9 @@ export async function generateSuggestedSchedule(
                 
                 if (pool.length === 0) continue
 
-                // Check anchor existence for scoring context
                 const anchor = studentAnchors.get(studentId)
-                const hasExact = anchor ? pool.some(c => getDay(c.slot.startTime) === anchor.dayOfWeek && toMinuteOfDay(c.slot.startTime) === anchor.minuteOfDay) : false
+                // 修正: JST基準でのAnchor完全一致判定
+                const hasExact = anchor ? pool.some(c => getJSTDayIndex(c.slot.startTime) === anchor.dayOfWeek && getJSTMinuteOfDay(c.slot.startTime) === anchor.minuteOfDay) : false
 
                 let best: ScheduleSuggestion | null = null
                 let bestScore = Number.NEGATIVE_INFINITY
@@ -718,7 +732,6 @@ export async function generateSuggestedSchedule(
         }
     }
 
-    // Execute Passes
     runPass(false) // Normal
     runPass(true)  // Recovery
 
@@ -744,7 +757,6 @@ export async function generateSuggestedSchedule(
         }
     })
 
-    // Diagnostics
     const diagnostics: ScheduleSuggestionDiagnostic[] = students.map((student) => {
         const studentId = student.id
         const targetRegularCount = getTarget(studentId)
