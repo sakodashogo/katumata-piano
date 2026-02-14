@@ -1,13 +1,14 @@
-import { getMonthlyLessonCalendarData, getScheduleData } from "@/app/lib/actions/schedule"
+import { getScheduleData } from "@/app/lib/actions/schedule"
 import { AdminCalendar } from "@/components/teacher/AdminCalendar"
-import { MonthlyAllStudentsCalendar } from "@/components/teacher/MonthlyAllStudentsCalendar"
-import { addDays, endOfMonth, endOfWeek, startOfMonth, startOfWeek } from "date-fns"
+import { endOfWeek, startOfWeek } from "date-fns"
 import { SyncButton } from "@/components/teacher/SyncButton"
 import { auth } from "@/auth"
 import { redirect } from "next/navigation"
 import Link from "next/link"
 import { getClosedDaysInRangeSafe } from "@/lib/closed-days"
 import { getTeacherWorkingHoursSafe } from "@/lib/teacher-working-hours"
+import { Suspense } from "react"
+import MonthlyPanel from "./_monthly-panel"
 
 type ScheduleSlot = {
     id: string
@@ -20,17 +21,6 @@ type ScheduleSlot = {
 
 type ScheduleLesson = {
     id: string
-    roomId: string | null
-    startTime: Date | string
-    endTime: Date | string
-    type: string
-    status: string
-    student: { name: string | null }
-}
-
-type MonthlyLesson = {
-    id: string
-    studentId: string
     roomId: string | null
     startTime: Date | string
     endTime: Date | string
@@ -65,13 +55,9 @@ export default async function SchedulePage({
 
     const monthYear = date.getFullYear()
     const month = date.getMonth() + 1
-    const monthStart = startOfMonth(new Date(monthYear, month - 1, 1))
-    const monthEndExclusive = addDays(endOfMonth(monthStart), 1)
-    const [scheduleResult, monthlyCalendarResult, closedDays, monthClosedDays, workingHours] = await Promise.all([
+    const [scheduleResult, closedDays, workingHours] = await Promise.all([
         getScheduleData(undefined, start, end),
-        getMonthlyLessonCalendarData(monthYear, month),
         getClosedDaysInRangeSafe(start, end),
-        getClosedDaysInRangeSafe(monthStart, monthEndExclusive),
         getTeacherWorkingHoursSafe(),
     ])
 
@@ -103,25 +89,6 @@ export default async function SchedulePage({
         startTime: new Date(shift.startTime),
         endTime: new Date(shift.endTime),
     }))
-    const monthlyLessons = monthlyCalendarResult.success && monthlyCalendarResult.data
-        ? (monthlyCalendarResult.data.lessons as MonthlyLesson[]).map((lesson) => ({
-            id: lesson.id,
-            studentId: lesson.studentId,
-            studentName: lesson.student?.name || "名前未設定",
-            startTime: new Date(lesson.startTime),
-            endTime: new Date(lesson.endTime),
-            roomId: lesson.roomId,
-            type: lesson.type,
-            status: lesson.status,
-        }))
-        : []
-    const monthlySupportShifts = monthlyCalendarResult.success && monthlyCalendarResult.data
-        ? ((monthlyCalendarResult.data.supportShifts || []) as SupportShift[]).map((shift) => ({
-            ...shift,
-            startTime: new Date(shift.startTime),
-            endTime: new Date(shift.endTime),
-        }))
-        : []
 
     return (
         <div className="space-y-6">
@@ -161,30 +128,21 @@ export default async function SchedulePage({
                 workingHours={workingHours}
             />
 
-            <section className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                <div className="mb-3 rounded-lg border bg-white px-3 py-2 text-sm text-slate-600">
-                    <div className="font-semibold text-slate-800">月間カレンダー（下書き含む）</div>
-                    <div className="mt-1 text-xs">
-                        月間スケジュールで保存した下書きもこのタブで確認できます。
-                    </div>
-                </div>
-                {monthlyCalendarResult.success ? (
-                    <MonthlyAllStudentsCalendar
-                        lessons={monthlyLessons}
-                        supportShifts={monthlySupportShifts}
-                        closedDays={monthClosedDays.map((cd) => ({
-                            ...cd,
-                            date: new Date(cd.date),
-                        }))}
-                        year={monthYear}
-                        month={month}
-                    />
-                ) : (
-                    <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                        月間カレンダーの読み込みに失敗しました。
-                    </div>
+            <Suspense
+                fallback={(
+                    <section className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                        <div className="mb-3 rounded-lg border bg-white px-3 py-2 text-sm text-slate-600">
+                            <div className="font-semibold text-slate-800">月間カレンダー（下書き含む）</div>
+                            <div className="mt-1 text-xs">月間データを読み込み中です。</div>
+                        </div>
+                        <div className="rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-500">
+                            読み込み中...
+                        </div>
+                    </section>
                 )}
-            </section>
+            >
+                <MonthlyPanel year={monthYear} month={month} />
+            </Suspense>
         </div>
     )
 }

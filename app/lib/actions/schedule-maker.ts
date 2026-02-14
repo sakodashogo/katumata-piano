@@ -269,17 +269,34 @@ export async function generateSuggestedSchedule(
     const [students, existingLessons, previousMonthLessons, supportShifts, closedDays, workingHours] = await Promise.all([
         prisma.user.findMany({
             where: { role: "STUDENT" },
-            include: {
+            select: {
+                id: true,
+                name: true,
+                email: true,
+                defaultLessonCount: true,
                 monthlyAvailabilities: {
                     where: { year, month },
+                    select: {
+                        id: true,
+                        availableSlots: true,
+                        unavailableSlots: true,
+                        createdAt: true,
+                    },
                     orderBy: { createdAt: "desc" },
                     take: 1
                 },
                 availabilities: {
+                    select: {
+                        id: true,
+                        days: true,
+                        startTime: true,
+                        endTime: true,
+                        createdAt: true,
+                    },
                     orderBy: { createdAt: "desc" },
                     take: 1
-                }
-            }
+                },
+            },
         }),
         prisma.lesson.findMany({
             where: {

@@ -2,13 +2,21 @@ import { PrismaClient } from "@prisma/client"
 
 const globalForPrisma = globalThis as unknown as { prisma: PrismaClient }
 
+function parsePositiveInt(value: string | undefined, fallback: number) {
+    const parsed = Number.parseInt(value || "", 10)
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback
+}
+
+const defaultConnectionLimit = parsePositiveInt(process.env.PRISMA_CONNECTION_LIMIT, 3)
+const defaultPoolTimeout = parsePositiveInt(process.env.PRISMA_POOL_TIMEOUT, 10)
+
 function withServerlessPoolParams(databaseUrl: string) {
     let url = databaseUrl
     if (!/[?&]connection_limit=/.test(url)) {
-        url += `${url.includes("?") ? "&" : "?"}connection_limit=1`
+        url += `${url.includes("?") ? "&" : "?"}connection_limit=${defaultConnectionLimit}`
     }
     if (!/[?&]pool_timeout=/.test(url)) {
-        url += `${url.includes("?") ? "&" : "?"}pool_timeout=20`
+        url += `${url.includes("?") ? "&" : "?"}pool_timeout=${defaultPoolTimeout}`
     }
     return url
 }

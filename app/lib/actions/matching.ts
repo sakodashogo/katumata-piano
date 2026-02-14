@@ -13,7 +13,15 @@ function timeToMinutes(time: string) {
 export async function findMatches() {
     // 1. Get all students with availability
     const availabilities = await prisma.availability.findMany({
-        include: { student: true }
+        include: {
+            student: {
+                select: {
+                    id: true,
+                    name: true,
+                    email: true,
+                },
+            },
+        },
     })
 
     // 2. Get Open Slots for the "Representative Week" (e.g., next week)

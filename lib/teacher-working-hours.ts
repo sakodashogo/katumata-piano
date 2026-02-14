@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma"
+import { unstable_cache } from "next/cache"
 
 type DelegateMethod = (args?: unknown) => Promise<unknown>
 type Delegate = {
@@ -17,6 +18,9 @@ export type TeacherWorkingHourRange = {
 }
 
 export type TeacherWorkingHoursByDay = Record<number, TeacherWorkingHourRange[]>
+
+export const TEACHER_WORKING_HOURS_CACHE_TAG = "teacher-working-hours"
+const WORKING_HOURS_CACHE_REVALIDATE_SECONDS = 60
 
 const WEEKDAY_INDEXES = [0, 1, 2, 3, 4, 5, 6] as const
 
@@ -227,7 +231,7 @@ async function ensureTeacherWorkingHourTableRaw() {
     await prisma.$executeRawUnsafe(CREATE_WORKING_HOUR_INDEX_SQL)
 }
 
-export async function getTeacherWorkingHoursSafe(): Promise<TeacherWorkingHoursByDay> {
+async function fetchTeacherWorkingHoursUncached(): Promise<TeacherWorkingHoursByDay> {
     const delegate = getTeacherWorkingHourDelegate()
     if (delegate && typeof delegate.findMany === "function") {
         try {
@@ -250,6 +254,16 @@ export async function getTeacherWorkingHoursSafe(): Promise<TeacherWorkingHoursB
     const rows = await fetchTeacherWorkingHourRowsRaw()
     if (!rows) return getDefaultTeacherWorkingHours()
     return mapRowsToWorkingHours(rows)
+}
+
+const getTeacherWorkingHoursCached = unstable_cache(
+    async () => fetchTeacherWorkingHoursUncached(),
+    ["teacher-working-hours:v1"],
+    { revalidate: WORKING_HOURS_CACHE_REVALIDATE_SECONDS, tags: [TEACHER_WORKING_HOURS_CACHE_TAG] }
+)
+
+export async function getTeacherWorkingHoursSafe(): Promise<TeacherWorkingHoursByDay> {
+    return getTeacherWorkingHoursCached()
 }
 
 export async function saveTeacherWorkingHoursSafe(

@@ -63,12 +63,21 @@ export async function getLatestAvailability(studentId: string) {
     }
 }
 
-export async function getMonthlyAvailability(studentId: string, year: number, month: number) {
+export async function getMonthlyAvailability(studentId: string | undefined, year: number, month: number) {
     const session = await auth()
     if (!session?.user) return { success: false, error: "Unauthorized" }
 
+    const targetStudentId = session.user.role === "TEACHER" ? studentId : session.user.id
+    if (!targetStudentId) {
+        return { success: false, error: "Unauthorized" }
+    }
+
+    if (session.user.role === "TEACHER" && !studentId) {
+        return { success: false, error: "Student id is required" }
+    }
+
     // Allow student to see own, or teacher to see any
-    if (session.user.role !== "TEACHER" && session.user.id !== studentId) {
+    if (session.user.role !== "TEACHER" && session.user.id !== targetStudentId) {
         return { success: false, error: "Unauthorized" }
     }
 
@@ -77,7 +86,7 @@ export async function getMonthlyAvailability(studentId: string, year: number, mo
             prisma.monthlyAvailability.findUnique({
                 where: {
                     studentId_year_month: {
-                        studentId,
+                        studentId: targetStudentId,
                         year,
                         month
                     }
@@ -107,7 +116,7 @@ export async function getMonthlyAvailability(studentId: string, year: number, mo
 }
 
 export async function saveMonthlyAvailability(
-    studentId: string,
+    studentId: string | undefined,
     year: number,
     month: number,
     data: { availableSlots: string[], unavailableSlots: string[] }
@@ -115,8 +124,17 @@ export async function saveMonthlyAvailability(
     const session = await auth()
     if (!session?.user) return { success: false, error: "Unauthorized" }
 
+    const targetStudentId = session.user.role === "TEACHER" ? studentId : session.user.id
+    if (!targetStudentId) {
+        return { success: false, error: "Unauthorized" }
+    }
+
+    if (session.user.role === "TEACHER" && !studentId) {
+        return { success: false, error: "Student id is required" }
+    }
+
     // Allow student to edit own, or teacher to edit any
-    if (session.user.role !== "TEACHER" && session.user.id !== studentId) {
+    if (session.user.role !== "TEACHER" && session.user.id !== targetStudentId) {
         return { success: false, error: "Unauthorized" }
     }
 
@@ -136,7 +154,7 @@ export async function saveMonthlyAvailability(
         const availability = await prisma.monthlyAvailability.upsert({
             where: {
                 studentId_year_month: {
-                    studentId,
+                    studentId: targetStudentId,
                     year,
                     month
                 }
@@ -146,7 +164,7 @@ export async function saveMonthlyAvailability(
                 unavailableSlots: filteredUnavailableSlots,
             },
             create: {
-                studentId,
+                studentId: targetStudentId,
                 year,
                 month,
                 availableSlots: filteredAvailableSlots,
@@ -155,7 +173,9 @@ export async function saveMonthlyAvailability(
         })
 
         revalidatePath(`/teacher/schedule/monthly`)
-        revalidatePath(`/teacher/students/${studentId}`)
+        revalidatePath(`/teacher/students/${targetStudentId}`)
+        revalidatePath(`/student`)
+        revalidatePath(`/student/availability`)
         return { success: true, data: availability }
     } catch (error) {
         console.error("Failed to save availability:", error)

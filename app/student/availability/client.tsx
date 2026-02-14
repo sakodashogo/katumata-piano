@@ -10,16 +10,15 @@ type Props = {
     initialData: any
     year: number
     month: number
-    studentId: string
     workingHours: TeacherWorkingHoursByDay
 }
 
-export default function AvailabilityPageClient({ initialData, year, month, studentId, workingHours }: Props) {
+export default function AvailabilityPageClient({ initialData, year, month, workingHours }: Props) {
     const router = useRouter()
     const { toast } = useToast()
 
     const onSave = async (y: number, m: number, data: { availableSlots: string[], unavailableSlots: string[] }) => {
-        const result = await saveMonthlyAvailability(studentId, y, m, data)
+        const result = await saveMonthlyAvailability(undefined, y, m, data)
         if (result.success) {
             toast.success(`${year}年${month}月の希望を保存しました。`)
             router.refresh()

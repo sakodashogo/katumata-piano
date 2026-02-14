@@ -1,7 +1,5 @@
-import { auth } from "@/auth"
 import { getMonthlyAvailability } from "@/app/lib/actions/availability"
 import AvailabilityPageClient from "./client"
-import { redirect } from "next/navigation"
 import { getTeacherWorkingHoursSafe } from "@/lib/teacher-working-hours"
 
 export default async function AvailabilityPage({
@@ -12,22 +10,13 @@ export default async function AvailabilityPage({
     // Await searchParams before accessing properties
     const params = await Promise.resolve(searchParams)
 
-    const session = await auth()
-    if (!session?.user || session.user.role !== "STUDENT") {
-        redirect("/login")
-    }
-    const studentId = session.user.id
-    if (!studentId) {
-        redirect("/login")
-    }
-
     const now = new Date()
     // Defaults to current month
     const year = params.year ? parseInt(params.year) : now.getFullYear()
     const month = params.month ? parseInt(params.month) : now.getMonth() + 1
 
     const [result, workingHours] = await Promise.all([
-        getMonthlyAvailability(studentId, year, month),
+        getMonthlyAvailability(undefined, year, month),
         getTeacherWorkingHoursSafe(),
     ])
     const data = result.success ? result.data : null
@@ -37,7 +26,6 @@ export default async function AvailabilityPage({
             initialData={data}
             year={year}
             month={month}
-            studentId={studentId}
             workingHours={workingHours}
         />
     )

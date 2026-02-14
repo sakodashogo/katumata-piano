@@ -12,6 +12,8 @@ export const metadata: Metadata = {
   description: "ピアノ教室のレッスン予約・管理システム",
 };
 
+export const preferredRegion = ["syd1"];
+
 export default function RootLayout({
   children,
 }: Readonly<{

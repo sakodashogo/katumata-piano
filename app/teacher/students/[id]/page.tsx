@@ -30,7 +30,14 @@ export default async function StudentDetailPage({
     const resolvedSearchParams = await Promise.resolve(searchParams);
 
     const student = await prisma.user.findUnique({
-        where: { id }
+        where: { id },
+        select: {
+            id: true,
+            name: true,
+            email: true,
+            defaultLessonCount: true,
+            createdAt: true,
+        },
     })
 
     if (!student) return <div>生徒が見つかりません</div>

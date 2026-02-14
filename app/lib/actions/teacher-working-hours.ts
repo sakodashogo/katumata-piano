@@ -1,8 +1,9 @@
 "use server"
 
 import { auth } from "@/auth"
-import { revalidatePath } from "next/cache"
+import { revalidatePath, revalidateTag } from "next/cache"
 import {
+    TEACHER_WORKING_HOURS_CACHE_TAG,
     getDefaultTeacherWorkingHours,
     normalizeTeacherWorkingHourRanges,
     normalizeTeacherWorkingHoursByDay,
@@ -39,6 +40,7 @@ function revalidateWorkingHourRelatedViews() {
     revalidatePath("/teacher/resources")
     revalidatePath("/teacher/students")
     revalidatePath("/student/availability")
+    revalidateTag(TEACHER_WORKING_HOURS_CACHE_TAG, "max")
 }
 
 export async function updateTeacherWorkingHours(input: TeacherWorkingHoursUpdateInput) {

@@ -53,6 +53,8 @@ model User {
   publishedClosedDaySchedules ClosedDayPublication[] @relation("ClosedDayPublishedBy")
   defaultLessonCount Int      @default(4) // Monthly contract lesson count
   assignedLessons    Lesson[] @relation("AssignedSupportStaff")
+
+  @@index([role])
 }
 
 model MonthlyAvailability {
@@ -99,6 +101,10 @@ model Lesson {
   roomId    String?      // 'A' or 'B', useful for fixed lessons too
   assignedStaffId String?
   assignedStaff   User?  @relation("AssignedSupportStaff", fields: [assignedStaffId], references: [id])
+
+  @@index([startTime])
+  @@index([studentId, startTime])
+  @@index([roomId, startTime])
 }
 
 model OpenSlot {
@@ -111,6 +117,10 @@ model OpenSlot {
   menuId      String?
   menu        Menu?    @relation(fields: [menuId], references: [id])
   durationMin Int      @default(30)
+
+  @@index([startTime])
+  @@index([roomId, startTime])
+  @@index([isBooked, isPublic, startTime])
 }
 
 model SupportStaff {

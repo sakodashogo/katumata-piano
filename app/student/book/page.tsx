@@ -5,7 +5,6 @@ import {
     getStudentCredits,
 } from "@/app/lib/actions/booking"
 import { BookingWizard } from "@/components/student/BookingWizard"
-import { auth } from "@/auth"
 
 type BookingMenu = {
     id: string
@@ -20,7 +19,6 @@ export default async function BookingPage({
 }: {
     searchParams: Promise<{ [key: string]: string | string[] | undefined }>
 }) {
-    const session = await auth()
     const params = await searchParams
 
     const rescheduleId = params.reschedule as string | undefined
@@ -30,7 +28,7 @@ export default async function BookingPage({
     // Parallel fetch
     const [menusData, credits, reschedulePolicy] = await Promise.all([
         shouldUseAllMenus ? getMenus() : getBookableMenusForStudent(),
-        session?.user?.id ? getStudentCredits(session.user.id) : null,
+        getStudentCredits(),
         rescheduleId ? getReschedulePolicy(rescheduleId) : null,
     ])
 

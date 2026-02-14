@@ -2,9 +2,10 @@
 
 import { auth } from "@/auth"
 import { prisma } from "@/lib/prisma"
-import { revalidatePath } from "next/cache"
+import { revalidatePath, revalidateTag } from "next/cache"
 import { addDays, eachDayOfInterval, endOfMonth, getDay, setHours, setMinutes, startOfMonth } from "date-fns"
 import { getClosedDaysInRangeSafe, isSlotClosed } from "@/lib/closed-days"
+import { SUPPORT_SHIFTS_CACHE_TAG } from "@/lib/support-shifts"
 import { getTeacherWorkingHoursSafe, isWithinTeacherWorkingHours } from "@/lib/teacher-working-hours"
 
 type DelegateMethod = (args: unknown) => Promise<unknown>
@@ -45,6 +46,7 @@ function revalidateSupportViews() {
     revalidatePath("/teacher/schedule")
     revalidatePath("/teacher/schedule/monthly")
     revalidatePath("/student/book")
+    revalidateTag(SUPPORT_SHIFTS_CACHE_TAG, "max")
 }
 
 async function requireTeacher() {

@@ -37,6 +37,13 @@ export async function getStudents() {
     try {
         const students = await prisma.user.findMany({
             where: { role: "STUDENT" },
+            select: {
+                id: true,
+                name: true,
+                email: true,
+                createdAt: true,
+                defaultLessonCount: true,
+            },
             orderBy: { createdAt: "desc" },
         })
         return { success: true, data: students }

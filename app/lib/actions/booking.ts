@@ -73,7 +73,17 @@ export async function getBookableMenusForStudent() {
     }
 }
 
-export async function getStudentCredits(userId: string) {
+export async function getStudentCredits(userId?: string) {
+    const session = await auth()
+    if (!session?.user?.id) return null
+
+    const targetUserId = session.user.role === "TEACHER" ? userId : session.user.id
+    if (!targetUserId) return null
+
+    if (session.user.role !== "TEACHER" && session.user.id !== targetUserId) {
+        return null
+    }
+
     const today = new Date()
     const year = today.getFullYear()
     const month = today.getMonth() + 1 // 1-12
@@ -81,7 +91,7 @@ export async function getStudentCredits(userId: string) {
     const credit = await prisma.cancellationCredit.findUnique({
         where: {
             studentId_year_month: {
-                studentId: userId,
+                studentId: targetUserId,
                 year,
                 month,
             }

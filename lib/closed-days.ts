@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma"
+import { unstable_cache } from "next/cache"
 
 type DelegateMethod = (args: unknown) => Promise<unknown>
 
@@ -6,6 +7,9 @@ export type ClosedDayScope = "teacher" | "student"
 export type ClosedDayQueryOptions = {
     scope?: ClosedDayScope
 }
+
+export const CLOSED_DAYS_CACHE_TAG = "closed-days"
+const CLOSED_DAYS_CACHE_REVALIDATE_SECONDS = 60
 
 export type ClosedDayRecord = {
     id: string
@@ -38,6 +42,14 @@ export async function getClosedDaysInRangeSafe(
     options?: ClosedDayQueryOptions
 ): Promise<ClosedDayRecord[]> {
     const scope = options?.scope ?? "teacher"
+    const records = await getClosedDaysInRangeCached(start.toISOString(), end.toISOString(), scope)
+    return records.map((record) => ({
+        ...record,
+        date: new Date(record.date),
+    }))
+}
+
+async function fetchClosedDaysInRangeUncached(start: Date, end: Date, scope: ClosedDayScope): Promise<ClosedDayRecord[]> {
     const { draft, published } = getClosedDayDelegates()
     const delegate = scope === "student" ? published : draft
     if (!delegate || typeof delegate.findMany !== "function") {
@@ -51,12 +63,27 @@ export async function getClosedDaysInRangeSafe(
             },
             orderBy: { date: "asc" },
         })
-        return records as ClosedDayRecord[]
+        return (records as ClosedDayRecord[]).map((record) => ({
+            ...record,
+            date: new Date(record.date),
+        }))
     } catch (error) {
         if (isMissingRelationError(error)) return []
         throw error
     }
 }
+
+const getClosedDaysInRangeCached = unstable_cache(
+    async (startIso: string, endIso: string, scope: ClosedDayScope) => {
+        const records = await fetchClosedDaysInRangeUncached(new Date(startIso), new Date(endIso), scope)
+        return records.map((record) => ({
+            ...record,
+            date: record.date.toISOString(),
+        }))
+    },
+    ["closed-days-range:v1"],
+    { revalidate: CLOSED_DAYS_CACHE_REVALIDATE_SECONDS, tags: [CLOSED_DAYS_CACHE_TAG] }
+)
 
 /**
  * Check if a 30-min slot falls within a closed period.

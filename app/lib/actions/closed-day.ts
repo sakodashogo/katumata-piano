@@ -2,7 +2,8 @@
 
 import { auth } from "@/auth"
 import { prisma } from "@/lib/prisma"
-import { revalidatePath } from "next/cache"
+import { revalidatePath, revalidateTag } from "next/cache"
+import { CLOSED_DAYS_CACHE_TAG } from "@/lib/closed-days"
 import { addDays, eachDayOfInterval, endOfMonth, getDay, startOfDay, startOfMonth } from "date-fns"
 
 type DelegateMethod = (args: unknown) => Promise<unknown>
@@ -84,11 +85,13 @@ function revalidateClosedDayDraftViews() {
     revalidatePath("/teacher/support")
     revalidatePath("/teacher/resources")
     revalidatePath("/teacher/schedule/monthly")
+    revalidateTag(CLOSED_DAYS_CACHE_TAG, "max")
 }
 
 function revalidateClosedDayPublicationViews() {
     revalidatePath("/teacher/closed-days")
     revalidatePath("/student/book")
+    revalidateTag(CLOSED_DAYS_CACHE_TAG, "max")
 }
 
 async function requireTeacher() {

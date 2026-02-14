@@ -23,11 +23,21 @@ export async function getPlanningData() {
 
     const students = await prisma.user.findMany({
         where: { role: "STUDENT" },
-        include: {
+        select: {
+            id: true,
+            name: true,
             availabilities: {
+                select: {
+                    id: true,
+                    days: true,
+                    startTime: true,
+                    endTime: true,
+                    note: true,
+                    createdAt: true,
+                },
                 orderBy: { createdAt: "desc" },
                 take: 1
-            }
+            },
         }
     })
 
@@ -45,11 +55,23 @@ export async function getMonthlyPlanningData(year: number, month: number) {
     const [students, lessons, supportShifts, publicationRows] = await Promise.all([
         prisma.user.findMany({
             where: { role: "STUDENT" },
-            include: {
+            select: {
+                id: true,
+                name: true,
+                email: true,
+                defaultLessonCount: true,
                 monthlyAvailabilities: {
                     where: { year, month },
+                    select: {
+                        id: true,
+                        availableSlots: true,
+                        unavailableSlots: true,
+                        year: true,
+                        month: true,
+                        updatedAt: true,
+                    },
                     take: 1
-                }
+                },
             },
             orderBy: { name: 'asc' }
         }),

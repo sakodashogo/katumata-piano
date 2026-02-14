@@ -1,4 +1,3 @@
-import { auth } from "@/auth"
 import { prisma } from "@/lib/prisma"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -8,37 +7,88 @@ import { endOfMonth, format, startOfMonth } from "date-fns"
 import { ja } from "date-fns/locale"
 import { LESSON_TYPE_LABELS } from "@/lib/constants"
 import { StudentScheduleCalendar } from "@/components/student/StudentScheduleCalendar"
+import { getCachedSession } from "@/lib/session"
 
-async function getStudentLessons(studentId: string) {
-    return await prisma.lesson.findMany({
-        where: { studentId },
-        orderBy: { startTime: "asc" },
-        include: { teacher: true },
-    })
+async function getStudentDashboardData(studentId: string) {
+    const now = new Date()
+    const currentMonthStart = startOfMonth(now)
+    const currentMonthEnd = endOfMonth(now)
+    const monthRegularRangeStart = now > currentMonthStart ? now : currentMonthStart
+
+    const [upcomingLessons, historyLessons, monthlyRegularLessons] = await Promise.all([
+        prisma.lesson.findMany({
+            where: {
+                studentId,
+                status: "BOOKED",
+                startTime: { gt: now },
+            },
+            select: {
+                id: true,
+                startTime: true,
+                endTime: true,
+                type: true,
+                status: true,
+                menuId: true,
+                teacher: {
+                    select: {
+                        name: true,
+                    },
+                },
+            },
+            orderBy: { startTime: "asc" },
+        }),
+        prisma.lesson.findMany({
+            where: {
+                studentId,
+                status: { not: "DRAFT" },
+                startTime: { lte: now },
+            },
+            select: {
+                id: true,
+                startTime: true,
+                endTime: true,
+                type: true,
+                status: true,
+                report: true,
+                homework: true,
+            },
+            orderBy: { startTime: "desc" },
+        }),
+        prisma.lesson.findMany({
+            where: {
+                studentId,
+                status: "BOOKED",
+                type: "REGULAR",
+                startTime: {
+                    gte: monthRegularRangeStart,
+                    lte: currentMonthEnd,
+                },
+            },
+            select: {
+                id: true,
+                startTime: true,
+                endTime: true,
+            },
+            orderBy: { startTime: "asc" },
+        }),
+    ])
+
+    return {
+        upcomingLessons,
+        historyLessons,
+        monthlyRegularLessons,
+    }
 }
 
 export default async function StudentDashboard() {
-    const session = await auth()
+    const session = await getCachedSession()
     if (!session?.user?.id) return null
 
-    const allLessons = await getStudentLessons(session.user.id)
-    const now = new Date()
-    const upcomingLessons = allLessons.filter(
-        (lesson) => new Date(lesson.startTime) > now && lesson.status === "BOOKED"
-    )
-    const historyLessons = allLessons
-        .filter((lesson) => new Date(lesson.startTime) <= now && lesson.status !== "DRAFT")
-        .reverse()
+    const { upcomingLessons, historyLessons, monthlyRegularLessons } = await getStudentDashboardData(session.user.id)
     const upcomingRegular = upcomingLessons.filter((lesson) => lesson.type === "REGULAR")
     const upcomingAdditional = upcomingLessons.filter((lesson) =>
         lesson.type === "AD_HOC" || lesson.type === "SOLO_ADDITIONAL" || lesson.type === "DUET_ADDITIONAL"
     )
-    const currentMonthStart = startOfMonth(new Date())
-    const currentMonthEnd = endOfMonth(new Date())
-    const monthlyRegularLessons = upcomingRegular.filter((lesson) => {
-        const lessonDate = new Date(lesson.startTime)
-        return lessonDate >= currentMonthStart && lessonDate <= currentMonthEnd
-    })
 
     const nextLesson = upcomingLessons[0]
 
