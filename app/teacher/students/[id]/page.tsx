@@ -9,9 +9,9 @@ import { format } from "date-fns"
 import { ja } from "date-fns/locale"
 import { LESSON_STATUS_LABELS } from "@/lib/constants"
 import { StudentEditDialog } from "@/components/teacher/StudentEditDialog"
-import { auth } from "@/auth"
 import { redirect } from "next/navigation"
 import { getTeacherWorkingHoursSafe } from "@/lib/teacher-working-hours"
+import { getCachedSession } from "@/lib/session"
 
 export default async function StudentDetailPage({
     params,
@@ -20,7 +20,7 @@ export default async function StudentDetailPage({
     params: { id: string },
     searchParams: { year?: string, month?: string }
 }) {
-    const session = await auth()
+    const session = await getCachedSession()
     if (!session?.user || session.user.role !== "TEACHER") {
         redirect("/login")
     }

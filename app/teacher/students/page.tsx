@@ -1,11 +1,11 @@
 import { getStudents } from "@/app/lib/actions/student"
 import { AddStudentForm } from "@/components/teacher/AddStudentForm"
 import { StudentList, type StudentListItem } from "@/components/teacher/StudentList"
-import { auth } from "@/auth"
 import { redirect } from "next/navigation"
+import { getCachedSession } from "@/lib/session"
 
 export default async function StudentManagementPage() {
-    const session = await auth()
+    const session = await getCachedSession()
     if (!session?.user || session.user.role !== "TEACHER") {
         redirect("/login")
     }

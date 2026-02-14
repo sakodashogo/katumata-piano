@@ -5,7 +5,7 @@ import { Button } from "./ui/button"
 import { signOut } from "next-auth/react"
 import { usePathname, useRouter } from "next/navigation"
 import { cn } from "@/lib/utils"
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useRef, useState } from "react"
 import { Menu, X } from "lucide-react"
 
 type DashboardUserRole = "TEACHER" | "STUDENT"
@@ -34,19 +34,11 @@ const studentLinks = [
     { href: "/student/book", label: "レッスン予約" },
 ]
 
-function scheduleIdle(callback: () => void) {
-    if (typeof globalThis.requestIdleCallback === "function") {
-        const idleId = globalThis.requestIdleCallback(callback, { timeout: 1500 })
-        return () => globalThis.cancelIdleCallback(idleId)
-    }
-    const timerId = setTimeout(callback, 300)
-    return () => clearTimeout(timerId)
-}
-
 export default function DashboardNav({ user }: { user: DashboardNavUser }) {
     const router = useRouter()
     const pathname = usePathname()
     const [mobileOpen, setMobileOpen] = useState(false)
+    const prefetchedRoutesRef = useRef(new Set<string>())
 
     const isActive = (href: string) => {
         if (href === "/teacher/schedule") {
@@ -61,31 +53,18 @@ export default function DashboardNav({ user }: { user: DashboardNavUser }) {
     const links = user.role === "TEACHER" ? teacherLinks : studentLinks
     const userLabel = user.name || user.email || "ユーザー"
 
-    const prefetchTargets = useMemo(() => {
-        const targets = new Set<string>(["/dashboard", "/settings"])
-        for (const link of links) {
-            targets.add(link.href)
-        }
-        return Array.from(targets)
-    }, [links])
-
     const prefetchRoute = useCallback((href: string) => {
+        if (prefetchedRoutesRef.current.has(href)) {
+            return
+        }
+        prefetchedRoutesRef.current.add(href)
         router.prefetch(href)
     }, [router])
-
-    useEffect(() => {
-        const cancel = scheduleIdle(() => {
-            for (const href of prefetchTargets) {
-                router.prefetch(href)
-            }
-        })
-        return cancel
-    }, [prefetchTargets, router])
 
     return (
         <nav className="border-b border-slate-200 bg-white/50 backdrop-blur-md px-6 h-16 flex items-center justify-between sticky top-0 z-40">
             <div className="flex items-center gap-6">
-                <Link href="/dashboard" className="text-xl font-bold tracking-tight text-slate-900">
+                <Link href="/dashboard" prefetch={false} className="text-xl font-bold tracking-tight text-slate-900">
                     ピアノ教室管理
                 </Link>
 
@@ -95,6 +74,7 @@ export default function DashboardNav({ user }: { user: DashboardNavUser }) {
                         <Link
                             key={link.href}
                             href={link.href}
+                            prefetch={false}
                             onMouseEnter={() => prefetchRoute(link.href)}
                             onFocus={() => prefetchRoute(link.href)}
                             className={cn(
@@ -114,7 +94,7 @@ export default function DashboardNav({ user }: { user: DashboardNavUser }) {
                 <span className="text-sm text-slate-500">
                     {userLabel}
                 </span>
-                <Link href="/settings" onMouseEnter={() => prefetchRoute("/settings")} onFocus={() => prefetchRoute("/settings")}>
+                <Link href="/settings" prefetch={false} onMouseEnter={() => prefetchRoute("/settings")} onFocus={() => prefetchRoute("/settings")}>
                     <Button variant="ghost" size="sm">設定</Button>
                 </Link>
                 <Button variant="ghost" size="sm" onClick={() => signOut()}>ログアウト</Button>
@@ -136,6 +116,7 @@ export default function DashboardNav({ user }: { user: DashboardNavUser }) {
                             <Link
                                 key={link.href}
                                 href={link.href}
+                                prefetch={false}
                                 onClick={() => setMobileOpen(false)}
                                 className={cn(
                                     "px-4 py-3 rounded-lg text-sm font-medium transition-colors",
@@ -153,6 +134,7 @@ export default function DashboardNav({ user }: { user: DashboardNavUser }) {
                         </div>
                         <Link
                             href="/settings"
+                            prefetch={false}
                             onClick={() => setMobileOpen(false)}
                             className="px-4 py-3 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-50"
                         >

@@ -218,13 +218,13 @@ export function ResourceManager({
                         第1レッスン室を主軸に、第2レッスン室（サポート/自主練）の稼働状況を確認できます。
                     </p>
                     <div className="space-y-2">
-                        <Link href={`/teacher/schedule?date=${format(selectedDate, "yyyy-MM-dd")}`} className="block">
+                        <Link href={`/teacher/schedule?date=${format(selectedDate, "yyyy-MM-dd")}`} prefetch={false} className="block">
                             <Button className="w-full justify-between" variant="outline">
                                 週次スケジュールへ
                                 <ArrowRight className="h-4 w-4" />
                             </Button>
                         </Link>
-                        <Link href={`/teacher/slots?year=${year}&month=${month}`} className="block">
+                        <Link href={`/teacher/slots?year=${year}&month=${month}`} prefetch={false} className="block">
                             <Button className="w-full justify-between bg-blue-600 text-white hover:bg-blue-700">
                                 空き枠承認へ
                                 <ArrowRight className="h-4 w-4" />

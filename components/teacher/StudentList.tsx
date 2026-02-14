@@ -61,7 +61,7 @@ export function StudentList({ students }: { students: StudentListItem[] }) {
                         {students.map((student) => (
                             <tr key={student.id} className="hover:bg-slate-50">
                                 <td className="px-6 py-4 font-medium text-slate-900">
-                                    <Link href={`/teacher/students/${student.id}`} className="hover:underline text-blue-600">
+                                    <Link href={`/teacher/students/${student.id}`} prefetch={false} className="hover:underline text-blue-600">
                                         {student.name}
                                     </Link>
                                 </td>

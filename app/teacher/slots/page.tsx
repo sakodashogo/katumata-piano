@@ -1,8 +1,8 @@
 import { SlotManager } from "@/components/teacher/SlotManager"
-import { auth } from "@/auth"
 import { redirect } from "next/navigation"
 import { prisma } from "@/lib/prisma"
 import { isStudentBookableMenu } from "@/lib/menu-category"
+import { getCachedSession } from "@/lib/session"
 
 type SlotManagerMenu = {
     id: string
@@ -36,7 +36,7 @@ export default async function SlotsPage({
 }: {
     searchParams: Promise<{ [key: string]: string | string[] | undefined }>
 }) {
-    const session = await auth()
+    const session = await getCachedSession()
     if (!session?.user || session.user.role !== "TEACHER") {
         redirect("/login")
     }

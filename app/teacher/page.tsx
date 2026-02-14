@@ -2,55 +2,67 @@
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { prisma } from "@/lib/prisma"
-import { auth } from "@/auth"
+import { getCachedSession } from "@/lib/session"
 import { redirect } from "next/navigation"
 import { format, startOfDay, endOfDay, startOfWeek, endOfWeek, addWeeks } from "date-fns"
 import { ja } from "date-fns/locale"
 import { LESSON_TYPE_LABELS, LESSON_STATUS_LABELS } from "@/lib/constants"
 import { CalendarDays, Users, Clock, BookOpen, CalendarCheck, ListChecks, Monitor, ClipboardList, UserRoundCog, CalendarOff } from "lucide-react"
 import Link from "next/link"
+import { unstable_cache } from "next/cache"
+
+const getTeacherDashboardData = unstable_cache(
+    async () => {
+        const now = new Date()
+        const todayStart = startOfDay(now)
+        const todayEnd = endOfDay(now)
+        const weekStart = startOfWeek(now, { weekStartsOn: 1 })
+        const weekEnd = endOfWeek(now, { weekStartsOn: 1 })
+        const nextWeekEnd = addWeeks(weekEnd, 1)
+
+        const [todayLessons, weekOpenSlots, upcomingLessons, totalStudents] = await Promise.all([
+            prisma.lesson.findMany({
+                where: {
+                    startTime: { gte: todayStart, lte: todayEnd },
+                    status: { not: "CANCELLED" },
+                },
+                include: { student: { select: { name: true } } },
+                orderBy: { startTime: "asc" },
+            }),
+            prisma.openSlot.count({
+                where: {
+                    startTime: { gte: weekStart, lte: weekEnd },
+                    isBooked: false,
+                },
+            }),
+            prisma.lesson.findMany({
+                where: {
+                    startTime: { gt: todayEnd, lte: nextWeekEnd },
+                    status: "BOOKED",
+                },
+                include: { student: { select: { name: true } } },
+                orderBy: { startTime: "asc" },
+                take: 10,
+            }),
+            prisma.user.count({
+                where: { role: "STUDENT" },
+            }),
+        ])
+
+        return { todayLessons, weekOpenSlots, upcomingLessons, totalStudents }
+    },
+    ["teacher-dashboard"],
+    { revalidate: 30 }
+)
 
 export default async function TeacherDashboard() {
-    const session = await auth()
+    const session = await getCachedSession()
     if (!session?.user || session.user.role !== "TEACHER") {
         redirect("/login")
     }
 
     const now = new Date()
-    const todayStart = startOfDay(now)
-    const todayEnd = endOfDay(now)
-    const weekStart = startOfWeek(now, { weekStartsOn: 1 })
-    const weekEnd = endOfWeek(now, { weekStartsOn: 1 })
-    const nextWeekEnd = addWeeks(weekEnd, 1)
-
-    const [todayLessons, weekOpenSlots, upcomingLessons, totalStudents] = await Promise.all([
-        prisma.lesson.findMany({
-            where: {
-                startTime: { gte: todayStart, lte: todayEnd },
-                status: { not: "CANCELLED" },
-            },
-            include: { student: { select: { name: true } } },
-            orderBy: { startTime: "asc" },
-        }),
-        prisma.openSlot.count({
-            where: {
-                startTime: { gte: weekStart, lte: weekEnd },
-                isBooked: false,
-            },
-        }),
-        prisma.lesson.findMany({
-            where: {
-                startTime: { gt: todayEnd, lte: nextWeekEnd },
-                status: "BOOKED",
-            },
-            include: { student: { select: { name: true } } },
-            orderBy: { startTime: "asc" },
-            take: 10,
-        }),
-        prisma.user.count({
-            where: { role: "STUDENT" },
-        }),
-    ])
+    const { todayLessons, weekOpenSlots, upcomingLessons, totalStudents } = await getTeacherDashboardData()
 
     return (
         <main className="p-6 max-w-7xl mx-auto space-y-6">
@@ -186,7 +198,7 @@ export default async function TeacherDashboard() {
 
             {/* Quick Links */}
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4">
-                <Link href="/teacher/schedule" className="block">
+                <Link href="/teacher/schedule" prefetch={false} className="block">
                     <Card className="hover:border-blue-300 transition-colors cursor-pointer">
                         <CardContent className="pt-6 text-center">
                             <CalendarDays className="h-8 w-8 mx-auto mb-2 text-blue-600" />
@@ -194,7 +206,7 @@ export default async function TeacherDashboard() {
                         </CardContent>
                     </Card>
                 </Link>
-                <Link href="/teacher/slots" className="block">
+                <Link href="/teacher/slots" prefetch={false} className="block">
                     <Card className="hover:border-blue-300 transition-colors cursor-pointer">
                         <CardContent className="pt-6 text-center">
                             <ListChecks className="h-8 w-8 mx-auto mb-2 text-indigo-600" />
@@ -202,7 +214,7 @@ export default async function TeacherDashboard() {
                         </CardContent>
                     </Card>
                 </Link>
-                <Link href="/teacher/resources" className="block">
+                <Link href="/teacher/resources" prefetch={false} className="block">
                     <Card className="hover:border-blue-300 transition-colors cursor-pointer">
                         <CardContent className="pt-6 text-center">
                             <Monitor className="h-8 w-8 mx-auto mb-2 text-cyan-600" />
@@ -210,7 +222,7 @@ export default async function TeacherDashboard() {
                         </CardContent>
                     </Card>
                 </Link>
-                <Link href="/teacher/support" className="block">
+                <Link href="/teacher/support" prefetch={false} className="block">
                     <Card className="hover:border-blue-300 transition-colors cursor-pointer">
                         <CardContent className="pt-6 text-center">
                             <UserRoundCog className="h-8 w-8 mx-auto mb-2 text-sky-600" />
@@ -218,7 +230,7 @@ export default async function TeacherDashboard() {
                         </CardContent>
                     </Card>
                 </Link>
-                <Link href="/teacher/availabilities" className="block">
+                <Link href="/teacher/availabilities" prefetch={false} className="block">
                     <Card className="hover:border-blue-300 transition-colors cursor-pointer">
                         <CardContent className="pt-6 text-center">
                             <ClipboardList className="h-8 w-8 mx-auto mb-2 text-emerald-600" />
@@ -226,7 +238,7 @@ export default async function TeacherDashboard() {
                         </CardContent>
                     </Card>
                 </Link>
-                <Link href="/teacher/schedule/monthly" className="block">
+                <Link href="/teacher/schedule/monthly" prefetch={false} className="block">
                     <Card className="hover:border-blue-300 transition-colors cursor-pointer">
                         <CardContent className="pt-6 text-center">
                             <CalendarCheck className="h-8 w-8 mx-auto mb-2 text-green-600" />
@@ -234,7 +246,7 @@ export default async function TeacherDashboard() {
                         </CardContent>
                     </Card>
                 </Link>
-                <Link href="/teacher/students" className="block">
+                <Link href="/teacher/students" prefetch={false} className="block">
                     <Card className="hover:border-blue-300 transition-colors cursor-pointer">
                         <CardContent className="pt-6 text-center">
                             <Users className="h-8 w-8 mx-auto mb-2 text-purple-600" />
@@ -242,7 +254,7 @@ export default async function TeacherDashboard() {
                         </CardContent>
                     </Card>
                 </Link>
-                <Link href="/teacher/closed-days" className="block">
+                <Link href="/teacher/closed-days" prefetch={false} className="block">
                     <Card className="hover:border-blue-300 transition-colors cursor-pointer">
                         <CardContent className="pt-6 text-center">
                             <CalendarOff className="h-8 w-8 mx-auto mb-2 text-rose-600" />

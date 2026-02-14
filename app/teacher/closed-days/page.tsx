@@ -1,4 +1,4 @@
-import { auth } from "@/auth"
+import { getCachedSession } from "@/lib/session"
 import { getClosedDayPublicationStatus, getClosedDaysForMonth } from "@/app/lib/actions/closed-day"
 import { ClosedDayManager } from "@/components/teacher/ClosedDayManager"
 import { redirect } from "next/navigation"
@@ -8,7 +8,7 @@ export default async function ClosedDaysPage({
 }: {
     searchParams: Promise<{ [key: string]: string | string[] | undefined }>
 }) {
-    const session = await auth()
+    const session = await getCachedSession()
     if (!session?.user || session.user.role !== "TEACHER") {
         redirect("/login")
     }

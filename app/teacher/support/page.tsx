@@ -1,10 +1,10 @@
-import { auth } from "@/auth"
 import { getSupportShiftsInRange, getSupportStaff } from "@/app/lib/actions/support"
 import { SupportShiftPlanner } from "@/components/teacher/SupportShiftPlanner"
 import { addDays, endOfMonth, startOfMonth } from "date-fns"
 import { redirect } from "next/navigation"
 import { getClosedDaysInRangeSafe } from "@/lib/closed-days"
 import { getTeacherWorkingHoursSafe } from "@/lib/teacher-working-hours"
+import { getCachedSession } from "@/lib/session"
 
 type ShiftRow = {
     id: string
@@ -19,7 +19,7 @@ export default async function SupportPage({
 }: {
     searchParams: Promise<{ [key: string]: string | string[] | undefined }>
 }) {
-    const session = await auth()
+    const session = await getCachedSession()
     if (!session?.user || session.user.role !== "TEACHER") {
         redirect("/login")
     }

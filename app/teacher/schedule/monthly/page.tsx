@@ -1,10 +1,10 @@
-import { auth } from "@/auth"
 import { getMonthlyPlanningData } from "@/app/lib/actions/planning"
 import { MonthlyScheduler } from "@/components/teacher/MonthlyScheduler"
 import { redirect } from "next/navigation"
 import { getClosedDaysInRangeSafe } from "@/lib/closed-days"
 import { startOfMonth, endOfMonth, addDays } from "date-fns"
 import { getTeacherWorkingHoursSafe } from "@/lib/teacher-working-hours"
+import { getCachedSession } from "@/lib/session"
 
 export default async function MonthlyPlanningPage({
     searchParams
@@ -13,7 +13,7 @@ export default async function MonthlyPlanningPage({
 }) {
     const params = await searchParams
 
-    const session = await auth()
+    const session = await getCachedSession()
     if (!session?.user || session.user.role !== "TEACHER") {
         redirect("/login")
     }

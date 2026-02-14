@@ -1,15 +1,15 @@
-import { auth } from "@/auth"
 import { prisma } from "@/lib/prisma"
 import { redirect } from "next/navigation"
 import { TeacherMonthlyAvailabilityManager } from "@/components/teacher/TeacherMonthlyAvailabilityManager"
 import { getTeacherWorkingHoursSafe } from "@/lib/teacher-working-hours"
+import { getCachedSession } from "@/lib/session"
 
 export default async function AvailabilitiesPage({
     searchParams,
 }: {
     searchParams: Promise<{ year?: string; month?: string; student?: string }>
 }) {
-    const session = await auth()
+    const session = await getCachedSession()
     if (!session?.user || session.user.role !== "TEACHER") {
         redirect("/login")
     }

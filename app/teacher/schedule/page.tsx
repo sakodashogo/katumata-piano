@@ -2,13 +2,13 @@ import { getScheduleData } from "@/app/lib/actions/schedule"
 import { AdminCalendar } from "@/components/teacher/AdminCalendar"
 import { endOfWeek, startOfWeek } from "date-fns"
 import { SyncButton } from "@/components/teacher/SyncButton"
-import { auth } from "@/auth"
 import { redirect } from "next/navigation"
 import Link from "next/link"
 import { getClosedDaysInRangeSafe } from "@/lib/closed-days"
 import { getTeacherWorkingHoursSafe } from "@/lib/teacher-working-hours"
 import { Suspense } from "react"
 import MonthlyPanel from "./_monthly-panel"
+import { getCachedSession } from "@/lib/session"
 
 type ScheduleSlot = {
     id: string
@@ -40,7 +40,7 @@ export default async function SchedulePage({
 }: {
     searchParams: Promise<{ [key: string]: string | string[] | undefined }>
 }) {
-    const session = await auth()
+    const session = await getCachedSession()
     if (!session?.user || session.user.role !== "TEACHER") {
         redirect("/login")
     }
@@ -108,7 +108,7 @@ export default async function SchedulePage({
                 <p className="mt-1">
                     生徒への公開は
                     {" "}
-                    <Link href="/teacher/slots" className="font-bold underline underline-offset-2">
+                    <Link href="/teacher/slots" prefetch={false} className="font-bold underline underline-offset-2">
                         空き枠承認画面
                     </Link>
                     {" "}
