@@ -4,16 +4,17 @@ import { prisma } from "@/lib/prisma"
 import { auth } from "@/auth"
 import { revalidatePath, revalidateTag } from "next/cache"
 import {
-    eachDayOfInterval,
-    startOfMonth,
-    endOfMonth,
-    getDay,
-    setHours,
-    setMinutes,
     addMinutes,
 } from "date-fns"
 import { isStudentBookableMenu } from "@/lib/menu-category"
-import { getClosedDaysInRangeSafe, isSlotClosed } from "@/lib/closed-days"
+import {
+    getClosedDaysInRangeSafe,
+    getDaysInTokyoMonth,
+    getTokyoMonthDateRange,
+    isSlotClosed,
+    toTokyoWeekdayIndex,
+    tokyoDateKeyToDate,
+} from "@/lib/closed-days"
 import { getTeacherWorkingHoursSafe, isWithinTeacherWorkingHours } from "@/lib/teacher-working-hours"
 import { OPEN_SLOTS_CACHE_TAG, SCHEDULE_DATA_CACHE_TAG, SLOT_MANAGER_MONTH_CACHE_TAG } from "@/lib/cache-tags"
 
@@ -80,22 +81,30 @@ export async function batchCreateOpenSlots(input: BatchCreateInput) {
     if (session?.user?.role !== "TEACHER") return { success: false as const, error: "Unauthorized" }
 
     try {
+        const weekdaySet = new Set(
+            input.weekdays.filter((day) => Number.isInteger(day) && day >= 0 && day <= 6)
+        )
+        if (weekdaySet.size === 0) {
+            return { success: false as const, error: "曜日を選択してください。" }
+        }
         for (const range of input.timeRanges) {
             if (range.start >= range.end) {
                 return { success: false as const, error: "時間帯の開始は終了より前に設定してください。" }
             }
         }
 
-        const monthStart = startOfMonth(new Date(input.year, input.month - 1))
-        const monthEnd = endOfMonth(monthStart)
-        const monthEndExclusive = new Date(input.year, input.month, 1)
-        const allDays = eachDayOfInterval({ start: monthStart, end: monthEnd })
-        const matchingDays = allDays.filter(day => input.weekdays.includes(getDay(day)))
+        const monthRange = getTokyoMonthDateRange(input.year, input.month)
+        const daysInMonth = getDaysInTokyoMonth(input.year, input.month)
+        if (!monthRange || !daysInMonth) {
+            return { success: false as const, error: "年月が不正です。" }
+        }
+        const monthStart = monthRange.start
+        const monthEndExclusive = monthRange.endExclusive
 
         const [existingSlots, existingLessons, closedDays, workingHours] = await Promise.all([
             prisma.openSlot.findMany({
                 where: {
-                    startTime: { gte: monthStart, lte: monthEnd },
+                    startTime: { gte: monthStart, lt: monthEndExclusive },
                     roomId: { in: input.roomIds },
                 },
                 select: { startTime: true, endTime: true, roomId: true },
@@ -104,7 +113,7 @@ export async function batchCreateOpenSlots(input: BatchCreateInput) {
                 where: {
                     status: { not: "CANCELLED" },
                     roomId: { in: input.roomIds },
-                    startTime: { lt: monthEnd },
+                    startTime: { lt: monthEndExclusive },
                     endTime: { gt: monthStart },
                 },
                 select: { startTime: true, endTime: true, roomId: true },
@@ -141,12 +150,18 @@ export async function batchCreateOpenSlots(input: BatchCreateInput) {
         let skippedClosedCount = 0
         let skippedOutsideWorkingCount = 0
 
-        for (const day of matchingDays) {
+        for (let dayOfMonth = 1; dayOfMonth <= daysInMonth; dayOfMonth++) {
+            const dateKey = `${String(input.year).padStart(4, "0")}-${String(input.month).padStart(2, "0")}-${String(dayOfMonth).padStart(2, "0")}`
+            const dayStart = tokyoDateKeyToDate(dateKey)
+            if (!dayStart) continue
+            const dayOfWeek = toTokyoWeekdayIndex(dayStart)
+            if (dayOfWeek === null || !weekdaySet.has(dayOfWeek)) continue
+
             for (const range of input.timeRanges) {
                 const [startH, startM] = range.start.split(':').map(Number)
                 const [endH, endM] = range.end.split(':').map(Number)
-                const rangeStart = setMinutes(setHours(day, startH), startM)
-                const rangeEnd = setMinutes(setHours(day, endH), endM)
+                const rangeStart = new Date(dayStart.getTime() + (startH * 60 + startM) * 60 * 1000)
+                const rangeEnd = new Date(dayStart.getTime() + (endH * 60 + endM) * 60 * 1000)
 
                 let current = rangeStart
                 while (addMinutes(current, input.durationMin) <= rangeEnd) {
@@ -203,13 +218,15 @@ export async function getDraftSlots(year: number, month: number) {
     const session = await auth()
     if (session?.user?.role !== "TEACHER") return { success: false as const, error: "Unauthorized" }
 
-    const start = new Date(year, month - 1, 1)
-    const end = new Date(year, month, 0, 23, 59, 59, 999)
+    const monthRange = getTokyoMonthDateRange(year, month)
+    if (!monthRange) return { success: false as const, error: "Invalid month range" }
+    const start = monthRange.start
+    const endExclusive = monthRange.endExclusive
 
     try {
         const slots = await prisma.openSlot.findMany({
             where: {
-                startTime: { gte: start, lte: end },
+                startTime: { gte: start, lt: endExclusive },
                 isPublic: false,
                 isBooked: false,
             },
@@ -236,13 +253,15 @@ export async function getAllSlotsByMonth(year: number, month: number) {
     const session = await auth()
     if (session?.user?.role !== "TEACHER") return { success: false as const, error: "Unauthorized" }
 
-    const start = new Date(year, month - 1, 1)
-    const end = new Date(year, month, 0, 23, 59, 59, 999)
+    const monthRange = getTokyoMonthDateRange(year, month)
+    if (!monthRange) return { success: false as const, error: "Invalid month range" }
+    const start = monthRange.start
+    const endExclusive = monthRange.endExclusive
 
     try {
         const slots = await prisma.openSlot.findMany({
             where: {
-                startTime: { gte: start, lte: end },
+                startTime: { gte: start, lt: endExclusive },
             },
             include: {
                 menu: {

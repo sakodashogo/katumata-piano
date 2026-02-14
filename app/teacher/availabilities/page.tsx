@@ -5,12 +5,14 @@ import { getTeacherWorkingHoursSafe } from "@/lib/teacher-working-hours"
 import { getCachedSession } from "@/lib/session"
 import { unstable_cache } from "next/cache"
 import { TEACHER_AVAILABILITIES_PAGE_CACHE_TAG } from "@/lib/cache-tags"
+import { CLOSED_DAYS_CACHE_TAG, getClosedDaysInRangeSafe, getTokyoMonthDateRange } from "@/lib/closed-days"
 
 const TEACHER_AVAILABILITIES_REVALIDATE_SECONDS = 60
 
 const getTeacherAvailabilitiesPageData = unstable_cache(
     async (year: number, month: number) => {
-        const [students, workingHours] = await Promise.all([
+        const monthRange = getTokyoMonthDateRange(year, month)
+        const [students, workingHours, closedDays] = await Promise.all([
             prisma.user.findMany({
                 where: { role: "STUDENT" },
                 select: {
@@ -26,6 +28,9 @@ const getTeacherAvailabilitiesPageData = unstable_cache(
                 orderBy: [{ name: "asc" }, { email: "asc" }],
             }),
             getTeacherWorkingHoursSafe(),
+            monthRange
+                ? getClosedDaysInRangeSafe(monthRange.start, monthRange.endExclusive, { scope: "teacher" })
+                : Promise.resolve([]),
         ])
 
         const formattedStudents = students.map((student) => ({
@@ -35,12 +40,12 @@ const getTeacherAvailabilitiesPageData = unstable_cache(
             availability: student.monthlyAvailabilities[0] ?? null,
         }))
 
-        return { students: formattedStudents, workingHours }
+        return { students: formattedStudents, workingHours, closedDays }
     },
     ["teacher-availabilities-page:v1"],
     {
         revalidate: TEACHER_AVAILABILITIES_REVALIDATE_SECONDS,
-        tags: [TEACHER_AVAILABILITIES_PAGE_CACHE_TAG],
+        tags: [TEACHER_AVAILABILITIES_PAGE_CACHE_TAG, CLOSED_DAYS_CACHE_TAG],
     }
 )
 
@@ -59,7 +64,7 @@ export default async function AvailabilitiesPage({
     const year = params.year ? Number.parseInt(params.year, 10) : now.getFullYear()
     const month = params.month ? Number.parseInt(params.month, 10) : now.getMonth() + 1
 
-    const { students, workingHours } = await getTeacherAvailabilitiesPageData(year, month)
+    const { students, workingHours, closedDays } = await getTeacherAvailabilitiesPageData(year, month)
 
     const initialStudentId =
         (params.student && students.some((student) => student.id === params.student) ? params.student : undefined) ??
@@ -79,6 +84,7 @@ export default async function AvailabilitiesPage({
                 students={students}
                 initialStudentId={initialStudentId}
                 workingHours={workingHours}
+                closedDays={closedDays}
             />
         </div>
     )

@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation"
 import { useToast } from "@/components/ui/toast"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { type TeacherWorkingHoursByDay } from "@/lib/teacher-working-hours"
+import { type ClosedDayRecord } from "@/lib/closed-days"
 
 type Props = {
     studentId: string
@@ -13,9 +14,10 @@ type Props = {
     month: number
     initialData: any
     workingHours: TeacherWorkingHoursByDay
+    closedDays: ClosedDayRecord[]
 }
 
-export function StudentAvailabilityCard({ studentId, year, month, initialData, workingHours }: Props) {
+export function StudentAvailabilityCard({ studentId, year, month, initialData, workingHours, closedDays }: Props) {
     const router = useRouter()
     const { toast } = useToast()
 
@@ -64,6 +66,7 @@ export function StudentAvailabilityCard({ studentId, year, month, initialData, w
                     onSave={onSave}
                     onMonthChange={onMonthChange}
                     workingHours={workingHours}
+                    closedDays={closedDays}
                 />
             </CardContent>
         </Card>

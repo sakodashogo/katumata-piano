@@ -17,6 +17,7 @@ import {
 import { ja } from "date-fns/locale"
 import { Loader2, ChevronLeft, ChevronRight, PenLine, CheckCheck, Eraser, Copy } from "lucide-react"
 import { isWithinTeacherWorkingHours, type TeacherWorkingHoursByDay } from "@/lib/teacher-working-hours"
+import { isSlotClosed, type ClosedDayRecord } from "@/lib/closed-days"
 
 type AvailabilityCalendarProps = {
     initialAvailableSlots: string[]
@@ -24,6 +25,7 @@ type AvailabilityCalendarProps = {
     year: number
     month: number
     workingHours: TeacherWorkingHoursByDay
+    closedDays?: ClosedDayRecord[]
     onSave: (year: number, month: number, data: { availableSlots: string[], unavailableSlots: string[] }) => Promise<{ success: boolean, error?: string }>
     onMonthChange: (year: number, month: number) => void
     readOnly?: boolean
@@ -34,7 +36,11 @@ const END_HOUR = 22
 
 type CellPos = { row: number; col: number }
 
-function filterSlotsByWorkingHours(slotIsos: string[], workingHours: TeacherWorkingHoursByDay) {
+function sanitizeSlots(
+    slotIsos: string[],
+    workingHours: TeacherWorkingHoursByDay,
+    closedDays: ClosedDayRecord[]
+) {
     const unique = new Set<string>()
     const filtered: string[] = []
     for (const value of slotIsos) {
@@ -42,6 +48,7 @@ function filterSlotsByWorkingHours(slotIsos: string[], workingHours: TeacherWork
         if (Number.isNaN(slotStart.getTime())) continue
         const slotEnd = new Date(slotStart.getTime() + 30 * 60 * 1000)
         if (!isWithinTeacherWorkingHours(workingHours, slotStart, slotEnd)) continue
+        if (isSlotClosed(closedDays, slotStart, slotEnd)) continue
         const iso = slotStart.toISOString()
         if (unique.has(iso)) continue
         unique.add(iso)
@@ -56,6 +63,7 @@ export function AvailabilityCalendar({
     year,
     month,
     workingHours,
+    closedDays = [],
     onSave,
     onMonthChange,
     readOnly = false
@@ -88,17 +96,17 @@ export function AvailabilityCalendar({
 
     // Slot state
     const [availableSlots, setAvailableSlots] = React.useState<Set<string>>(
-        () => new Set(filterSlotsByWorkingHours(initialAvailableSlots, workingHours))
+        () => new Set(sanitizeSlots(initialAvailableSlots, workingHours, closedDays))
     )
     const [unavailableSlots, setUnavailableSlots] = React.useState<Set<string>>(
-        () => new Set(filterSlotsByWorkingHours(initialUnavailableSlots, workingHours))
+        () => new Set(sanitizeSlots(initialUnavailableSlots, workingHours, closedDays))
     )
     const [isSaving, setIsSaving] = React.useState(false)
 
     React.useEffect(() => {
-        setAvailableSlots(new Set(filterSlotsByWorkingHours(initialAvailableSlots, workingHours)))
-        setUnavailableSlots(new Set(filterSlotsByWorkingHours(initialUnavailableSlots, workingHours)))
-    }, [initialAvailableSlots, initialUnavailableSlots, month, workingHours, year])
+        setAvailableSlots(new Set(sanitizeSlots(initialAvailableSlots, workingHours, closedDays)))
+        setUnavailableSlots(new Set(sanitizeSlots(initialUnavailableSlots, workingHours, closedDays)))
+    }, [closedDays, initialAvailableSlots, initialUnavailableSlots, month, workingHours, year])
 
     // --- Rectangle-based drag state ---
     const isPaintingRef = React.useRef(false)
@@ -126,6 +134,16 @@ export function AvailabilityCalendar({
         const slotEnd = new Date(slotStart.getTime() + 30 * 60 * 1000)
         return isWithinTeacherWorkingHours(workingHours, slotStart, slotEnd)
     }, [workingHours])
+
+    const isClosedCell = React.useCallback((day: Date, hour: number, minute: number) => {
+        const slotStart = setMinutes(setHours(startOfDay(day), hour), minute)
+        const slotEnd = new Date(slotStart.getTime() + 30 * 60 * 1000)
+        return isSlotClosed(closedDays, slotStart, slotEnd)
+    }, [closedDays])
+
+    const isSelectableCell = React.useCallback((day: Date, hour: number, minute: number) => {
+        return isWorkingHourCell(day, hour, minute) && !isClosedCell(day, hour, minute)
+    }, [isClosedCell, isWorkingHourCell])
 
     const getSlotStatus = React.useCallback((iso: string): 'available' | 'unavailable' | 'neutral' => {
         if (availableSlots.has(iso)) return 'available'
@@ -174,14 +192,14 @@ export function AvailabilityCalendar({
                 if (
                     day.getMonth() === month - 1 &&
                     day.getFullYear() === year &&
-                    isWorkingHourCell(day, slot.hour, slot.minute)
+                    isSelectableCell(day, slot.hour, slot.minute)
                 ) {
                     result.push(getCellIso(day, slot.hour, slot.minute))
                 }
             }
         }
         return result
-    }, [isWorkingHourCell, month, year])
+    }, [isSelectableCell, month, year])
 
     const commitPaint = React.useCallback(() => {
         if (!isPaintingRef.current) return
@@ -226,7 +244,7 @@ export function AvailabilityCalendar({
         const day = daysRef.current[col]
         const slot = timeSlotsRef.current[row]
         if (!day || !slot) return
-        if (!isWorkingHourCell(day, slot.hour, slot.minute)) return
+        if (!isSelectableCell(day, slot.hour, slot.minute)) return
         const iso = getCellIso(day, slot.hour, slot.minute)
 
         isPaintingRef.current = true
@@ -234,7 +252,7 @@ export function AvailabilityCalendar({
         startCellRef.current = { row, col }
         currentCellRef.current = { row, col }
         rerender()
-    }, [isWorkingHourCell, readOnly])
+    }, [isSelectableCell, readOnly])
 
     const updateCurrentCell = React.useCallback((row: number, col: number) => {
         if (!isPaintingRef.current || readOnly) return
@@ -286,7 +304,7 @@ export function AvailabilityCalendar({
         days.forEach(day => {
             if (!isDayInMonth(day)) return
             timeSlots.forEach(({ hour, minute }) => {
-                if (!isWorkingHourCell(day, hour, minute)) return
+                if (!isSelectableCell(day, hour, minute)) return
                 const iso = getCellIso(day, hour, minute)
                 if (type === 'available') {
                     newAvailable.add(iso)
@@ -310,7 +328,7 @@ export function AvailabilityCalendar({
             const dayPattern = new Map<string, boolean>()
             timeSlots.forEach(({ hour, minute }) => {
                 const iso = getCellIso(day, hour, minute)
-                if (isWorkingHourCell(day, hour, minute)) {
+                if (isSelectableCell(day, hour, minute)) {
                     dayPattern.set(`${hour}:${minute}`, availableSlots.has(iso))
                 } else {
                     dayPattern.set(`${hour}:${minute}`, false)
@@ -325,7 +343,7 @@ export function AvailabilityCalendar({
             const dayPattern = weekPattern.get(d.getDay())
             if (dayPattern) {
                 timeSlots.forEach(({ hour, minute }) => {
-                    if (!isWorkingHourCell(d, hour, minute)) return
+                    if (!isSelectableCell(d, hour, minute)) return
                     const iso = getCellIso(d, hour, minute)
                     if (dayPattern.get(`${hour}:${minute}`)) {
                         newAvailable.add(iso)
@@ -367,7 +385,7 @@ export function AvailabilityCalendar({
         hour: number,
         minute: number
     ): 'available' | 'unavailable' | 'neutral' | 'outside' => {
-        if (!isWorkingHourCell(day, hour, minute)) {
+        if (!isSelectableCell(day, hour, minute)) {
             return 'outside'
         }
         if (isInPendingRect(row, col)) {

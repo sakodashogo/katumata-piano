@@ -119,7 +119,7 @@ export function ClosedDayManager({ initialYear, initialMonth, closedDays, public
             } else {
                 // Add whole-day closure
                 const result = await addClosedDay({
-                    date: day.toISOString(),
+                    date: format(day, "yyyy-MM-dd"),
                 })
                 if (result.success) {
                     toast.success(`${format(day, "M/d")} を終日お休みにしました`)

@@ -12,6 +12,12 @@ type MinuteRange = {
     endMin: number
 }
 
+type ZonedDateTimeParts = {
+    dateKey: string
+    dayOfWeek: number
+    minuteOfDay: number
+}
+
 export type TeacherWorkingHourRange = {
     startTime: string
     endTime: string
@@ -23,6 +29,26 @@ export const TEACHER_WORKING_HOURS_CACHE_TAG = "teacher-working-hours"
 const WORKING_HOURS_CACHE_REVALIDATE_SECONDS = 60
 
 const WEEKDAY_INDEXES = [0, 1, 2, 3, 4, 5, 6] as const
+const BUSINESS_TIME_ZONE = "Asia/Tokyo"
+const BUSINESS_TIME_PARTS_FORMATTER = new Intl.DateTimeFormat("en-US", {
+    timeZone: BUSINESS_TIME_ZONE,
+    weekday: "short",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+})
+const WEEKDAY_LABEL_TO_INDEX: Record<string, number> = {
+    Sun: 0,
+    Mon: 1,
+    Tue: 2,
+    Wed: 3,
+    Thu: 4,
+    Fri: 5,
+    Sat: 6,
+}
 
 const DEFAULT_TEMPLATE: TeacherWorkingHoursByDay = {
     0: [],
@@ -97,6 +123,41 @@ function minuteToHHMM(value: number) {
     const hour = Math.floor(value / 60)
     const minute = value % 60
     return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`
+}
+
+function getBusinessDateTimeParts(value: Date): ZonedDateTimeParts | null {
+    if (!(value instanceof Date) || Number.isNaN(value.getTime())) return null
+
+    let weekday: string | null = null
+    let year: string | null = null
+    let month: string | null = null
+    let day: string | null = null
+    let hour: string | null = null
+    let minute: string | null = null
+
+    for (const part of BUSINESS_TIME_PARTS_FORMATTER.formatToParts(value)) {
+        if (part.type === "weekday") weekday = part.value
+        if (part.type === "year") year = part.value
+        if (part.type === "month") month = part.value
+        if (part.type === "day") day = part.value
+        if (part.type === "hour") hour = part.value
+        if (part.type === "minute") minute = part.value
+    }
+
+    if (!weekday || !year || !month || !day || !hour || !minute) return null
+    const dayOfWeek = WEEKDAY_LABEL_TO_INDEX[weekday]
+    if (!Number.isInteger(dayOfWeek)) return null
+
+    const hourNum = Number(hour)
+    const minuteNum = Number(minute)
+    if (!Number.isInteger(hourNum) || !Number.isInteger(minuteNum)) return null
+    if (hourNum < 0 || hourNum > 23 || minuteNum < 0 || minuteNum > 59) return null
+
+    return {
+        dateKey: `${year}-${month}-${day}`,
+        dayOfWeek,
+        minuteOfDay: hourNum * 60 + minuteNum,
+    }
 }
 
 function cloneWorkingHours(template: TeacherWorkingHoursByDay): TeacherWorkingHoursByDay {
@@ -313,20 +374,17 @@ export function isWithinTeacherWorkingHours(
     if (!(endTime instanceof Date) || Number.isNaN(endTime.getTime())) return false
     if (endTime <= startTime) return false
 
-    if (
-        startTime.getFullYear() !== endTime.getFullYear() ||
-        startTime.getMonth() !== endTime.getMonth() ||
-        startTime.getDate() !== endTime.getDate()
-    ) {
-        return false
-    }
+    const zonedStart = getBusinessDateTimeParts(startTime)
+    const zonedEnd = getBusinessDateTimeParts(endTime)
+    if (!zonedStart || !zonedEnd) return false
+    if (zonedStart.dateKey !== zonedEnd.dateKey) return false
 
-    const dayOfWeek = startTime.getDay()
+    const dayOfWeek = zonedStart.dayOfWeek
     const ranges = workingHours[dayOfWeek] || []
     if (ranges.length === 0) return false
 
-    const slotStartMin = startTime.getHours() * 60 + startTime.getMinutes()
-    const slotEndMin = endTime.getHours() * 60 + endTime.getMinutes()
+    const slotStartMin = zonedStart.minuteOfDay
+    const slotEndMin = zonedEnd.minuteOfDay
 
     return ranges.some((range) => {
         const rangeStartMin = parseHHMMToMinute(range.startTime)

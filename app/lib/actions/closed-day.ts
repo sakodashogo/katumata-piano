@@ -3,8 +3,14 @@
 import { auth } from "@/auth"
 import { prisma } from "@/lib/prisma"
 import { revalidatePath, revalidateTag, unstable_cache } from "next/cache"
-import { CLOSED_DAYS_CACHE_TAG } from "@/lib/closed-days"
-import { addDays, eachDayOfInterval, endOfMonth, getDay, startOfDay, startOfMonth } from "date-fns"
+import {
+    CLOSED_DAYS_CACHE_TAG,
+    getDaysInTokyoMonth,
+    getTokyoMonthDateRange,
+    toTokyoDateKey,
+    tokyoDateKeyToDate,
+    toTokyoWeekdayIndex,
+} from "@/lib/closed-days"
 import {
     CLOSED_DAY_PUBLICATION_STATUS_CACHE_TAG,
     CLOSED_DAYS_MONTH_CACHE_TAG,
@@ -61,13 +67,23 @@ function getPublishedClosedDayDelegate(client: unknown = prisma) {
 }
 
 function getMonthRange(year: number, month: number) {
-    const monthStart = startOfMonth(new Date(year, month - 1, 1))
-    const monthEndExclusive = addDays(endOfMonth(monthStart), 1)
-    return { monthStart, monthEndExclusive }
+    const range = getTokyoMonthDateRange(year, month)
+    if (!range) return null
+    return { monthStart: range.start, monthEndExclusive: range.endExclusive }
 }
 
 function toDateKey(date: Date) {
-    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`
+    return toTokyoDateKey(date) || ""
+}
+
+function parseDateInputToClosedDayDate(input: string) {
+    const directDate = tokyoDateKeyToDate(input)
+    if (directDate) return directDate
+    const parsed = new Date(input)
+    if (Number.isNaN(parsed.getTime())) return null
+    const dateKey = toTokyoDateKey(parsed)
+    if (!dateKey) return null
+    return tokyoDateKeyToDate(dateKey)
 }
 
 function toSnapshotKey(input: { date: Date; startTime: string | null; endTime: string | null; reason: string | null }) {
@@ -120,7 +136,9 @@ const getClosedDaysForMonthCached = unstable_cache(
         }
 
         try {
-            const { monthStart, monthEndExclusive } = getMonthRange(year, month)
+            const range = getMonthRange(year, month)
+            if (!range) return [] as ClosedDayPayload[]
+            const { monthStart, monthEndExclusive } = range
             const records = await closedDay.findMany({
                 where: {
                     date: { gte: monthStart, lt: monthEndExclusive },
@@ -142,7 +160,17 @@ const getClosedDayPublicationStatusCached = unstable_cache(
         const closedDay = getClosedDayDelegate()
         const publicationDelegate = getClosedDayPublicationDelegate()
         const publishedDelegate = getPublishedClosedDayDelegate()
-        const { monthStart, monthEndExclusive } = getMonthRange(year, month)
+        const range = getMonthRange(year, month)
+        if (!range) {
+            return {
+                publishedAt: null as Date | null,
+                publishedBy: null as string | null,
+                draftCount: 0,
+                publishedCount: 0,
+                hasUnpublishedChanges: false,
+            }
+        }
+        const { monthStart, monthEndExclusive } = range
 
         const drafts = closedDay && typeof closedDay.findMany === "function"
             ? await closedDay.findMany({
@@ -261,7 +289,11 @@ export async function publishClosedDaysForMonth(year: number, month: number) {
 
     try {
         const now = new Date()
-        const { monthStart, monthEndExclusive } = getMonthRange(year, month)
+        const range = getMonthRange(year, month)
+        if (!range) {
+            return { success: false as const, error: "年月が不正です。" }
+        }
+        const { monthStart, monthEndExclusive } = range
         const result = await prisma.$transaction(async (tx) => {
             const closedDay = getClosedDayDelegate(tx)
             const publicationDelegate = getClosedDayPublicationDelegate(tx)
@@ -304,7 +336,7 @@ export async function publishClosedDaysForMonth(year: number, month: number) {
             if (drafts.length > 0) {
                 const payload = drafts.map((item) => ({
                     publicationId: publication.id,
-                    date: startOfDay(new Date(item.date)),
+                    date: new Date(item.date),
                     startTime: item.startTime || null,
                     endTime: item.endTime || null,
                     reason: item.reason || null,
@@ -356,8 +388,8 @@ export async function addClosedDay(input: {
             return { success: false as const, error: "DB未更新のため登録できません。" }
         }
 
-        const date = startOfDay(new Date(input.date))
-        if (Number.isNaN(date.getTime())) {
+        const date = parseDateInputToClosedDayDate(input.date)
+        if (!date) {
             return { success: false as const, error: "日付が不正です。" }
         }
 
@@ -406,7 +438,10 @@ export async function addClosedDaysBulk(input: {
     if (!session) return { success: false as const, error: "Unauthorized" }
 
     try {
-        if (input.weekdays.length === 0) {
+        const weekdaySet = new Set(
+            input.weekdays.filter((day) => Number.isInteger(day) && day >= 0 && day <= 6)
+        )
+        if (weekdaySet.size === 0) {
             return { success: false as const, error: "曜日を1つ以上選択してください。" }
         }
 
@@ -415,16 +450,25 @@ export async function addClosedDaysBulk(input: {
             return { success: false as const, error: "DB未更新のため登録できません。" }
         }
 
-        const monthStart = startOfMonth(new Date(input.year, input.month - 1, 1))
-        const monthEnd = endOfMonth(monthStart)
-        const allDays = eachDayOfInterval({ start: monthStart, end: monthEnd })
-        const matchedDays = allDays.filter((day) => input.weekdays.includes(getDay(day)))
+        const daysInMonth = getDaysInTokyoMonth(input.year, input.month)
+        if (!daysInMonth) {
+            return { success: false as const, error: "年月が不正です。" }
+        }
 
         let created = 0
         let skipped = 0
 
-        for (const day of matchedDays) {
-            const date = startOfDay(day)
+        for (let dayOfMonth = 1; dayOfMonth <= daysInMonth; dayOfMonth++) {
+            const dateKey = `${String(input.year).padStart(4, "0")}-${String(input.month).padStart(2, "0")}-${String(dayOfMonth).padStart(2, "0")}`
+            const date = tokyoDateKeyToDate(dateKey)
+            if (!date) {
+                skipped++
+                continue
+            }
+            const dayOfWeek = toTokyoWeekdayIndex(date)
+            if (dayOfWeek === null || !weekdaySet.has(dayOfWeek)) {
+                continue
+            }
 
             const existing = await closedDay.findFirst({
                 where: {
@@ -492,7 +536,11 @@ export async function deleteClosedDaysForMonth(year: number, month: number) {
             return { success: false as const, error: "DB未更新のため削除できません。" }
         }
 
-        const { monthStart, monthEndExclusive } = getMonthRange(year, month)
+        const range = getMonthRange(year, month)
+        if (!range) {
+            return { success: false as const, error: "年月が不正です。" }
+        }
+        const { monthStart, monthEndExclusive } = range
         const result = await closedDay.deleteMany({
             where: {
                 date: { gte: monthStart, lt: monthEndExclusive },

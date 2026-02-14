@@ -217,7 +217,14 @@ export async function bulkUpdateOpenSlots(roomId: string, slots: string[], actio
                 .sort((a, b) => a.getTime() - b.getTime())
             if (candidateStarts.length === 0) {
                 revalidateTeacherViews()
-                return { success: true }
+                return {
+                    success: true,
+                    skippedClosed: 0,
+                    skippedOutsideWorkingHours: 0,
+                    skippedConflict: 0,
+                    created: 0,
+                    createdSlotStartIsos: [] as string[],
+                }
             }
 
             const rangeStart = candidateStarts[0]
@@ -268,6 +275,7 @@ export async function bulkUpdateOpenSlots(roomId: string, slots: string[], actio
                     endTime: addMinutes(start, 30),
                     isBooked: false
                 }))
+            const skippedConflict = candidateStartsForCreate.length - newSlots.length
 
             if (newSlots.length > 0) {
                 await prisma.openSlot.createMany({
@@ -275,7 +283,14 @@ export async function bulkUpdateOpenSlots(roomId: string, slots: string[], actio
                 })
             }
             revalidateTeacherViews()
-            return { success: true, skippedClosed, skippedOutsideWorkingHours, created: newSlots.length }
+            return {
+                success: true,
+                skippedClosed,
+                skippedOutsideWorkingHours,
+                skippedConflict,
+                created: newSlots.length,
+                createdSlotStartIsos: newSlots.map((slot) => slot.startTime.toISOString()),
+            }
         } else {
             await prisma.openSlot.deleteMany({
                 where: {

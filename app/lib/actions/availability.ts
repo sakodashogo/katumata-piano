@@ -6,11 +6,28 @@ import { revalidatePath, revalidateTag } from "next/cache"
 import { z } from "zod"
 import { filterSlotIsoListByTeacherWorkingHours, getTeacherWorkingHoursSafe } from "@/lib/teacher-working-hours"
 import { TEACHER_AVAILABILITIES_PAGE_CACHE_TAG } from "@/lib/cache-tags"
+import { getClosedDaysInRangeSafe, getTokyoMonthDateRange, isSlotClosed, type ClosedDayRecord } from "@/lib/closed-days"
 
 const AvailabilitySchema = z.object({
     days: z.array(z.string()),
     note: z.string().optional(),
 })
+
+function filterSlotIsoListByClosedDays(closedDays: ClosedDayRecord[], slotIsos: string[], durationMin = 30) {
+    const unique = new Set<string>()
+    const filtered: string[] = []
+    for (const value of slotIsos) {
+        const start = new Date(value)
+        if (Number.isNaN(start.getTime())) continue
+        const end = new Date(start.getTime() + Math.max(durationMin, 1) * 60 * 1000)
+        if (isSlotClosed(closedDays, start, end)) continue
+        const iso = start.toISOString()
+        if (unique.has(iso)) continue
+        unique.add(iso)
+        filtered.push(iso)
+    }
+    return filtered
+}
 
 export async function saveAvailability(formData: FormData) {
     const session = await auth()
@@ -83,7 +100,8 @@ export async function getMonthlyAvailability(studentId: string | undefined, year
     }
 
     try {
-        const [availability, workingHours] = await Promise.all([
+        const monthRange = getTokyoMonthDateRange(year, month)
+        const [availability, workingHours, closedDays] = await Promise.all([
             prisma.monthlyAvailability.findUnique({
                 where: {
                     studentId_year_month: {
@@ -94,6 +112,9 @@ export async function getMonthlyAvailability(studentId: string | undefined, year
                 }
             }),
             getTeacherWorkingHoursSafe(),
+            monthRange
+                ? getClosedDaysInRangeSafe(monthRange.start, monthRange.endExclusive, { scope: "teacher" })
+                : Promise.resolve([]),
         ])
         if (!availability) {
             return { success: true, data: availability }
@@ -104,10 +125,20 @@ export async function getMonthlyAvailability(studentId: string | undefined, year
         const unavailableSlotsRaw = Array.isArray(availability.unavailableSlots)
             ? availability.unavailableSlots.map(String)
             : []
+        const availableSlotsInWorkingHours = filterSlotIsoListByTeacherWorkingHours(
+            workingHours,
+            availableSlotsRaw,
+            30
+        )
+        const unavailableSlotsInWorkingHours = filterSlotIsoListByTeacherWorkingHours(
+            workingHours,
+            unavailableSlotsRaw,
+            30
+        )
         const sanitizedAvailability = {
             ...availability,
-            availableSlots: filterSlotIsoListByTeacherWorkingHours(workingHours, availableSlotsRaw, 30),
-            unavailableSlots: filterSlotIsoListByTeacherWorkingHours(workingHours, unavailableSlotsRaw, 30),
+            availableSlots: filterSlotIsoListByClosedDays(closedDays, availableSlotsInWorkingHours, 30),
+            unavailableSlots: filterSlotIsoListByClosedDays(closedDays, unavailableSlotsInWorkingHours, 30),
         }
         return { success: true, data: sanitizedAvailability }
     } catch (error) {
@@ -140,15 +171,31 @@ export async function saveMonthlyAvailability(
     }
 
     try {
-        const workingHours = await getTeacherWorkingHoursSafe()
-        const filteredAvailableSlots = filterSlotIsoListByTeacherWorkingHours(
+        const monthRange = getTokyoMonthDateRange(year, month)
+        const [workingHours, closedDays] = await Promise.all([
+            getTeacherWorkingHoursSafe(),
+            monthRange
+                ? getClosedDaysInRangeSafe(monthRange.start, monthRange.endExclusive, { scope: "teacher" })
+                : Promise.resolve([]),
+        ])
+        const availableSlotsInWorkingHours = filterSlotIsoListByTeacherWorkingHours(
             workingHours,
             data.availableSlots || [],
             30
         )
-        const filteredUnavailableSlots = filterSlotIsoListByTeacherWorkingHours(
+        const unavailableSlotsInWorkingHours = filterSlotIsoListByTeacherWorkingHours(
             workingHours,
             data.unavailableSlots || [],
+            30
+        )
+        const filteredAvailableSlots = filterSlotIsoListByClosedDays(
+            closedDays,
+            availableSlotsInWorkingHours,
+            30
+        )
+        const filteredUnavailableSlots = filterSlotIsoListByClosedDays(
+            closedDays,
+            unavailableSlotsInWorkingHours,
             30
         )
 

@@ -35,6 +35,18 @@ type SupportShift = {
     endTime: Date | string
 }
 
+function parseYmdDate(value: string | undefined) {
+    if (!value) return null
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value)
+    if (!match) return null
+    const year = Number(match[1])
+    const month = Number(match[2])
+    const day = Number(match[3])
+    if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return null
+    if (month < 1 || month > 12 || day < 1 || day > 31) return null
+    return new Date(year, month - 1, day, 0, 0, 0, 0)
+}
+
 export default async function SchedulePage({
     searchParams,
 }: {
@@ -46,8 +58,8 @@ export default async function SchedulePage({
     }
 
     const params = await searchParams
-    const dateStr = (params.date as string) || new Date().toISOString().split("T")[0]
-    const parsedDate = new Date(dateStr)
+    const dateStr = params.date as string | undefined
+    const parsedDate = parseYmdDate(dateStr) ?? (dateStr ? new Date(dateStr) : new Date())
     const date = Number.isNaN(parsedDate.getTime()) ? new Date() : parsedDate
 
     const start = startOfWeek(date, { weekStartsOn: 1 }) // Monday start

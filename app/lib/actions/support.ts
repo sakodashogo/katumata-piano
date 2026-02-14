@@ -3,7 +3,6 @@
 import { auth } from "@/auth"
 import { prisma } from "@/lib/prisma"
 import { revalidatePath, revalidateTag, unstable_cache } from "next/cache"
-import { addDays, eachDayOfInterval, endOfMonth, getDay, setHours, setMinutes, startOfMonth } from "date-fns"
 import { getClosedDaysInRangeSafe, isSlotClosed } from "@/lib/closed-days"
 import { SUPPORT_SHIFTS_CACHE_TAG } from "@/lib/support-shifts"
 import { getTeacherWorkingHoursSafe, isWithinTeacherWorkingHours } from "@/lib/teacher-working-hours"
@@ -13,8 +12,87 @@ import {
 } from "@/lib/cache-tags"
 
 const SUPPORT_DATA_REVALIDATE_SECONDS = 60
+const TOKYO_UTC_OFFSET_HOURS = 9
+const TOKYO_TIME_ZONE = "Asia/Tokyo"
+const TOKYO_WEEKDAY_FORMATTER = new Intl.DateTimeFormat("en-US", {
+    timeZone: TOKYO_TIME_ZONE,
+    weekday: "short",
+})
+const TOKYO_WEEKDAY_INDEX: Record<string, number> = {
+    Sun: 0,
+    Mon: 1,
+    Tue: 2,
+    Wed: 3,
+    Thu: 4,
+    Fri: 5,
+    Sat: 6,
+}
 
 type DelegateMethod = (args: unknown) => Promise<unknown>
+
+function toTokyoDate(
+    year: number,
+    month: number,
+    dayOfMonth: number,
+    hour: number,
+    minute: number
+) {
+    if (
+        !Number.isInteger(year) ||
+        !Number.isInteger(month) ||
+        !Number.isInteger(dayOfMonth) ||
+        !Number.isInteger(hour) ||
+        !Number.isInteger(minute) ||
+        month < 1 ||
+        month > 12 ||
+        dayOfMonth < 1 ||
+        dayOfMonth > 31 ||
+        hour < 0 ||
+        hour > 23 ||
+        minute < 0 ||
+        minute > 59
+    ) {
+        return null
+    }
+
+    const date = new Date(
+        Date.UTC(
+            year,
+            month - 1,
+            dayOfMonth,
+            hour - TOKYO_UTC_OFFSET_HOURS,
+            minute,
+            0,
+            0
+        )
+    )
+    if (Number.isNaN(date.getTime())) return null
+    return date
+}
+
+function getTokyoWeekday(date: Date) {
+    if (!(date instanceof Date) || Number.isNaN(date.getTime())) return null
+    const weekday = TOKYO_WEEKDAY_FORMATTER.format(date)
+    const dayOfWeek = TOKYO_WEEKDAY_INDEX[weekday]
+    return Number.isInteger(dayOfWeek) ? dayOfWeek : null
+}
+
+function getTokyoMonthRange(year: number, month: number) {
+    if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) {
+        return null
+    }
+    const monthStart = toTokyoDate(year, month, 1, 0, 0)
+    if (!monthStart) return null
+    const nextMonthYear = month === 12 ? year + 1 : year
+    const nextMonth = month === 12 ? 1 : month + 1
+    const monthEndExclusive = toTokyoDate(nextMonthYear, nextMonth, 1, 0, 0)
+    if (!monthEndExclusive) return null
+    return { monthStart, monthEndExclusive }
+}
+
+function getDaysInMonth(year: number, month: number) {
+    return new Date(Date.UTC(year, month, 0)).getUTCDate()
+}
 
 function isMissingRelationError(error: unknown) {
     if (!error || typeof error !== "object") return false
@@ -289,14 +367,17 @@ export async function createMonthlySupportShifts(input: {
     if (!session) return { success: false as const, error: "Unauthorized" }
 
     try {
-        if (input.weekdays.length === 0) {
+        const weekdaySet = new Set(
+            input.weekdays.filter((day) => Number.isInteger(day) && day >= 0 && day <= 6)
+        )
+        if (weekdaySet.size === 0) {
             return { success: false as const, error: "曜日を1つ以上選択してください。" }
         }
-        const monthStart = startOfMonth(new Date(input.year, input.month - 1, 1))
-        const monthEnd = endOfMonth(monthStart)
-        const monthEndExclusive = addDays(monthEnd, 1)
-        const allDays = eachDayOfInterval({ start: monthStart, end: monthEnd })
-        const matchedDays = allDays.filter((day) => input.weekdays.includes(getDay(day)))
+        const monthRange = getTokyoMonthRange(input.year, input.month)
+        if (!monthRange) {
+            return { success: false as const, error: "年月が不正です。" }
+        }
+        const { monthStart, monthEndExclusive } = monthRange
         const [closedDays, workingHours] = await Promise.all([
             getClosedDaysInRangeSafe(monthStart, monthEndExclusive, { scope: "teacher" }),
             getTeacherWorkingHoursSafe(),
@@ -311,9 +392,18 @@ export async function createMonthlySupportShifts(input: {
         let skipped = 0
         let skippedClosed = 0
         let skippedOutsideWorkingHours = 0
-        for (const day of matchedDays) {
-            const startTime = setMinutes(setHours(new Date(day), input.startHour), input.startMinute)
-            const endTime = setMinutes(setHours(new Date(day), input.endHour), input.endMinute)
+        const daysInMonth = getDaysInMonth(input.year, input.month)
+        for (let dayOfMonth = 1; dayOfMonth <= daysInMonth; dayOfMonth++) {
+            const startTime = toTokyoDate(input.year, input.month, dayOfMonth, input.startHour, input.startMinute)
+            const endTime = toTokyoDate(input.year, input.month, dayOfMonth, input.endHour, input.endMinute)
+            if (!startTime || !endTime) {
+                skipped++
+                continue
+            }
+            const dayOfWeek = getTokyoWeekday(startTime)
+            if (dayOfWeek === null || !weekdaySet.has(dayOfWeek)) {
+                continue
+            }
             if (endTime <= startTime) {
                 skipped++
                 continue

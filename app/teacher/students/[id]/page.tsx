@@ -12,6 +12,7 @@ import { StudentEditDialog } from "@/components/teacher/StudentEditDialog"
 import { redirect } from "next/navigation"
 import { getTeacherWorkingHoursSafe } from "@/lib/teacher-working-hours"
 import { getCachedSession } from "@/lib/session"
+import { getClosedDaysInRangeSafe, getTokyoMonthDateRange } from "@/lib/closed-days"
 
 export default async function StudentDetailPage({
     params,
@@ -50,10 +51,14 @@ export default async function StudentDetailPage({
         ? parsedMonth
         : now.getMonth() + 1
 
-    const [{ data: lessons }, { data: availability }, workingHours] = await Promise.all([
+    const monthRange = getTokyoMonthDateRange(year, month)
+    const [{ data: lessons }, { data: availability }, workingHours, closedDays] = await Promise.all([
         getStudentHistory(id),
         getMonthlyAvailability(id, year, month),
         getTeacherWorkingHoursSafe(),
+        monthRange
+            ? getClosedDaysInRangeSafe(monthRange.start, monthRange.endExclusive, { scope: "teacher" })
+            : Promise.resolve([]),
     ])
 
     return (
@@ -146,6 +151,7 @@ export default async function StudentDetailPage({
                         month={month}
                         initialData={availability}
                         workingHours={workingHours}
+                        closedDays={closedDays}
                     />
                 </div>
             </div>

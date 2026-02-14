@@ -278,7 +278,10 @@ export function AdminCalendar({
         const { time } = parseCellKey(cellKey)
         const start = new Date(time)
         const end = addMinutes(start, 30)
-        return isWithinTeacherWorkingHours(workingHours, start, end)
+        return (
+            isWithinTeacherWorkingHours(workingHours, start, end) &&
+            !isSlotClosed(closedDays, start, end)
+        )
     }
 
     const commitDraftActionForCell = (next: Map<string, SlotDraftAction>, cellKey: string, mode: PaintMode) => {
@@ -419,8 +422,41 @@ export function AdminCalendar({
                 if (group.add.length > 0) {
                     const res = await bulkUpdateOpenSlots(roomId, group.add, "add")
                     if (res.success) {
-                        appliedCount += group.add.length
-                        group.addKeys.forEach(key => nextSlotDraftMap.delete(key))
+                        const createdIsos = Array.isArray(res.createdSlotStartIsos)
+                            ? new Set(
+                                res.createdSlotStartIsos
+                                    .map((value) => new Date(value))
+                                    .filter((value) => !Number.isNaN(value.getTime()))
+                                    .map((value) => value.toISOString())
+                            )
+                            : new Set<string>()
+                        const createdCount =
+                            typeof res.created === "number"
+                                ? res.created
+                                : createdIsos.size
+                        appliedCount += createdCount
+
+                        for (let i = 0; i < group.add.length; i++) {
+                            const key = group.addKeys[i]
+                            const iso = group.add[i]
+                            if (!key || !iso) continue
+                            const normalizedIso = new Date(iso).toISOString()
+                            if (createdIsos.size === 0 || createdIsos.has(normalizedIso)) {
+                                nextSlotDraftMap.delete(key)
+                            }
+                        }
+
+                        const skippedClosed =
+                            typeof res.skippedClosed === "number" ? res.skippedClosed : 0
+                        const skippedOutsideWorkingHours =
+                            typeof res.skippedOutsideWorkingHours === "number"
+                                ? res.skippedOutsideWorkingHours
+                                : 0
+                        const skippedConflict =
+                            typeof res.skippedConflict === "number" ? res.skippedConflict : 0
+                        const explicitSkipped = skippedClosed + skippedOutsideWorkingHours + skippedConflict
+                        const unresolved = Math.max(group.add.length - createdCount - explicitSkipped, 0)
+                        skippedCount += explicitSkipped + unresolved
                     } else {
                         failureCount += group.add.length
                         if (!firstError && res.error) firstError = res.error

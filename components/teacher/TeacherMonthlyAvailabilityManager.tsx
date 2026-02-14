@@ -11,6 +11,7 @@ import { cn } from "@/lib/utils"
 import { useToast } from "@/components/ui/toast"
 import { saveMonthlyAvailability } from "@/app/lib/actions/availability"
 import { type TeacherWorkingHoursByDay } from "@/lib/teacher-working-hours"
+import { type ClosedDayRecord } from "@/lib/closed-days"
 
 type AvailabilityRecord = {
     availableSlots: unknown
@@ -31,6 +32,7 @@ type Props = {
     students: StudentItem[]
     initialStudentId: string | null
     workingHours: TeacherWorkingHoursByDay
+    closedDays: ClosedDayRecord[]
 }
 
 export function TeacherMonthlyAvailabilityManager({
@@ -39,6 +41,7 @@ export function TeacherMonthlyAvailabilityManager({
     students,
     initialStudentId,
     workingHours,
+    closedDays,
 }: Props) {
     const router = useRouter()
     const { toast } = useToast()
@@ -174,6 +177,7 @@ export function TeacherMonthlyAvailabilityManager({
                         onSave={handleSave}
                         onMonthChange={handleMonthChange}
                         workingHours={workingHours}
+                        closedDays={closedDays}
                     />
                 ) : (
                     <div className="rounded-xl border border-dashed bg-white p-10 text-center text-slate-500">
