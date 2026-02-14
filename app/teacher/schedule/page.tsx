@@ -6,8 +6,6 @@ import { redirect } from "next/navigation"
 import Link from "next/link"
 import { getClosedDaysInRangeSafe } from "@/lib/closed-days"
 import { getTeacherWorkingHoursSafe } from "@/lib/teacher-working-hours"
-import { Suspense } from "react"
-import MonthlyPanel from "./_monthly-panel"
 import { getCachedSession } from "@/lib/session"
 
 type ScheduleSlot = {
@@ -65,8 +63,6 @@ export default async function SchedulePage({
     const start = startOfWeek(date, { weekStartsOn: 1 }) // Monday start
     const end = endOfWeek(date, { weekStartsOn: 1 })
 
-    const monthYear = date.getFullYear()
-    const month = date.getMonth() + 1
     const [scheduleResult, closedDays, workingHours] = await Promise.all([
         getScheduleData(undefined, start, end),
         getClosedDaysInRangeSafe(start, end),
@@ -139,22 +135,6 @@ export default async function SchedulePage({
                 }))}
                 workingHours={workingHours}
             />
-
-            <Suspense
-                fallback={(
-                    <section className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                        <div className="mb-3 rounded-lg border bg-white px-3 py-2 text-sm text-slate-600">
-                            <div className="font-semibold text-slate-800">月間カレンダー（下書き含む）</div>
-                            <div className="mt-1 text-xs">月間データを読み込み中です。</div>
-                        </div>
-                        <div className="rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-500">
-                            読み込み中...
-                        </div>
-                    </section>
-                )}
-            >
-                <MonthlyPanel year={monthYear} month={month} />
-            </Suspense>
         </div>
     )
 }

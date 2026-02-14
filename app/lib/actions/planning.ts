@@ -1,4 +1,4 @@
-'use server'
+"use server"
 
 import { prisma } from "@/lib/prisma"
 import { auth } from "@/auth"
@@ -358,6 +358,7 @@ type ReplaceMonthlyLessonsInput = {
     studentId: string
     year: number
     month: number
+    status?: "DRAFT" | "BOOKED" // statusを追加
     lessons: Array<{
         startTime: string | Date
         endTime: string | Date
@@ -421,6 +422,9 @@ export async function replaceStudentMonthlyLessons(input: ReplaceMonthlyLessonsI
             LIMIT 1
         `.catch(() => [])
         const isMonthPublished = publicationRows.length > 0
+
+        // 指定がなければ、公開済みならBOOKED、そうでなければDRAFT
+        const targetStatus = input.status ?? (isMonthPublished ? "BOOKED" : "DRAFT")
 
         const savedCount = await prisma.$transaction(async (tx) => {
             const existing = await tx.lesson.findMany({
@@ -520,9 +524,23 @@ export async function replaceStudentMonthlyLessons(input: ReplaceMonthlyLessonsI
                         endTime: lesson.endTime,
                         roomId: lesson.roomId,
                         type: lesson.type,
-                        status: isMonthPublished ? "BOOKED" : "DRAFT",
+                        status: targetStatus,
                     })),
                 })
+            }
+            
+            // ステータス更新が必要な既存レコード（時刻等は同じだがステータスが違う場合）
+            // このロジックは簡易化のため、基本的に削除＆作成 or 現状維持となっているが、
+            // 既存レコードもステータス同期させたい場合はここでupdateManyを追加する。
+            // 厳密には既存レコードでstatusがtargetStatusと異なるものを更新する。
+            if (existingIds.length > 0) {
+                 await tx.lesson.updateMany({
+                    where: {
+                        id: { in: existingIds },
+                        status: { not: targetStatus }
+                    },
+                    data: { status: targetStatus }
+                 })
             }
 
             return normalizedLessons.length

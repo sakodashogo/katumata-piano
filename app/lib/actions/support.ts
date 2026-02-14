@@ -107,6 +107,7 @@ function getSupportStaffDelegate() {
             findFirst: DelegateMethod
             create: DelegateMethod
             update: DelegateMethod
+            delete: DelegateMethod
         }
     }).supportStaff
 }
@@ -275,6 +276,30 @@ export async function setSupportStaffActive(id: string, active: boolean) {
             return { success: false as const, error: "DB未更新のため更新できません。" }
         }
         return { success: false as const, error: "講師状態の更新に失敗しました。" }
+    }
+}
+
+// 新規追加: サポート講師の削除
+export async function deleteSupportStaff(id: string) {
+    const session = await requireTeacher()
+    if (!session) return { success: false as const, error: "Unauthorized" }
+
+    try {
+        const supportStaff = getSupportStaffDelegate()
+        if (!supportStaff || typeof supportStaff.delete !== "function") {
+            return { success: false as const, error: "DB未更新のため削除できません。" }
+        }
+        
+        // Cascade削除が設定されている前提、もしくは関連レコードがない場合削除可能
+        await supportStaff.delete({ where: { id } })
+        
+        revalidateSupportViews()
+        return { success: true as const }
+    } catch (error) {
+        if (isMissingRelationError(error)) {
+            return { success: false as const, error: "DB未更新のため削除できません。" }
+        }
+        return { success: false as const, error: "講師の削除に失敗しました。" }
     }
 }
 

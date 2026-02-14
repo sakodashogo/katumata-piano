@@ -10,6 +10,7 @@ import {
     createMonthlySupportShifts,
     createSupportStaff,
     deleteSupportShift,
+    deleteSupportStaff,
     setSupportStaffActive,
     upsertSupportShift,
 } from "@/app/lib/actions/support"
@@ -97,7 +98,18 @@ export function SupportShiftManager({
             toast.error(res.error || "講師状態の更新に失敗しました。")
             return
         }
-        toast.success(target.active ? "無効化しました。" : "有効化しました。")
+        toast.success(target.active ? "アーカイブしました。" : "復元しました。")
+        router.refresh()
+    }
+
+    const handleDeleteStaff = async (staffId: string) => {
+        if(!confirm("本当に削除しますか？")) return;
+        const res = await deleteSupportStaff(staffId)
+        if (!res.success) {
+            toast.error(res.error || "削除に失敗しました。")
+            return
+        }
+        toast.success("講師を削除しました。")
         router.refresh()
     }
 
@@ -169,8 +181,11 @@ export function SupportShiftManager({
                             <span className={member.active ? "text-slate-800" : "text-slate-400 line-through"}>
                                 {member.name}
                             </span>
-                            <Button size="sm" variant="outline" onClick={() => handleToggleStaff(member)}>
-                                {member.active ? "無効化" : "有効化"}
+                            <Button size="sm" variant="outline" className="h-6 text-[10px]" onClick={() => handleToggleStaff(member)}>
+                                {member.active ? "アーカイブ" : "復元"}
+                            </Button>
+                            <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-red-500 hover:bg-red-50" onClick={() => handleDeleteStaff(member.id)}>
+                                ×
                             </Button>
                         </div>
                     ))}

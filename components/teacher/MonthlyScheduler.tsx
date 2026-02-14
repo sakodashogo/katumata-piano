@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { ChevronLeft, ChevronRight, Sparkles, Save, Upload } from "lucide-react"
 import { MonthlySlotGridEditor } from "@/components/teacher/MonthlySlotGridEditor"
-import { MonthlyAllStudentsCalendar } from "@/components/teacher/MonthlyAllStudentsCalendar"
+// MonthlyAllStudentsCalendar import removed
 import {
     publishMonthlySchedule,
     replaceStudentMonthlyLessons,
@@ -478,6 +478,7 @@ export function MonthlyScheduler({
             year,
             month,
             lessons: draftLessons,
+            status: "DRAFT" // 強制的に下書きとして保存
         })
         if (!result.success) {
             return { success: false as const, error: result.error || "保存に失敗しました。" }
@@ -494,7 +495,7 @@ export function MonthlyScheduler({
                 startTime: lesson.startTime,
                 endTime: lesson.endTime,
                 roomId: lesson.roomId,
-                status: isPublished ? "BOOKED" : "DRAFT",
+                status: "DRAFT", // クライアント側でも下書きとして反映
                 type: lesson.type || "REGULAR",
             }))
             return [...kept, ...nextRows].sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime())
@@ -523,7 +524,7 @@ export function MonthlyScheduler({
             return next
         })
         delete autoAppliedKeysRef.current[selectedStudentId]
-        toast.success(`${selectedStudent?.name || "生徒"}の予定を保存しました。`)
+        toast.success(`${selectedStudent?.name || "生徒"}の予定を保存(下書き)しました。`)
         router.refresh()
     }
 
@@ -559,7 +560,7 @@ export function MonthlyScheduler({
         }
         setIsSavingAll(false)
         if (failedCount === 0) {
-            toast.success(`${successCount}人分の予定を保存しました。`)
+            toast.success(`${successCount}人分の予定を保存(下書き)しました。`)
         } else {
             toast.error(firstError || `${failedCount}人分の保存に失敗しました。`)
         }
@@ -707,14 +708,8 @@ export function MonthlyScheduler({
         [effectiveLessons]
     )
 
-    const allLessonsForCalendar = useMemo(
-        () =>
-            effectiveLessons.map((lesson) => ({
-                ...lesson,
-                studentName: studentById.get(lesson.studentId)?.name || studentById.get(lesson.studentId)?.email || "名前未設定",
-            })),
-        [effectiveLessons, studentById]
-    )
+    // allLessonsForCalendar removed from render but kept logic if needed elsewhere
+    // Removing the component usage entirely
 
     return (
         <div className="flex min-h-[calc(100vh-120px)] flex-col gap-4 pb-6">
@@ -979,15 +974,7 @@ export function MonthlyScheduler({
                 </section>
             </div>
 
-            <section className="rounded-lg border bg-slate-50 p-3">
-                <MonthlyAllStudentsCalendar
-                    lessons={allLessonsForCalendar}
-                    supportShifts={supportShifts}
-                    closedDays={closedDays}
-                    year={year}
-                    month={month}
-                />
-            </section>
+            {/* MonthlyAllStudentsCalendar removed as requested */}
         </div>
     )
 }

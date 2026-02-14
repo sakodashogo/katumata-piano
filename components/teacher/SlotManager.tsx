@@ -38,14 +38,14 @@ type Props = {
 }
 
 const TABS = [
-    { id: "create" as const, label: "一括作成", icon: Plus },
-    { id: "drafts" as const, label: "下書き管理", icon: List },
-    { id: "timeline" as const, label: "タイムライン", icon: BarChart3 },
+    { id: "drafts" as const, label: "1. 編集・確認", icon: List },
+    { id: "create" as const, label: "2. 一括作成", icon: Plus },
+    { id: "timeline" as const, label: "3. 公開状況確認", icon: BarChart3 },
 ]
 
 export function SlotManager({ year, month, menus, draftSlots, allSlots }: Props) {
     const router = useRouter()
-    const [activeTab, setActiveTab] = useState<"create" | "drafts" | "timeline">("create")
+    const [activeTab, setActiveTab] = useState<"create" | "drafts" | "timeline">("drafts")
 
     const navigateMonth = (delta: number) => {
         let newMonth = month + delta
@@ -92,8 +92,8 @@ export function SlotManager({ year, month, menus, draftSlots, allSlots }: Props)
 
             <div className="grid gap-2 rounded-lg border bg-white p-3 md:grid-cols-3">
                 {[
-                    { id: "create", label: "1. 一括作成", description: "公開前の下書き枠を作る" },
-                    { id: "drafts", label: "2. 編集・確認", description: "メニュー/時間を調整して確認" },
+                    { id: "drafts", label: "1. 編集・確認", description: "メニュー/時間を調整して確認" },
+                    { id: "create", label: "2. 一括作成", description: "公開前の下書き枠を作る" },
                     { id: "timeline", label: "3. 公開状況確認", description: "公開済みと予約済みを確認" },
                 ].map((step) => {
                     const isActive = activeTab === step.id

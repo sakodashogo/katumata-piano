@@ -708,27 +708,41 @@ export function AdminCalendar({
 
     return (
         <div className="space-y-4">
-            {/* Toolbar */}
-            <div className="flex items-center justify-between bg-white p-4 rounded-lg shadow-sm border sticky top-0 z-20">
-                <div className="flex items-center gap-4">
+            {/* Toolbar + Legend Integrated */}
+            <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 bg-white p-2 rounded-lg shadow-sm border sticky top-0 z-20">
+                <div className="flex flex-wrap items-center gap-4">
+                    {/* Week Navigation */}
                     <div className="flex items-center rounded-md border bg-slate-50">
                         <Button variant="ghost" className="w-8 h-8 p-0" onClick={() => setCurrentDate(d => addDays(d, -7))}>
                             <ChevronLeft className="h-4 w-4" />
                         </Button>
-                        <span className="px-4 font-bold text-lg min-w-[140px] text-center">
+                        <span className="px-3 text-sm font-bold min-w-[120px] text-center">
                             {format(weekStart, "M/d", { locale: ja })} - {format(weekEnd, "M/d", { locale: ja })}
                         </span>
                         <Button variant="ghost" className="w-8 h-8 p-0" onClick={() => setCurrentDate(d => addDays(d, 7))}>
                             <ChevronRight className="h-4 w-4" />
                         </Button>
                     </div>
+
+                    {/* Legend Items (Moved from below) */}
+                    <div className="flex flex-wrap items-center gap-2 text-[10px] md:text-xs font-medium text-slate-600">
+                        <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-1 text-blue-700">空き枠(公開)</span>
+                        <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-1 text-amber-700">空き枠(下書き)</span>
+                        <span className="inline-flex items-center gap-1 rounded-full bg-green-50 px-2 py-1 text-green-700">予約済</span>
+                        <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-1 text-amber-800">公開前</span>
+                        <span className="hidden lg:inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-1 text-slate-700">RoomB:自主練のみ</span>
+                        <span className="hidden lg:inline-flex items-center gap-1 rounded-full bg-slate-200 px-2 py-1 text-slate-700">時間外</span>
+                        <span className="hidden md:inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-1 text-slate-700">ドラッグ選択</span>
+                        <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-1 text-rose-700">休</span>
+                    </div>
                 </div>
 
-                <div className="flex items-center gap-2">
-                    <div className="flex items-center gap-2 mr-4 bg-slate-50 px-3 py-1.5 rounded-full border">
-                        <span className="text-sm font-medium text-slate-600">編集モード</span>
+                <div className="flex items-center gap-2 ml-auto">
+                    {/* Edit Mode Toggle */}
+                    <div className="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-full border">
+                        <span className="text-xs font-medium text-slate-600">編集</span>
                         <div
-                            className={cn("w-10 h-6 rounded-full p-1 cursor-pointer transition-colors duration-200 ease-in-out", isEditMode ? "bg-blue-600" : "bg-slate-300")}
+                            className={cn("w-8 h-5 rounded-full p-0.5 cursor-pointer transition-colors duration-200 ease-in-out", isEditMode ? "bg-blue-600" : "bg-slate-300")}
                             onClick={() => {
                                 if (isEditMode && pendingCount > 0) {
                                     if (!confirm("変更を破棄してモードを終了しますか？")) return
@@ -737,102 +751,90 @@ export function AdminCalendar({
                                 setIsEditMode(!isEditMode)
                             }}
                         >
-                            <div className={cn("w-4 h-4 bg-white rounded-full shadow-sm transition-transform duration-200 ease-in-out", isEditMode ? "translate-x-4" : "")} />
+                            <div className={cn("w-4 h-4 bg-white rounded-full shadow-sm transition-transform duration-200 ease-in-out", isEditMode ? "translate-x-3" : "")} />
                         </div>
                     </div>
 
                     {pendingCount > 0 && (
                         <>
-                            <Button variant="outline" size="sm" onClick={handleUndoAll}>
-                                <RotateCcw className="h-4 w-4 mr-2" /> 元に戻す
+                            <Button variant="outline" size="sm" onClick={handleUndoAll} className="h-8 text-xs">
+                                <RotateCcw className="h-3 w-3 mr-1" />
                             </Button>
                             <Button
-                                className="bg-blue-600 text-white hover:bg-blue-700"
+                                className="bg-blue-600 text-white hover:bg-blue-700 h-8 text-xs"
                                 size="sm"
                                 onClick={handleSaveChanges}
                                 disabled={isSubmitting}
                             >
-                                <Save className="h-4 w-4 mr-2" /> 保存 ({pendingCount})
+                                <Save className="h-3 w-3 mr-1" /> 保存({pendingCount})
                             </Button>
                         </>
                     )}
                 </div>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-white p-3 text-xs font-medium text-slate-600">
-                <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-1 text-blue-700">空き枠（公開）</span>
-                <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-1 text-amber-700">空き枠（下書き）</span>
-                <span className="inline-flex items-center gap-1 rounded-full bg-green-50 px-2 py-1 text-green-700">予約済み</span>
-                <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-1 text-amber-800">公開前</span>
-                <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-1 text-slate-700">RoomB サポート不在帯: 自主練のみ想定</span>
-                <span className="inline-flex items-center gap-1 rounded-full bg-slate-200 px-2 py-1 text-slate-700">営業時間外: 編集対象外</span>
-                <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-1 text-slate-700">ドラッグ: 矩形選択</span>
-                <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-1 text-rose-700">お休み</span>
-                <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-1 text-rose-700">保存で確定</span>
-            </div>
-
-                {/* Calendar */}
-                <ScrollArea className="h-[calc(100vh-200px)] border rounded-md bg-white">
-                    <div
-                        ref={gridRef}
-                        className="min-w-[1000px] p-4 select-none"
-                        onMouseLeave={commitPaint}
-                        onMouseMove={(e) => {
-                            if (!isPainting) return
-                            const target = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null
-                            const cellEl = target?.closest<HTMLElement>("[data-cell-key]")
-                            if (!cellEl) return
-                            const row = Number(cellEl.dataset.row)
-                            const col = Number(cellEl.dataset.col)
-                            const roomId = cellEl.dataset.room
-                            const cellKey = cellEl.dataset.cellKey
-                            if (Number.isNaN(row) || Number.isNaN(col) || !roomId || !cellKey) return
-                            const gridCol = col * 2 + (roomId === ROOMS.B.id ? 1 : 0)
-                            updatePaint({ row, col, roomId, gridCol, key: cellKey })
-                        }}
-                    >
-                        <div className="grid grid-cols-[80px_repeat(7,_1fr)] border-b bg-slate-50 sticky top-0 z-10 shadow-sm">
-                            <div className="p-2 text-center text-xs font-bold text-slate-500 py-3">時間</div>
-                            {days.map(day => (
-                                <div key={day.toISOString()} className={cn("p-2 text-center border-l", isSameDay(day, new Date()) ? "bg-blue-50/50" : "")}>
-                                    <div className="font-bold text-slate-700">{format(day, "M/d (E)", { locale: ja })}</div>
-                                </div>
-                            ))}
-                        </div>
-
-                        <div className="divide-y relative">
-                            {HOURS.map(hour => (
-                                MINUTES.map(minute => (
-                                    <div key={`${hour}-${minute}`} className="grid grid-cols-[80px_repeat(7,_1fr)] min-h-[50px]">
-                                        <div className="p-2 text-xs text-slate-400 text-right border-r flex items-start justify-end pr-3 pt-1">
-                                            {minute === 0 ? <span className="font-mono">{hour}:00</span> : <span className="font-mono text-slate-200">{hour}:30</span>}
-                                        </div>
-                                        {days.map((day, colIndex) => (
-                                            <div key={day.toISOString()} className="border-r border-dotted p-0.5 grid grid-cols-2 gap-0.5">
-                                                <DroppableCell
-                                                    rowIndex={getRowIndex(hour, minute)}
-                                                    colIndex={colIndex}
-                                                    day={day} hour={hour} minute={minute} roomId={ROOMS.A.id}
-                                                    items={getCellItems(day, hour, minute, ROOMS.A.id)}
-                                                    isEditMode={isEditMode}
-                                                    label="A"
-                                                />
-                                                <DroppableCell
-                                                    rowIndex={getRowIndex(hour, minute)}
-                                                    colIndex={colIndex}
-                                                    day={day} hour={hour} minute={minute} roomId={ROOMS.B.id}
-                                                    items={getCellItems(day, hour, minute, ROOMS.B.id)}
-                                                    isEditMode={isEditMode}
-                                                    label="B"
-                                                />
-                                            </div>
-                                        ))}
-                                    </div>
-                                ))
-                            ))}
-                        </div>
+            {/* Calendar */}
+            <ScrollArea className="h-[calc(100vh-140px)] border rounded-md bg-white">
+                <div
+                    ref={gridRef}
+                    className="min-w-[1000px] p-4 select-none"
+                    onMouseLeave={commitPaint}
+                    onMouseMove={(e) => {
+                        if (!isPainting) return
+                        const target = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null
+                        const cellEl = target?.closest<HTMLElement>("[data-cell-key]")
+                        if (!cellEl) return
+                        const row = Number(cellEl.dataset.row)
+                        const col = Number(cellEl.dataset.col)
+                        const roomId = cellEl.dataset.room
+                        const cellKey = cellEl.dataset.cellKey
+                        if (Number.isNaN(row) || Number.isNaN(col) || !roomId || !cellKey) return
+                        const gridCol = col * 2 + (roomId === ROOMS.B.id ? 1 : 0)
+                        updatePaint({ row, col, roomId, gridCol, key: cellKey })
+                    }}
+                >
+                    <div className="grid grid-cols-[80px_repeat(7,_1fr)] border-b bg-slate-50 sticky top-0 z-10 shadow-sm">
+                        <div className="p-2 text-center text-xs font-bold text-slate-500 py-3">時間</div>
+                        {days.map(day => (
+                            <div key={day.toISOString()} className={cn("p-2 text-center border-l", isSameDay(day, new Date()) ? "bg-blue-50/50" : "")}>
+                                <div className="font-bold text-slate-700">{format(day, "M/d (E)", { locale: ja })}</div>
+                            </div>
+                        ))}
                     </div>
-                </ScrollArea>
+
+                    <div className="divide-y relative">
+                        {HOURS.map(hour => (
+                            MINUTES.map(minute => (
+                                <div key={`${hour}-${minute}`} className="grid grid-cols-[80px_repeat(7,_1fr)] min-h-[50px]">
+                                    <div className="p-2 text-xs text-slate-400 text-right border-r flex items-start justify-end pr-3 pt-1">
+                                        {minute === 0 ? <span className="font-mono">{hour}:00</span> : <span className="font-mono text-slate-200">{hour}:30</span>}
+                                    </div>
+                                    {days.map((day, colIndex) => (
+                                        <div key={day.toISOString()} className="border-r border-dotted p-0.5 grid grid-cols-2 gap-0.5">
+                                            <DroppableCell
+                                                rowIndex={getRowIndex(hour, minute)}
+                                                colIndex={colIndex}
+                                                day={day} hour={hour} minute={minute} roomId={ROOMS.A.id}
+                                                items={getCellItems(day, hour, minute, ROOMS.A.id)}
+                                                isEditMode={isEditMode}
+                                                label="A"
+                                            />
+                                            <DroppableCell
+                                                rowIndex={getRowIndex(hour, minute)}
+                                                colIndex={colIndex}
+                                                day={day} hour={hour} minute={minute} roomId={ROOMS.B.id}
+                                                items={getCellItems(day, hour, minute, ROOMS.B.id)}
+                                                isEditMode={isEditMode}
+                                                label="B"
+                                            />
+                                        </div>
+                                    ))}
+                                </div>
+                            ))
+                        ))}
+                    </div>
+                </div>
+            </ScrollArea>
 
             <div className="rounded-lg border bg-white">
                 <div className="flex flex-col gap-3 border-b p-4 md:flex-row md:items-end md:justify-between">

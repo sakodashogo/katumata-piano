@@ -108,6 +108,12 @@ export function ResourceManager({
     )
 
     const firstDateWithData = useMemo(() => {
+        const today = new Date();
+        // 今日の日付が現在の表示月(year, month)内であれば今日を優先する
+        if (today.getFullYear() === year && today.getMonth() + 1 === month) {
+            return today;
+        }
+
         const allStarts = [
             ...slots.map((slot) => slot.startTime),
             ...lessons.map((lesson) => lesson.startTime),

@@ -5,6 +5,7 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 enum Role {
@@ -43,6 +44,7 @@ model User {
   role          Role      @default(STUDENT)
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
+  isArchived    Boolean   @default(false) // アーカイブフラグを追加
   
   lessonsAsStudent Lesson[] @relation("StudentLessons")
   lessonsAsTeacher Lesson[] @relation("TeacherLessons")
@@ -83,9 +85,9 @@ model Lesson {
   status    LessonStatus @default(BOOKED)
 
   // Lesson Record Fields
-  report     String?      // Teacher's note about the lesson (karte)
-  homework   String?      // Homework assigned
-  rating     Int?         // 1-5 Scale (optional)
+  report     String? // Teacher's note about the lesson (karte)
+  homework   String? // Homework assigned
+  rating     Int?    // 1-5 Scale (optional)
     
   studentId String
   student   User         @relation("StudentLessons", fields: [studentId], references: [id])
