@@ -4,10 +4,10 @@
   "private": true,
   "scripts": {
     "predev": "prisma generate",
-    "dev": "next dev",
+    "dev": "TZ=Asia/Tokyo next dev",
     "postinstall": "prisma generate",
-    "build": "next build",
-    "start": "next start",
+    "build": "TZ=Asia/Tokyo next build", 
+    "start": "TZ=Asia/Tokyo next start",
     "lint": "eslint"
   },
   "dependencies": {
