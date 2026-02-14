@@ -34,3 +34,19 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+
+## Supabase on Vercel (Prisma)
+
+If you deploy on Vercel with Supabase, avoid Supabase `Session mode` for runtime traffic.
+
+Set `DATABASE_URL` to Supabase pooler `Transaction mode` (port `6543`) and include:
+
+- `pgbouncer=true`
+- `connection_limit=1`
+- `pool_timeout=20` (or higher if needed)
+
+Example format:
+
+```env
+DATABASE_URL="postgresql://<user>:<password>@aws-<region>.pooler.supabase.com:6543/postgres?pgbouncer=true&connection_limit=1&pool_timeout=20"
+```
